@@ -20,6 +20,7 @@ public sealed class EnduroTimerSystem
     public async Task<SystemStatus> GetStatusAsync(CancellationToken cancellationToken = default)
     {
         var lastRun = Upper.LastRun ?? (await _runs.ListAsync(1, cancellationToken)).FirstOrDefault();
+        var startBlockedReason = GetStartBlockedReason();
         return new SystemStatus
         {
             UpperState = Upper.State,
@@ -31,9 +32,43 @@ public sealed class EnduroTimerSystem
             BeamClear = Lower.BeamClear,
             RtcOffsetMs = Upper.RtcOffsetMs,
             RtcOffsetWarning = Upper.RtcOffsetWarning,
+            IsTimeSynchronized = Upper.IsTimeSynchronized,
+            TimeSyncRequired = Upper.TimeSyncRequired,
+            CanStartRun = startBlockedReason is null,
+            StartBlockedReason = startBlockedReason,
             ActiveRun = Upper.ActiveRun,
             LastRun = lastRun
         };
+    }
+
+    private string? GetStartBlockedReason()
+    {
+        if (Upper.State is UpperStationState.Countdown or UpperStationState.Riding)
+        {
+            return "Run already active";
+        }
+
+        if (!Lower.Diagnostics.Online)
+        {
+            return "Finish station is offline";
+        }
+
+        if (!Lower.BeamClear)
+        {
+            return "Finish beam is blocked";
+        }
+
+        if (!Upper.IsTimeSynchronized)
+        {
+            return "Time synchronization required before starting a run";
+        }
+
+        if (Upper.State == UpperStationState.Error)
+        {
+            return "Critical station error";
+        }
+
+        return null;
     }
 
     public async Task ResetAsync(CancellationToken cancellationToken = default)

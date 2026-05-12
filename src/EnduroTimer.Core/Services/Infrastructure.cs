@@ -110,6 +110,7 @@ public sealed class InMemoryRunRepository : IRunRepository
     {
         RunId = run.RunId,
         Rider = run.Rider,
+        TrailName = string.IsNullOrWhiteSpace(run.TrailName) ? RunRecord.DefaultTrailName : run.TrailName,
         StartTimestampMs = run.StartTimestampMs,
         FinishTimestampMs = run.FinishTimestampMs,
         ResultMs = run.ResultMs,

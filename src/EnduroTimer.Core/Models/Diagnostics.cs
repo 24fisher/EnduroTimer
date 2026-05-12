@@ -21,9 +21,13 @@ public sealed class SystemStatus
     public StationDiagnostics Lower { get; init; } = new();
     public bool BeamClear { get; init; }
     public bool BeamBlocked => !BeamClear;
-    public long RtcOffsetMs { get; init; }
+    public long? RtcOffsetMs { get; init; }
     public bool RtcOffsetWarning { get; init; }
     public bool RtcWarning => RtcOffsetWarning;
+    public bool IsTimeSynchronized { get; init; }
+    public bool TimeSyncRequired { get; init; }
+    public bool CanStartRun { get; init; }
+    public string? StartBlockedReason { get; init; }
     public RunRecord? ActiveRun { get; init; }
     public RunRecord? LastRun { get; init; }
     public Guid? CurrentRunId => ActiveRun?.RunId;
