@@ -8,6 +8,7 @@ public sealed class RunRecord
     public Guid? RiderId { get; init; }
     public string Rider { get; init; } = string.Empty;
     public string RiderName => Rider;
+    public string RiderNameSnapshot => Rider;
     public SystemOperationMode OperationMode { get; init; } = SystemOperationMode.ManualEncoderSelection;
     public int? QueuePosition { get; init; }
     public string TrailName { get; init; } = DefaultTrailName;
@@ -17,6 +18,7 @@ public sealed class RunRecord
     public string ResultFormatted => TimeFormatter.FormatResult(ResultMs);
     public RunStatus Status { get; set; } = RunStatus.Pending;
     public bool IsPersonalBest { get; set; }
+    public long CreatedAtMs { get; init; }
 }
 
 public static class TimeFormatter
