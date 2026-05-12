@@ -30,6 +30,14 @@ public sealed class SystemStatus
     public string? StartBlockedReason { get; init; }
     public RunRecord? ActiveRun { get; init; }
     public RunRecord? LastRun { get; init; }
+    public SystemOperationMode OperationMode { get; init; }
+    public Guid? SelectedRiderId { get; init; }
+    public string? SelectedRiderName { get; init; }
+    public Guid? NextRiderId { get; init; }
+    public string? NextRiderName { get; init; }
+    public string LedDisplayText { get; init; } = string.Empty;
+    public int GroupQueuePosition { get; init; }
+    public int GroupQueueLength { get; init; }
     public Guid? CurrentRunId => ActiveRun?.RunId;
     public long? LastResultMs => LastRun?.ResultMs;
     public string LastResultFormatted => TimeFormatter.FormatResult(LastResultMs);

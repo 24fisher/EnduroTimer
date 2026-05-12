@@ -5,8 +5,11 @@ public sealed class RunRecord
     public const string DefaultTrailName = "Default trail";
 
     public Guid RunId { get; init; } = Guid.NewGuid();
+    public Guid? RiderId { get; init; }
     public string Rider { get; init; } = string.Empty;
     public string RiderName => Rider;
+    public SystemOperationMode OperationMode { get; init; } = SystemOperationMode.ManualEncoderSelection;
+    public int? QueuePosition { get; init; }
     public string TrailName { get; init; } = DefaultTrailName;
     public long StartTimestampMs { get; set; }
     public long? FinishTimestampMs { get; set; }

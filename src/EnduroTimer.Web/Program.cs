@@ -11,6 +11,9 @@ builder.Services.AddControllers().AddJsonOptions(options =>
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSingleton<IRadioTransport, InMemoryRadioTransport>();
 builder.Services.AddSingleton<IRunRepository, InMemoryRunRepository>();
+builder.Services.AddSingleton<IRegisteredRiderRepository, InMemoryRegisteredRiderRepository>();
+builder.Services.AddSingleton<ILedDisplayService, SimulatedLedDisplayService>();
+builder.Services.AddSingleton<IRfidReaderService, SimulatedRfidReaderService>();
 builder.Services.AddSingleton<IBuzzerService, ConsoleBuzzerService>();
 builder.Services.AddSingleton<IClockService>(_ => new SystemClockService());
 builder.Services.AddSingleton<LowerStationService>(sp => new LowerStationService(new SystemClockService(offsetMs: 25), sp.GetRequiredService<IRadioTransport>()));

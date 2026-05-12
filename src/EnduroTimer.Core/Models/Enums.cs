@@ -38,3 +38,10 @@ public enum RadioMessageType
     FinishAck,
     Status
 }
+
+
+public enum SystemOperationMode
+{
+    ManualEncoderSelection,
+    GroupQueue
+}
