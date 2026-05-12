@@ -85,7 +85,9 @@ public sealed class UpperStationService : IStartButtonService
         }
     }
 
-    public async Task<RunRecord> StartRunAsync(string rider, string? trailName = null, CancellationToken cancellationToken = default)
+    public event Func<RunRecord, CancellationToken, Task>? RunFinished;
+
+    public async Task<RunRecord> StartRunAsync(string rider, string? trailName = null, Guid? riderId = null, SystemOperationMode operationMode = SystemOperationMode.ManualEncoderSelection, int? queuePosition = null, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(rider))
         {
@@ -107,7 +109,10 @@ public sealed class UpperStationService : IStartButtonService
 
             run = new RunRecord
             {
+                RiderId = riderId,
                 Rider = rider.Trim(),
+                OperationMode = operationMode,
+                QueuePosition = queuePosition,
                 TrailName = string.IsNullOrWhiteSpace(trailName) ? RunRecord.DefaultTrailName : trailName.Trim(),
                 Status = RunStatus.Pending
             };
@@ -172,7 +177,7 @@ public sealed class UpperStationService : IStartButtonService
                 DefaultStationId,
                 run.RunId,
                 run.StartTimestampMs,
-                new JsonObject { ["rider"] = run.Rider, ["trailName"] = run.TrailName }), cancellationToken);
+                new JsonObject { ["rider"] = run.Rider, ["riderId"] = run.RiderId?.ToString(), ["trailName"] = run.TrailName }), cancellationToken);
 
             if (GoDisplayDelayMs > 0)
             {
@@ -285,6 +290,13 @@ public sealed class UpperStationService : IStartButtonService
         }
 
         await _runs.UpdateAsync(run, cancellationToken);
+        if (RunFinished is not null)
+        {
+            foreach (Func<RunRecord, CancellationToken, Task> handler in RunFinished.GetInvocationList())
+            {
+                await handler(run, cancellationToken);
+            }
+        }
         await _radio.SendAsync(RadioMessage.Create(
             RadioMessageType.FinishAck,
             DefaultStationId,

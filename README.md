@@ -19,162 +19,219 @@ tests/EnduroTimer.Tests   Dependency-free console test runner for the core timin
 dotnet run --project src/EnduroTimer.Web/EnduroTimer.Web.csproj
 ```
 
-Open the URL printed by ASP.NET Core, then use the Russian-language single-page UI. The default static page is served from `/`.
+Open the URL printed by ASP.NET Core. The default static page is served from `/` and includes dashboard, riders, group queue, and statistics sections.
 
-## How to use the UI
+## Registered riders
 
-The web UI is localized to Russian while this README is maintained in English. The main controls are:
+The system now keeps a registered rider list for the future RFID workflow. Each rider has:
 
-1. After application startup, click **Синхронизировать время** before the first start. Runs are blocked until both station RTCs are synchronized.
-2. Enter a rider name or rider number in **Имя или номер райдера**. The backend rejects an empty rider name with `Rider name is required`.
-3. Optionally enter **Название трассы**. Empty trail names are stored as `Default trail`.
-4. Click **Старт**.
-5. The backend immediately enters `Countdown` and returns the new `runId`; it does not hold the HTTP request open while the countdown runs.
-6. The UI polls `GET /api/status` every 250 ms and displays the live `countdownText` values `3`, `2`, `1`, and `GO` in the central status panel.
-7. On `GO`, the upper station records `startTimestampMs`, changes the run to `Riding`, and sends `RunStart` to the lower station.
-8. Click **Сымитировать финиш** to emulate the E3JK finish beam trigger.
-9. The lower station records `finishTimestampMs`, sends `Finish` to the upper station, and the upper station calculates `resultMs = finishTimestampMs - startTimestampMs`.
-10. The latest result is displayed as `mm:ss.fff`, and recent runs are listed in **Последние заезды**. Each rider's fastest finished run is highlighted as their personal best.
+- `riderId`
+- `displayName`
+- optional `rfidTagId`
+- `isActive`
+- `createdAtMs`
 
-Additional controls:
+Runs keep the historical `riderName` snapshot so old results still display correctly even if a rider is later deactivated or renamed. New runs also store `riderId` when the rider comes from the registered list.
 
-- **Синхронизировать время** sends `SyncTime`, clears the initial start lock when the RTC offset is no more than 100 ms, and displays a warning while the offset is too large.
-- **Сброс** clears in-memory runs and returns stations to their ready/idle state.
-- **DNF** is available for active/riding runs in the recent runs table.
-- **Статистика** opens `/statistics`, a rider statistics page with totals, finished/DNF counts, best/average/last results, best trail, and personal-best counts.
-- **Export Excel** downloads `/api/export/results.xlsx` with `Results` and `Rider Statistics` worksheets.
-- **Export PDF** downloads `/api/export/results.pdf` with compact results and rider statistics tables.
+The **Riders** UI section supports listing, adding, editing, and deactivating riders. Active riders are used by start selection and group queues. The admin table shows all riders and includes run count and best result when available.
+
+RFID tag IDs are optional, but two active riders cannot share the same non-empty `rfidTagId`.
+
+## Operation modes
+
+EnduroTimer supports two start-selection modes.
+
+### ManualEncoderSelection
+
+This is the default mode. It prepares the UI for a future physical rotary encoder on the start station.
+
+- The Web UI emulates the encoder with **←**, **Select**, and **→** buttons.
+- Left/right cycle through active registered riders.
+- The selected rider is shown on the simulated LED display.
+- `POST /api/runs/start` uses `selectedRiderId` and `selectedRiderName`.
+- If no active riders exist, start is blocked with `No active riders registered` and the LED preview shows `NO RIDERS`.
+- If active riders exist but none is selected, start is blocked with `No rider selected`.
+- The legacy manual `riderName` field remains available as a fallback only when a registered rider is not selected.
+
+### GroupQueue
+
+This mode is intended for group training sessions with a predefined rider order.
+
+- The **Group queue** UI section lets you add active riders, move them up/down, remove them, reset the position, and enable/disable looping.
+- `groupQueuePosition` points at the next rider.
+- `POST /api/runs/start` ignores the manual rider field and starts the next rider from the queue.
+- After a successful finished run, the queue advances automatically.
+- If `loopGroupQueue` is `true`, the queue wraps to the beginning at the end.
+- If `loopGroupQueue` is `false`, reaching the end blocks start with `Group queue finished`.
+- An empty queue blocks start with `Group queue is empty` and the LED preview shows `QUEUE EMPTY`.
+
+## LED display preview
+
+Real LED hardware is not connected yet. `ILedDisplayService` is implemented by `SimulatedLedDisplayService`, and the Web UI shows a black LED-style preview block.
+
+Display rules include:
+
+- `SYNC TIME` when time synchronization is required.
+- `FINISH OFFLINE` when the finish station is offline.
+- `BEAM BLOCKED` when the finish beam is blocked.
+- `NO RIDERS` when no active riders are registered in manual mode.
+- The selected rider name in `ManualEncoderSelection`.
+- The next queue rider name in `GroupQueue`.
+- Countdown values `3`, `2`, `1`, and `GO` during countdown.
+- The rider name while riding.
+- The formatted result after finish, then the next selected/queued rider as status refreshes.
+
+## RFID simulation and future RFID integration
+
+Real RFID hardware is not connected yet. The code includes `IRfidReaderService` and `SimulatedRfidReaderService` so a hardware implementation can be added later without changing the Web API shape.
+
+In the Web UI, use **RFID simulation** to enter a tag ID and click **Simulate RFID scan**.
+
+- If the tag matches an active registered rider in `ManualEncoderSelection`, that rider becomes selected and the LED preview shows the rider name.
+- If the tag is unknown, the LED preview shows `UNKNOWN TAG` and start is blocked with `Unknown RFID tag`.
+- In `GroupQueue`, RFID scans are recorded for visibility, but start still follows the queue.
+
+## PDF Cyrillic font configuration
+
+The repository does **not** include binary fonts. PDF export can embed an external TTF/OTF font when configured, which allows Cyrillic rider names, trail names, and table headings to render correctly.
+
+Recommended fonts:
+
+- `NotoSans-Regular.ttf`
+- `DejaVuSans.ttf`
+
+Download one of these fonts yourself and put it outside the repository, or in a local ignored folder that you do not commit. Then configure the path through `appsettings.json` or an environment variable.
+
+Example `src/EnduroTimer.Web/appsettings.json`:
+
+```json
+"Pdf": {
+  "FontPath": "C:/EnduroTimer/fonts/NotoSans-Regular.ttf",
+  "FontFamily": "NotoSans"
+}
+```
+
+Environment variable example:
+
+```bash
+Pdf__FontPath=/opt/endurotimer/fonts/NotoSans-Regular.ttf
+```
+
+If `Pdf:FontPath` is empty or points to a missing file, PDF export still works with the built-in fallback font, but the application logs this warning:
+
+```text
+PDF Cyrillic font path is not configured. Cyrillic text may render incorrectly.
+```
+
+Do not commit `.ttf`, `.otf`, `.woff`, images, archives, or other binary files to this repository.
 
 ## API endpoints
 
-- `GET /api/status` - station state, `countdownText`, `isCountdownActive`, diagnostics, beam status, `rtcOffsetMs`, `rtcWarning`, `isTimeSynchronized`, `timeSyncRequired`, `canStartRun`, `startBlockedReason`, active/current run ID, and last result. The web UI uses regular polling of this endpoint to show the live countdown and start-lock reason instead of relying on the start response.
-- `POST /api/time/sync` - sends `SyncTime` and processes `SyncTimeAck`. After a successful check with offset <= 100 ms, `isTimeSynchronized` becomes `true`; larger offsets set `timeSyncRequired` and keep start blocked.
-- `POST /api/runs/start` - body: `{ "riderName": "Andrey", "trailName": "Лесной СУ 1" }`. `rider`, `riderName`, or `riderNumber` are accepted for compatibility, and `trackName` is accepted as an alias for `trailName`. Returns quickly after setting the upper station to `Countdown`; returns `409 Conflict` with `Time synchronization required before starting a run` before sync or `Run already active` if a run is already in `Countdown` or `Riding`.
+### System and run flow
+
+- `GET /api/status` - station state, countdown, diagnostics, start lock fields, active/last run, operation mode, selected/next rider, LED text, and group queue position/length.
+- `POST /api/time/sync` - sends `SyncTime` and processes `SyncTimeAck`.
+- `POST /api/runs/start` - starts according to the active operation mode. Compatible body: `{ "riderName": "Fallback", "trailName": "Лесной СУ 1" }`.
 - `POST /api/finish/simulate` - simulates the lower finish sensor.
-- `GET /api/runs` - recent runs with `runId`, `riderName`, `trailName`, timestamps, `resultMs`, `resultFormatted`, `status`, and `isPersonalBest`.
+- `GET /api/runs` - recent runs with rider, trail, mode, queue position, status, result, and personal-best flag.
 - `GET /api/runs/{id}` - one run by ID.
 - `POST /api/runs/{id}/dnf` - marks a run as DNF.
-- `GET /api/statistics/riders` - rider aggregates with total runs, finished runs, DNF runs, best/average/last result fields, `lastRunAt`, `bestTrailName`, and `personalBestCount`.
-- `GET /api/export/results.xlsx` - Excel export with `Results` and `Rider Statistics` sheets. Empty datasets still produce headers.
-- `GET /api/export/results.pdf` - compact PDF export with results and rider statistics tables. Empty datasets still produce headers.
 - `POST /api/system/reset` - clears in-memory state and requires time synchronization again before the next start.
+
+### Registered riders
+
+- `GET /api/riders` - all registered riders with active flag, run count, and best result.
+- `POST /api/riders` - create a rider.
+
+```json
+{
+  "displayName": "Андрей",
+  "rfidTagId": "E2000017221101441890ABCD"
+}
+```
+
+- `PUT /api/riders/{id}` - update a rider.
+
+```json
+{
+  "displayName": "Андрей Рыбаков",
+  "rfidTagId": "E2000017221101441890ABCD",
+  "isActive": true
+}
+```
+
+- `DELETE /api/riders/{id}` - deactivate a rider.
+- `POST /api/riders/{id}/deactivate` - deactivate a rider.
+
+### Mode and selection
+
+- `GET /api/mode` - current operation mode.
+- `POST /api/mode` - set `ManualEncoderSelection` or `GroupQueue`.
+
+```json
+{ "operationMode": "ManualEncoderSelection" }
+```
+
+- `POST /api/encoder/left` - emulate encoder left.
+- `POST /api/encoder/right` - emulate encoder right.
+- `POST /api/encoder/press` - confirm the current selection.
+
+### Group queue
+
+- `GET /api/group-queue` - current queue entries, position, loop flag, and next rider.
+- `POST /api/group-queue` - replace the queue.
+
+```json
+{
+  "riderIds": ["id1", "id2", "id3"],
+  "loopGroupQueue": true
+}
+```
+
+- `POST /api/group-queue/next` - manually advance to the next rider.
+- `POST /api/group-queue/reset` - reset position to the first rider.
+- `DELETE /api/group-queue/{index}` - remove a queue entry by index.
+- `POST /api/group-queue/remove` - remove by body: `{ "index": 1 }`.
+
+### RFID simulation
+
+- `POST /api/rfid/simulate` - simulate an RFID scan.
+
+```json
+{ "tagId": "E2000017221101441890ABCD" }
+```
+
+- `GET /api/rfid/last` - last simulated RFID read.
+
+### Statistics and exports
+
+- `GET /api/statistics/riders` - rider aggregates with `riderId`, `riderName`, totals, finished/DNF counts, best/average/last results, `lastRunAt`, and `bestTrailName`. Registered riders with zero runs are included.
+- `GET /api/export/results.xlsx` - Excel export with `Results`, `Rider Statistics`, and `Riders` worksheets.
+- `GET /api/export/results.pdf` - PDF export with results, rider statistics, and riders. Cyrillic requires a configured external font path.
 
 ## Time and result format
 
 - Internal timestamps are Unix milliseconds stored as `long`.
 - Run results are stored as `resultMs` (`long`).
-- Backend DTOs and the UI format results as `mm:ss.fff`, with milliseconds always padded to three digits (for example, `63218` ms becomes `01:03.218`).
+- Backend DTOs and the UI format results as `mm:ss.fff`, with milliseconds always padded to three digits.
 - LoRa transport latency does not affect timing because start and finish timestamps are captured by station clocks before radio transmission.
 
-## Station state machines
+## Future Heltec/LoRa hardware integration
 
-Upper/start station:
-
-- `Boot`
-- `Ready`
-- `Countdown`
-- `Riding`
-- `Finished`
-- `Error`
-
-Lower/finish station:
-
-- `Boot`
-- `Idle`
-- `WaitFinish`
-- `Finished`
-- `SensorBlocked`
-
-Finish debounce rules:
-
-- Finish triggers are accepted only in `WaitFinish`.
-- The first accepted trigger sends one `Finish` message and moves the lower station to `Finished`.
-- Repeated triggers within 5 seconds do not create additional `Finish` messages.
-- Triggers before `RunStart` are ignored.
-
-## Radio protocol
-
-All radio messages use this shape:
-
-```json
-{
-  "messageId": "guid",
-  "type": "RunStart",
-  "stationId": "upper-start",
-  "runId": "guid-or-null",
-  "timestampMs": 1710000000000,
-  "payload": {}
-}
-```
-
-Supported message types:
-
-- `Ping`
-- `Pong`
-- `SyncTime`
-- `SyncTimeAck`
-- `RunStart`
-- `Finish`
-- `FinishAck`
-- `Status`
-
-Current simulated flow:
-
-1. A start request creates a pending run, sets the upper station to `Countdown`, and returns immediately.
-2. Upper advances `countdownText` through `3`, `2`, `1`, and `GO` in the background.
-3. On `GO`, upper captures `startTimestampMs` and sends `RunStart` with `runId`, rider payload, and the captured start timestamp.
-4. Lower enters `WaitFinish`.
-5. Lower sends `Finish` with the same `runId` and locally captured `finishTimestampMs`.
-6. Upper stores the result and sends `FinishAck`.
-7. Lower resets back to `Idle` after `FinishAck`.
-
-## Diagnostics
-
-The status API and UI expose:
-
-- Upper station online/offline flag.
-- Lower station online/offline flag.
-- `BeamClear` / `BeamBlocked`.
-- Emulated last RSSI.
-- Emulated battery voltage for both stations.
-- RTC offset and warning when absolute offset exceeds 100 ms.
-- Start eligibility fields: `isTimeSynchronized`, `timeSyncRequired`, `canStartRun`, and `startBlockedReason`.
-
-## Future Heltec/LoRa integration
-
-The prototype keeps hardware behind interfaces so real implementations can be added without changing controller or domain logic:
+The prototype keeps hardware behind interfaces so real implementations can be added later without changing controller or domain logic:
 
 - `IClockService` can be backed by a DS3231 RTC driver.
 - `IBuzzerService` can drive a GPIO buzzer output.
 - `IFinishSensorService` can read the E3JK finish input through a GPIO/interrupt path.
 - `IRadioTransport` can be replaced by a serial or native LoRa implementation for Heltec modules.
+- `IRfidReaderService` can be replaced by the real RFID reader.
+- `ILedDisplayService` can be replaced by the real external LED display driver.
 
-A real LoRa transport should serialize the existing `RadioMessage` protocol, preserve station IDs and message IDs, and pass the station-captured timestamps without rewriting them on receipt.
+A real LoRa transport should serialize the existing `RadioMessage` protocol, preserve station IDs and message IDs, and pass station-captured timestamps without rewriting them on receipt.
 
-## Hardware sketch
+## Not implemented yet
 
-- Upper station: `1×18650 → boost 5V → Heltec + DS3231 + start button + buzzer`.
-- Lower station: `3S 18650 → 12V E3JK-R4M1 DC + buck 5V Heltec + DS3231 + sensor input`.
-
-## Tests
-
-The test project is intentionally dependency-free and can be run as a console program:
-
-```bash
-dotnet run --project tests/EnduroTimer.Tests/EnduroTimer.Tests.csproj
-```
-
-Covered scenarios:
-
-- Start immediately creates a pending run and enters `Countdown`.
-- Start returns before the countdown completes.
-- Countdown emits `3`, `2`, `1`, and `GO`.
-- `startTimestampMs` is captured on `GO`, then the run enters `Riding`.
-- Duplicate starts during `Countdown`/`Riding` are rejected.
-- Finish after start moves the run to `Finished`.
-- `resultMs` is calculated as `finishTimestampMs - startTimestampMs`.
-- Duplicate finish within 5 seconds is ignored.
-- Finish before `RunStart` is ignored.
-- RTC offset greater than 100 ms produces a warning.
-- Result formatting uses `mm:ss.fff`.
-- Personal best flags are calculated per rider from finished runs only.
+- Real RFID scanner hardware.
+- Real rotary encoder hardware.
+- Real external LED display hardware.
+- Serial/USB/LoRa hardware implementations.
