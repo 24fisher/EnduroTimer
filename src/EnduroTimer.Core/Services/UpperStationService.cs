@@ -15,6 +15,7 @@ public sealed class UpperStationService : IStartButtonService
     private readonly object _gate = new();
     private RunRecord? _activeRun;
     private RunRecord? _lastRun;
+    private string _countdownText = string.Empty;
 
     public UpperStationService(IClockService clock, IBuzzerService buzzer, IRadioTransport radio, IRunRepository runs)
     {
@@ -38,10 +39,49 @@ public sealed class UpperStationService : IStartButtonService
     public UpperStationState State { get; private set; }
     public StationDiagnostics Diagnostics { get; }
     public int CountdownStepDelayMs { get; init; } = 1000;
+    public int GoDisplayDelayMs { get; init; } = 750;
+    public string CountdownText
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _countdownText;
+            }
+        }
+    }
+    public bool IsCountdownActive
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return State == UpperStationState.Countdown;
+            }
+        }
+    }
     public long RtcOffsetMs { get; private set; }
     public bool RtcOffsetWarning => Math.Abs(RtcOffsetMs) > 100;
-    public RunRecord? ActiveRun => _activeRun;
-    public RunRecord? LastRun => _lastRun;
+    public RunRecord? ActiveRun
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _activeRun;
+            }
+        }
+    }
+    public RunRecord? LastRun
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _lastRun;
+            }
+        }
+    }
 
     public async Task<RunRecord> StartRunAsync(string rider, CancellationToken cancellationToken = default)
     {
@@ -50,52 +90,107 @@ public sealed class UpperStationService : IStartButtonService
             throw new ArgumentException("Rider name or number is required.", nameof(rider));
         }
 
+        RunRecord run;
         lock (_gate)
         {
             if (State is UpperStationState.Countdown or UpperStationState.Riding)
             {
-                throw new InvalidOperationException("A run is already active.");
+                throw new InvalidOperationException("Run already active");
             }
 
+            run = new RunRecord
+            {
+                Rider = rider.Trim(),
+                Status = RunStatus.Pending
+            };
+            _activeRun = run;
+            _lastRun = run;
+            _countdownText = "3";
             State = UpperStationState.Countdown;
         }
 
-        foreach (var cue in new[] { "3", "2", "1", "GO" })
-        {
-            await _buzzer.BeepAsync(cue, cancellationToken);
-            if (CountdownStepDelayMs > 0 && cue != "GO")
-            {
-                await Task.Delay(CountdownStepDelayMs, cancellationToken);
-            }
-        }
-
-        var run = new RunRecord
-        {
-            Rider = rider.Trim(),
-            StartTimestampMs = _clock.GetUnixTimeMilliseconds(),
-            Status = RunStatus.Riding
-        };
-
-        lock (_gate)
-        {
-            _activeRun = run;
-            _lastRun = run;
-            State = UpperStationState.Riding;
-        }
-
         await _runs.AddAsync(run, cancellationToken);
-        await _radio.SendAsync(RadioMessage.Create(
-            RadioMessageType.RunStart,
-            DefaultStationId,
-            run.RunId,
-            run.StartTimestampMs,
-            new JsonObject { ["rider"] = run.Rider }), cancellationToken);
+        _ = Task.Run(() => RunCountdownAsync(run.RunId, CancellationToken.None), CancellationToken.None);
 
         return run;
     }
 
     async Task IStartButtonService.PressStartAsync(string rider, CancellationToken cancellationToken) =>
         await StartRunAsync(rider, cancellationToken);
+
+    private async Task RunCountdownAsync(Guid runId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            foreach (var cue in new[] { "3", "2", "1" })
+            {
+                lock (_gate)
+                {
+                    if (_activeRun?.RunId != runId || State != UpperStationState.Countdown)
+                    {
+                        return;
+                    }
+
+                    _countdownText = cue;
+                }
+
+                await _buzzer.BeepAsync(cue, cancellationToken);
+                if (CountdownStepDelayMs > 0)
+                {
+                    await Task.Delay(CountdownStepDelayMs, cancellationToken);
+                }
+            }
+
+            RunRecord? run;
+            lock (_gate)
+            {
+                if (_activeRun?.RunId != runId || State != UpperStationState.Countdown)
+                {
+                    return;
+                }
+
+                _countdownText = "GO";
+                run = _activeRun;
+                run.StartTimestampMs = _clock.GetUnixTimeMilliseconds();
+                run.Status = RunStatus.Riding;
+                _lastRun = run;
+                State = UpperStationState.Riding;
+            }
+
+            await _buzzer.BeepAsync("GO", cancellationToken);
+            await _runs.UpdateAsync(run, cancellationToken);
+            await _radio.SendAsync(RadioMessage.Create(
+                RadioMessageType.RunStart,
+                DefaultStationId,
+                run.RunId,
+                run.StartTimestampMs,
+                new JsonObject { ["rider"] = run.Rider }), cancellationToken);
+
+            if (GoDisplayDelayMs > 0)
+            {
+                await Task.Delay(GoDisplayDelayMs, cancellationToken);
+            }
+
+            lock (_gate)
+            {
+                if (_activeRun?.RunId == runId && State == UpperStationState.Riding && _countdownText == "GO")
+                {
+                    _countdownText = string.Empty;
+                }
+            }
+        }
+        catch
+        {
+            lock (_gate)
+            {
+                if (_activeRun?.RunId == runId)
+                {
+                    State = UpperStationState.Error;
+                    _countdownText = string.Empty;
+                }
+            }
+        }
+    }
 
     public async Task SyncTimeAsync(CancellationToken cancellationToken = default)
     {
@@ -114,6 +209,7 @@ public sealed class UpperStationService : IStartButtonService
             {
                 _activeRun = null;
                 State = UpperStationState.Ready;
+                _countdownText = string.Empty;
             }
 
             _lastRun = run;
@@ -130,6 +226,7 @@ public sealed class UpperStationService : IStartButtonService
             _lastRun = null;
             State = UpperStationState.Ready;
             RtcOffsetMs = 0;
+            _countdownText = string.Empty;
         }
 
         await _runs.ClearAsync(cancellationToken);
@@ -173,6 +270,7 @@ public sealed class UpperStationService : IStartButtonService
             run.Status = RunStatus.Finished;
             _lastRun = run;
             _activeRun = null;
+            _countdownText = string.Empty;
             State = UpperStationState.Finished;
         }
 

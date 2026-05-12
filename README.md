@@ -27,10 +27,12 @@ The web UI is localized to Russian while this README is maintained in English. T
 
 1. Enter a rider name or rider number in **Имя или номер райдера**.
 2. Click **Старт**.
-3. The backend performs the `3`, `2`, `1`, `GO` countdown. On `GO`, the upper station records `startTimestampMs`, creates a `Run` in `Riding`, and sends `RunStart` to the lower station.
-4. Click **Сымитировать финиш** to emulate the E3JK finish beam trigger.
-5. The lower station records `finishTimestampMs`, sends `Finish` to the upper station, and the upper station calculates `resultMs = finishTimestampMs - startTimestampMs`.
-6. The latest result is displayed as `mm:ss.fff`, and recent runs are listed in **Последние заезды**.
+3. The backend immediately enters `Countdown` and returns the new `runId`; it does not hold the HTTP request open while the countdown runs.
+4. The UI polls `GET /api/status` every 250 ms and displays the live `countdownText` values `3`, `2`, `1`, and `GO` in the central status panel.
+5. On `GO`, the upper station records `startTimestampMs`, changes the run to `Riding`, and sends `RunStart` to the lower station.
+6. Click **Сымитировать финиш** to emulate the E3JK finish beam trigger.
+7. The lower station records `finishTimestampMs`, sends `Finish` to the upper station, and the upper station calculates `resultMs = finishTimestampMs - startTimestampMs`.
+8. The latest result is displayed as `mm:ss.fff`, and recent runs are listed in **Последние заезды**. Each rider's fastest finished run is highlighted as their personal best.
 
 Additional controls:
 
@@ -40,11 +42,11 @@ Additional controls:
 
 ## API endpoints
 
-- `GET /api/status` - station state, diagnostics, beam status, RTC offset, active/last run.
+- `GET /api/status` - station state, `countdownText`, `isCountdownActive`, diagnostics, beam status, RTC offset, active/current run ID, and last result. The web UI uses regular polling of this endpoint to show the live countdown instead of relying on the start response.
 - `POST /api/time/sync` - sends `SyncTime` and processes `SyncTimeAck`.
-- `POST /api/runs/start` - body: `{ "rider": "42" }`.
+- `POST /api/runs/start` - body: `{ "rider": "42" }`. Returns quickly after setting the upper station to `Countdown`; returns `409 Conflict` with `Run already active` if a run is already in `Countdown` or `Riding`.
 - `POST /api/finish/simulate` - simulates the lower finish sensor.
-- `GET /api/runs` - recent runs.
+- `GET /api/runs` - recent runs with `runId`, `riderName`, timestamps, `resultMs`, `resultFormatted`, `status`, and `isPersonalBest`.
 - `GET /api/runs/{id}` - one run by ID.
 - `POST /api/runs/{id}/dnf` - marks a run as DNF.
 - `POST /api/system/reset` - clears in-memory state.
@@ -53,7 +55,7 @@ Additional controls:
 
 - Internal timestamps are Unix milliseconds stored as `long`.
 - Run results are stored as `resultMs` (`long`).
-- The UI formats results as `mm:ss.fff`.
+- Backend DTOs and the UI format results as `mm:ss.fff`, with milliseconds always padded to three digits (for example, `63218` ms becomes `01:03.218`).
 - LoRa transport latency does not affect timing because start and finish timestamps are captured by station clocks before radio transmission.
 
 ## Station state machines
@@ -110,11 +112,13 @@ Supported message types:
 
 Current simulated flow:
 
-1. Upper sends `RunStart` with `runId`, rider payload, and `startTimestampMs`.
-2. Lower enters `WaitFinish`.
-3. Lower sends `Finish` with the same `runId` and locally captured `finishTimestampMs`.
-4. Upper stores the result and sends `FinishAck`.
-5. Lower resets back to `Idle` after `FinishAck`.
+1. A start request creates a pending run, sets the upper station to `Countdown`, and returns immediately.
+2. Upper advances `countdownText` through `3`, `2`, `1`, and `GO` in the background.
+3. On `GO`, upper captures `startTimestampMs` and sends `RunStart` with `runId`, rider payload, and the captured start timestamp.
+4. Lower enters `WaitFinish`.
+5. Lower sends `Finish` with the same `runId` and locally captured `finishTimestampMs`.
+6. Upper stores the result and sends `FinishAck`.
+7. Lower resets back to `Idle` after `FinishAck`.
 
 ## Diagnostics
 
@@ -153,9 +157,15 @@ dotnet run --project tests/EnduroTimer.Tests/EnduroTimer.Tests.csproj
 
 Covered scenarios:
 
-- Start creates a run in `Riding`.
+- Start immediately creates a pending run and enters `Countdown`.
+- Start returns before the countdown completes.
+- Countdown emits `3`, `2`, `1`, and `GO`.
+- `startTimestampMs` is captured on `GO`, then the run enters `Riding`.
+- Duplicate starts during `Countdown`/`Riding` are rejected.
 - Finish after start moves the run to `Finished`.
 - `resultMs` is calculated as `finishTimestampMs - startTimestampMs`.
 - Duplicate finish within 5 seconds is ignored.
 - Finish before `RunStart` is ignored.
 - RTC offset greater than 100 ms produces a warning.
+- Result formatting uses `mm:ss.fff`.
+- Personal best flags are calculated per rider from finished runs only.

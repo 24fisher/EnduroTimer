@@ -40,7 +40,11 @@ public sealed class TimerController : ControllerBase
         {
             return Ok(await _upper.StartRunAsync(request.Rider, cancellationToken));
         }
-        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        catch (InvalidOperationException ex) when (ex.Message == "Run already active")
+        {
+            return Conflict(new { error = ex.Message });
+        }
+        catch (ArgumentException ex)
         {
             return BadRequest(new { error = ex.Message });
         }
