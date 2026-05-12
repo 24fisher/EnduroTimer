@@ -62,6 +62,8 @@ public sealed class UpperStationService : IStartButtonService
     }
     public long RtcOffsetMs { get; private set; }
     public bool RtcOffsetWarning => Math.Abs(RtcOffsetMs) > 100;
+    public bool IsTimeSynchronized { get; private set; }
+    public bool TimeSyncRequired => !IsTimeSynchronized;
     public RunRecord? ActiveRun
     {
         get
@@ -83,11 +85,16 @@ public sealed class UpperStationService : IStartButtonService
         }
     }
 
-    public async Task<RunRecord> StartRunAsync(string rider, CancellationToken cancellationToken = default)
+    public async Task<RunRecord> StartRunAsync(string rider, string? trailName = null, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(rider))
         {
-            throw new ArgumentException("Rider name or number is required.", nameof(rider));
+            throw new ArgumentException("Rider name is required", nameof(rider));
+        }
+
+        if (!IsTimeSynchronized)
+        {
+            throw new InvalidOperationException("Time synchronization required before starting a run");
         }
 
         RunRecord run;
@@ -101,6 +108,7 @@ public sealed class UpperStationService : IStartButtonService
             run = new RunRecord
             {
                 Rider = rider.Trim(),
+                TrailName = string.IsNullOrWhiteSpace(trailName) ? RunRecord.DefaultTrailName : trailName.Trim(),
                 Status = RunStatus.Pending
             };
             _activeRun = run;
@@ -116,7 +124,7 @@ public sealed class UpperStationService : IStartButtonService
     }
 
     async Task IStartButtonService.PressStartAsync(string rider, CancellationToken cancellationToken) =>
-        await StartRunAsync(rider, cancellationToken);
+        await StartRunAsync(rider, cancellationToken: cancellationToken);
 
     private async Task RunCountdownAsync(Guid runId, CancellationToken cancellationToken)
     {
@@ -164,7 +172,7 @@ public sealed class UpperStationService : IStartButtonService
                 DefaultStationId,
                 run.RunId,
                 run.StartTimestampMs,
-                new JsonObject { ["rider"] = run.Rider }), cancellationToken);
+                new JsonObject { ["rider"] = run.Rider, ["trailName"] = run.TrailName }), cancellationToken);
 
             if (GoDisplayDelayMs > 0)
             {
@@ -226,6 +234,7 @@ public sealed class UpperStationService : IStartButtonService
             _lastRun = null;
             State = UpperStationState.Ready;
             RtcOffsetMs = 0;
+            IsTimeSynchronized = false;
             _countdownText = string.Empty;
         }
 
@@ -247,6 +256,7 @@ public sealed class UpperStationService : IStartButtonService
             case RadioMessageType.SyncTimeAck when message.TimestampMs is not null:
                 var upperTimestamp = message.Payload["upperTimestampMs"]?.GetValue<long>() ?? _clock.GetUnixTimeMilliseconds();
                 RtcOffsetMs = message.TimestampMs.Value - upperTimestamp;
+                IsTimeSynchronized = !RtcOffsetWarning;
                 break;
             case RadioMessageType.Finish when message.RunId is not null && message.TimestampMs is not null:
                 await FinishRunAsync(message.RunId.Value, message.TimestampMs.Value, cancellationToken);

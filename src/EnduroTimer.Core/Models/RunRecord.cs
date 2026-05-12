@@ -2,9 +2,12 @@ namespace EnduroTimer.Core.Models;
 
 public sealed class RunRecord
 {
+    public const string DefaultTrailName = "Default trail";
+
     public Guid RunId { get; init; } = Guid.NewGuid();
     public string Rider { get; init; } = string.Empty;
     public string RiderName => Rider;
+    public string TrailName { get; init; } = DefaultTrailName;
     public long StartTimestampMs { get; set; }
     public long? FinishTimestampMs { get; set; }
     public long? ResultMs { get; set; }

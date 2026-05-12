@@ -5,246 +5,97 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>EnduroTimer — прототип тайминга</title>
   <style>
-    :root {
-      color-scheme: dark;
-      font-family: Inter, "Segoe UI", system-ui, sans-serif;
-      --bg: #07110f;
-      --panel: #111c18;
-      --panel-soft: #162820;
-      --line: #284136;
-      --text: #f4fbf7;
-      --muted: #9db3aa;
-      --accent: #2dd4bf;
-      --accent-strong: #facc15;
-      --danger: #fb7185;
-      --ok: #86efac;
-      --warn: #fde68a;
-    }
-
+    :root { color-scheme: dark; font-family: Inter, "Segoe UI", system-ui, sans-serif; --bg:#07110f; --panel:#111c18; --panel-soft:#162820; --line:#284136; --text:#f4fbf7; --muted:#9db3aa; --accent:#2dd4bf; --accent-strong:#facc15; --danger:#fb7185; --ok:#86efac; --warn:#fde68a; }
     * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      min-height: 100vh;
-      background:
-        radial-gradient(circle at top left, #164e45 0, transparent 34rem),
-        linear-gradient(135deg, #050807 0%, var(--bg) 54%, #0d1b16 100%);
-      color: var(--text);
-    }
-
-    main { max-width: 1180px; margin: 0 auto; padding: 32px 20px 40px; }
-    header { display: flex; justify-content: space-between; gap: 18px; align-items: flex-end; margin-bottom: 22px; }
-    .eyebrow { margin: 0 0 8px; color: var(--accent); font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
-    h1 { margin: 0; font-size: clamp(2rem, 5vw, 4.4rem); line-height: .95; }
-    h2 { margin: 0 0 16px; font-size: 1.15rem; }
-    p { color: var(--muted); }
-
-    .hero-card {
-      min-width: 240px;
-      padding: 16px 18px;
-      border: 1px solid var(--line);
-      border-radius: 20px;
-      background: #0b1713cc;
-      box-shadow: 0 20px 70px #0007;
-    }
-    .hero-card span { display: block; color: var(--muted); font-size: .9rem; }
-    .hero-card strong { display: block; margin-top: 6px; color: var(--accent-strong); font-size: 1.4rem; }
-
-    .grid { display: grid; grid-template-columns: 1.1fr .9fr .9fr; gap: 16px; }
-    .card {
-      background: linear-gradient(180deg, var(--panel) 0%, #0c1713 100%);
-      border: 1px solid var(--line);
-      border-radius: 22px;
-      padding: 20px;
-      box-shadow: 0 18px 50px #0006;
-    }
-    .wide { margin-top: 16px; overflow: hidden; }
-
-    label { display: block; margin-bottom: 8px; color: var(--muted); font-weight: 700; }
-    input {
-      width: 100%;
-      padding: 14px 15px;
-      border-radius: 14px;
-      border: 1px solid #3d5a4e;
-      background: #07110f;
-      color: #fff;
-      font-size: 1rem;
-      outline: none;
-    }
-    input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px #2dd4bf22; }
-
-    .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
-    button {
-      padding: 12px 15px;
-      border: 0;
-      border-radius: 999px;
-      background: var(--accent);
-      color: #03110e;
-      font-weight: 900;
-      cursor: pointer;
-      transition: transform .15s ease, filter .15s ease;
-    }
-    button:hover { transform: translateY(-1px); filter: brightness(1.05); }
-    button.secondary { background: #cbd5e1; }
-    button.danger { background: var(--danger); color: #24060c; }
-
-    .status { font-size: clamp(2rem, 5vw, 3.4rem); font-weight: 950; color: var(--accent-strong); }
-    .countdown-display {
-      display: grid;
-      place-items: center;
-      min-height: 130px;
-      margin: 12px 0 16px;
-      border: 1px solid #3d5a4e;
-      border-radius: 22px;
-      background: radial-gradient(circle, #164e45 0%, #07110f 72%);
-      color: var(--accent-strong);
-      font-size: clamp(4rem, 14vw, 8rem);
-      font-weight: 1000;
-      line-height: 1;
-      text-shadow: 0 8px 35px #000;
-    }
-    .countdown-display.idle { color: var(--muted); font-size: clamp(1.2rem, 4vw, 2rem); }
-    .countdown-display.go { color: var(--ok); border-color: var(--ok); box-shadow: 0 0 36px #86efac44; }
-    .result { font-size: clamp(2.2rem, 5vw, 3.6rem); font-variant-numeric: tabular-nums; color: var(--text); }
-    .metric { display: flex; justify-content: space-between; gap: 14px; padding: 10px 0; border-bottom: 1px solid #233a31; }
-    .metric:last-child { border-bottom: 0; }
-    .metric span:first-child { color: var(--muted); }
-
-    .message { min-height: 24px; margin-bottom: 0; color: var(--accent-strong); font-weight: 700; }
-    .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: #fca5a5; }
-    code { color: #99f6e4; }
-
-    .table-wrap { overflow-x: auto; margin: 0 -20px -20px; }
-    table { width: 100%; border-collapse: collapse; min-width: 780px; }
-    th, td { text-align: left; padding: 12px 20px; border-bottom: 1px solid #233a31; font-size: .93rem; }
-    th { color: var(--muted); font-size: .78rem; letter-spacing: .08em; text-transform: uppercase; }
-    tbody tr:hover { background: var(--panel-soft); }
-    tr.personal-best td { background: #14532d55; }
-    td.personal-best-result { color: var(--ok); font-weight: 950; box-shadow: inset 4px 0 0 var(--ok); }
-
-    @media (max-width: 900px) {
-      header { display: block; }
-      .hero-card { margin-top: 18px; }
-      .grid { grid-template-columns: 1fr; }
-    }
+    body { margin:0; min-height:100vh; background:radial-gradient(circle at top left,#164e45 0,transparent 34rem),linear-gradient(135deg,#050807 0%,var(--bg) 54%,#0d1b16 100%); color:var(--text); }
+    main { max-width:1180px; margin:0 auto; padding:32px 20px 40px; }
+    header { display:flex; justify-content:space-between; gap:18px; align-items:flex-end; margin-bottom:18px; }
+    .eyebrow { margin:0 0 8px; color:var(--accent); font-weight:800; letter-spacing:.16em; text-transform:uppercase; }
+    h1 { margin:0; font-size:clamp(2rem,5vw,4.4rem); line-height:.95; } h2 { margin:0 0 16px; font-size:1.15rem; } p { color:var(--muted); }
+    nav { display:flex; gap:10px; flex-wrap:wrap; margin:0 0 18px; }
+    nav a, .export-link { display:inline-block; padding:10px 14px; border-radius:999px; background:#0b1713cc; border:1px solid var(--line); color:var(--text); text-decoration:none; font-weight:800; }
+    nav a.active, .export-link:hover { border-color:var(--accent); color:#99f6e4; }
+    .hero-card { min-width:240px; padding:16px 18px; border:1px solid var(--line); border-radius:20px; background:#0b1713cc; box-shadow:0 20px 70px #0007; }
+    .hero-card span { display:block; color:var(--muted); font-size:.9rem; } .hero-card strong { display:block; margin-top:6px; color:var(--accent-strong); font-size:1.4rem; }
+    .grid { display:grid; grid-template-columns:1.1fr .9fr .9fr; gap:16px; }
+    .card { background:linear-gradient(180deg,var(--panel) 0%,#0c1713 100%); border:1px solid var(--line); border-radius:22px; padding:20px; box-shadow:0 18px 50px #0006; }
+    .wide { margin-top:16px; overflow:hidden; }
+    label { display:block; margin:12px 0 8px; color:var(--muted); font-weight:700; }
+    input { width:100%; padding:14px 15px; border-radius:14px; border:1px solid #3d5a4e; background:#07110f; color:#fff; font-size:1rem; outline:none; }
+    input:focus { border-color:var(--accent); box-shadow:0 0 0 3px #2dd4bf22; }
+    .actions { display:flex; flex-wrap:wrap; gap:10px; margin-top:14px; }
+    button { padding:12px 15px; border:0; border-radius:999px; background:var(--accent); color:#03110e; font-weight:900; cursor:pointer; transition:transform .15s ease,filter .15s ease,opacity .15s ease; }
+    button:hover:not(:disabled) { transform:translateY(-1px); filter:brightness(1.05); } button:disabled { cursor:not-allowed; opacity:.45; } button.secondary { background:#cbd5e1; } button.danger { background:var(--danger); color:#24060c; }
+    .status { font-size:clamp(2rem,5vw,3.4rem); font-weight:950; color:var(--accent-strong); }
+    .countdown-display { display:grid; place-items:center; min-height:130px; margin:12px 0 16px; border:1px solid #3d5a4e; border-radius:22px; background:radial-gradient(circle,#164e45 0%,#07110f 72%); color:var(--accent-strong); font-size:clamp(4rem,14vw,8rem); font-weight:1000; line-height:1; text-shadow:0 8px 35px #000; }
+    .countdown-display.idle { color:var(--muted); font-size:clamp(1.2rem,4vw,2rem); } .countdown-display.go { color:var(--ok); border-color:var(--ok); box-shadow:0 0 36px #86efac44; }
+    .result { font-size:clamp(2.2rem,5vw,3.6rem); font-variant-numeric:tabular-nums; color:var(--text); }
+    .metric { display:flex; justify-content:space-between; gap:14px; padding:10px 0; border-bottom:1px solid #233a31; } .metric:last-child { border-bottom:0; } .metric span:first-child { color:var(--muted); }
+    .message { min-height:24px; margin-bottom:0; color:var(--accent-strong); font-weight:700; } .sync-warning { margin:10px 0 0; color:var(--warn); font-weight:900; } .ok { color:var(--ok); } .warn { color:var(--warn); } .bad { color:#fca5a5; } code { color:#99f6e4; }
+    .table-wrap { overflow-x:auto; margin:0 -20px -20px; } table { width:100%; border-collapse:collapse; min-width:900px; } th,td { text-align:left; padding:12px 20px; border-bottom:1px solid #233a31; font-size:.93rem; } th { color:var(--muted); font-size:.78rem; letter-spacing:.08em; text-transform:uppercase; } tbody tr:hover { background:var(--panel-soft); } tr.personal-best td { background:#14532d55; } td.personal-best-result { color:var(--ok); font-weight:950; box-shadow:inset 4px 0 0 var(--ok); }
+    .hidden { display:none; }
+    @media (max-width:900px) { header { display:block; } .hero-card { margin-top:18px; } .grid { grid-template-columns:1fr; } }
   </style>
 </head>
 <body>
 <main>
   <header>
-    <div>
-      <p class="eyebrow">MTB Enduro Timing</p>
-      <h1>Тайминг эндуро-заездов</h1>
-      <p>Панель старта, финиша и диагностики для тренировочного прототипа EnduroTimer.</p>
-    </div>
-    <aside class="hero-card">
-      <span>Последний результат</span>
-      <strong id="lastResultHero">--:--.---</strong>
-    </aside>
+    <div><p class="eyebrow">MTB Enduro Timing</p><h1>Тайминг эндуро-заездов</h1><p>Панель старта, финиша, статистики и экспорта для тренировочного прототипа EnduroTimer.</p></div>
+    <aside class="hero-card"><span>Последний результат</span><strong id="lastResultHero">--:--.---</strong></aside>
   </header>
+  <nav><a href="/" id="homeNav">Заезды</a><a href="/statistics" id="statsNav">Статистика</a><a class="export-link" href="/api/export/results.xlsx">Export Excel</a><a class="export-link" href="/api/export/results.pdf">Export PDF</a></nav>
 
-  <div class="grid">
-    <section class="card">
-      <h2>Управление заездом</h2>
-      <label for="rider">Имя или номер райдера</label>
-      <input id="rider" placeholder="например, 42 или Анна" autocomplete="off">
-      <div class="actions">
-        <button onclick="startRun()">Старт</button>
-        <button class="secondary" onclick="syncTime()">Синхронизировать время</button>
-        <button onclick="simulateFinish()">Сымитировать финиш</button>
-        <button class="danger" onclick="resetSystem()">Сброс</button>
-      </div>
-      <p id="message" class="message"></p>
-    </section>
-
-    <section class="card">
-      <h2>Текущее состояние</h2>
-      <div id="upperState" class="status">Загрузка…</div>
-      <div id="countdownText" class="countdown-display idle">Ожидание старта</div>
-      <div class="metric"><span>Нижняя станция</span><strong id="lowerState"></strong></div>
-      <div class="metric"><span>Последний результат</span><strong id="lastResult" class="result">--:--.---</strong></div>
-    </section>
-
-    <section class="card">
-      <h2>Диагностика</h2>
-      <div class="metric"><span>Верхняя станция</span><strong id="upperOnline"></strong></div>
-      <div class="metric"><span>Батарея верха</span><code id="upperBattery"></code></div>
-      <div class="metric"><span>Нижняя станция</span><strong id="lowerOnline"></strong></div>
-      <div class="metric"><span>Батарея низа</span><code id="lowerBattery"></code></div>
-      <div class="metric"><span>RSSI</span><code id="rssi"></code></div>
-      <div class="metric"><span>Луч датчика</span><strong id="beam"></strong></div>
-      <div class="metric"><span>Смещение RTC</span><strong id="rtc"></strong></div>
-    </section>
-  </div>
-
-  <section class="card wide">
-    <h2>Последние заезды</h2>
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>ID заезда</th><th>Райдер</th><th>Старт</th><th>Финиш</th><th>Результат</th><th>Статус</th><th></th></tr></thead>
-        <tbody id="runsBody"></tbody>
-      </table>
+  <section id="homePage">
+    <div class="grid">
+      <section class="card">
+        <h2>Управление заездом</h2>
+        <label for="rider">Имя или номер райдера</label><input id="rider" placeholder="например, 42 или Анна" autocomplete="off">
+        <label for="trailName">Название трассы</label><input id="trailName" placeholder="Default trail" autocomplete="off">
+        <p id="syncWarning" class="sync-warning hidden">Сначала синхронизируй время станций</p>
+        <div class="actions"><button id="startButton" onclick="startRun()">Старт</button><button class="secondary" onclick="syncTime()">Синхронизировать время</button><button onclick="simulateFinish()">Сымитировать финиш</button><button class="danger" onclick="resetSystem()">Сброс</button></div>
+        <p id="message" class="message"></p>
+      </section>
+      <section class="card"><h2>Текущее состояние</h2><div id="upperState" class="status">Загрузка…</div><div id="countdownText" class="countdown-display idle">Ожидание старта</div><div class="metric"><span>Нижняя станция</span><strong id="lowerState"></strong></div><div class="metric"><span>Последний результат</span><strong id="lastResult" class="result">--:--.---</strong></div></section>
+      <section class="card"><h2>Диагностика</h2><div class="metric"><span>Верхняя станция</span><strong id="upperOnline"></strong></div><div class="metric"><span>Батарея верха</span><code id="upperBattery"></code></div><div class="metric"><span>Нижняя станция</span><strong id="lowerOnline"></strong></div><div class="metric"><span>Батарея низа</span><code id="lowerBattery"></code></div><div class="metric"><span>RSSI</span><code id="rssi"></code></div><div class="metric"><span>Луч датчика</span><strong id="beam"></strong></div><div class="metric"><span>Смещение RTC</span><strong id="rtc"></strong></div><div class="metric"><span>Старт</span><strong id="canStart"></strong></div></section>
     </div>
+    <section class="card wide"><h2>Последние заезды</h2><div class="table-wrap"><table><thead><tr><th>ID заезда</th><th>Райдер</th><th>Трасса</th><th>Старт</th><th>Финиш</th><th>Результат</th><th>Статус</th><th></th></tr></thead><tbody id="runsBody"></tbody></table></div></section>
+  </section>
+
+  <section id="statisticsPage" class="hidden">
+    <section class="card wide"><h2>Статистика райдеров</h2><div class="actions"><a class="export-link" href="/api/export/results.xlsx">Export Excel</a><a class="export-link" href="/api/export/results.pdf">Export PDF</a></div><div class="table-wrap"><table><thead><tr><th>Райдер</th><th>Всего</th><th>Finished</th><th>DNF</th><th>Лучший</th><th>Средний</th><th>Последний</th><th>Последний старт</th><th>Лучшая трасса</th><th>PB</th></tr></thead><tbody id="statisticsBody"></tbody></table></div></section>
   </section>
 </main>
 <script>
 const $ = id => document.getElementById(id);
-const stateLabels = {
-  Boot: 'Загрузка',
-  Ready: 'Готово',
-  Countdown: 'Отсчёт',
-  Riding: 'На трассе',
-  Finished: 'Финиш',
-  Error: 'Ошибка',
-  Idle: 'Ожидание',
-  WaitFinish: 'Ждёт финиш',
-  SensorBlocked: 'Луч перекрыт',
-  Dnf: 'DNF'
-};
+const stateLabels = { Boot:'Загрузка', Ready:'Готово', Countdown:'Отсчёт', Riding:'На трассе', Finished:'Финиш', Error:'Ошибка', Idle:'Ожидание', WaitFinish:'Ждёт финиш', SensorBlocked:'Луч перекрыт', Dnf:'DNF', Pending:'Ожидание старта' };
 const label = value => stateLabels[value] || value;
 const fmtResult = ms => ms == null ? '--:--.---' : `${String(Math.floor(ms / 60000)).padStart(2,'0')}:${String(Math.floor((ms % 60000) / 1000)).padStart(2,'0')}.${String(ms % 1000).padStart(3,'0')}`;
-const fmtTime = ms => ms == null || ms === 0 ? '' : new Date(ms).toLocaleTimeString('ru-RU', { hour12: false }) + '.' + String(ms % 1000).padStart(3,'0');
-async function api(path, options) {
-  const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...options });
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
-  return res.status === 204 ? null : res.json();
-}
+const fmtTime = ms => ms == null || ms === 0 ? '' : new Date(ms).toLocaleString('ru-RU', { hour12:false }) + '.' + String(ms % 1000).padStart(3,'0');
+async function api(path, options) { const res = await fetch(path, { headers:{ 'Content-Type':'application/json' }, ...options }); if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText); return res.status === 204 ? null : res.json(); }
 async function refresh() {
   const [status, runs] = await Promise.all([api('/api/status'), api('/api/runs')]);
-  const lastResult = status.lastResultFormatted || fmtResult(status.lastRun?.resultMs);
-  const countdown = status.countdownText || '';
+  const lastResult = status.lastResultFormatted || fmtResult(status.lastRun?.resultMs); const countdown = status.countdownText || '';
   $('upperState').textContent = status.startStationState === 'Riding' ? 'Riding' : label(status.startStationState || status.upperState);
-  $('countdownText').textContent = countdown || (status.startStationState === 'Riding' ? 'Riding' : 'Ожидание старта');
-  $('countdownText').className = `countdown-display ${countdown ? '' : 'idle'} ${countdown === 'GO' ? 'go' : ''}`.trim();
-  $('lowerState').textContent = label(status.finishStationState || status.lowerState);
-  $('lastResult').textContent = lastResult;
-  $('lastResultHero').textContent = lastResult;
-  $('upperOnline').textContent = status.upper.online ? 'на связи' : 'нет связи';
-  $('upperOnline').className = status.upper.online ? 'ok' : 'bad';
-  $('lowerOnline').textContent = status.finishStationOnline ? 'на связи' : 'нет связи';
-  $('lowerOnline').className = status.finishStationOnline ? 'ok' : 'bad';
-  $('upperBattery').textContent = `${status.startBatteryVoltage.toFixed(2)} В`;
-  $('lowerBattery').textContent = `${status.finishBatteryVoltage.toFixed(2)} В`;
-  $('rssi').textContent = `${status.lower.lastRssi} dBm`;
-  $('beam').textContent = status.beamClear ? 'свободен' : 'перекрыт';
-  $('beam').className = status.beamClear ? 'ok' : 'bad';
-  $('rtc').textContent = `${status.rtcOffsetMs} мс${(status.rtcWarning || status.rtcOffsetWarning) ? ' — проверьте синхронизацию' : ''}`;
-  $('rtc').className = (status.rtcWarning || status.rtcOffsetWarning) ? 'warn' : 'ok';
-  $('runsBody').innerHTML = runs.map(r => {
-    const result = r.resultFormatted || fmtResult(r.resultMs);
-    const rowClass = r.isPersonalBest ? ' class="personal-best"' : '';
-    const resultClass = r.isPersonalBest ? ' class="personal-best-result" title="Personal best"' : '';
-    return `<tr${rowClass}><td><code>${r.runId.slice(0,8)}</code></td><td>${escapeHtml(r.riderName || r.rider)}</td><td>${fmtTime(r.startTimestampMs)}</td><td>${fmtTime(r.finishTimestampMs)}</td><td${resultClass}>${result}</td><td>${label(r.status)}</td><td>${r.status === 'Riding' ? `<button class="danger" onclick="dnf('${r.runId}')">DNF</button>` : ''}</td></tr>`;
-  }).join('');
+  $('countdownText').textContent = countdown || (status.startStationState === 'Riding' ? 'Riding' : 'Ожидание старта'); $('countdownText').className = `countdown-display ${countdown ? '' : 'idle'} ${countdown === 'GO' ? 'go' : ''}`.trim();
+  $('lowerState').textContent = label(status.finishStationState || status.lowerState); $('lastResult').textContent = lastResult; $('lastResultHero').textContent = lastResult;
+  $('upperOnline').textContent = status.upper.online ? 'на связи' : 'нет связи'; $('upperOnline').className = status.upper.online ? 'ok' : 'bad'; $('lowerOnline').textContent = status.finishStationOnline ? 'на связи' : 'нет связи'; $('lowerOnline').className = status.finishStationOnline ? 'ok' : 'bad';
+  $('upperBattery').textContent = `${status.startBatteryVoltage.toFixed(2)} В`; $('lowerBattery').textContent = `${status.finishBatteryVoltage.toFixed(2)} В`; $('rssi').textContent = `${status.lower.lastRssi} dBm`;
+  $('beam').textContent = status.beamClear ? 'свободен' : 'перекрыт'; $('beam').className = status.beamClear ? 'ok' : 'bad';
+  $('rtc').textContent = `${status.rtcOffsetMs ?? '—'} мс${(status.rtcWarning || status.rtcOffsetWarning) ? ' — проверьте синхронизацию' : ''}`; $('rtc').className = (status.rtcWarning || status.rtcOffsetWarning) ? 'warn' : (status.isTimeSynchronized ? 'ok' : 'warn');
+  $('startButton').disabled = !status.canStartRun; $('syncWarning').classList.toggle('hidden', !status.timeSyncRequired); $('canStart').textContent = status.canStartRun ? 'разрешён' : (status.startBlockedReason || 'заблокирован'); $('canStart').className = status.canStartRun ? 'ok' : 'warn';
+  $('runsBody').innerHTML = runs.map(r => { const result = r.resultFormatted || fmtResult(r.resultMs); const rowClass = r.isPersonalBest ? ' class="personal-best"' : ''; const resultClass = r.isPersonalBest ? ' class="personal-best-result" title="Personal best"' : ''; return `<tr${rowClass}><td><code>${r.runId.slice(0,8)}</code></td><td>${escapeHtml(r.riderName || r.rider)}</td><td>${escapeHtml(r.trailName || 'Default trail')}</td><td>${fmtTime(r.startTimestampMs)}</td><td>${fmtTime(r.finishTimestampMs)}</td><td${resultClass}>${result}</td><td>${label(r.status)}</td><td>${r.status === 'Riding' ? `<button class="danger" onclick="dnf('${r.runId}')">DNF</button>` : ''}</td></tr>`; }).join('');
 }
-function escapeHtml(value) { return value.replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }
-async function startRun() { await action(async () => api('/api/runs/start', { method: 'POST', body: JSON.stringify({ rider: $('rider').value }) }), 'Заезд запущен'); }
-async function syncTime() { await action(async () => api('/api/time/sync', { method: 'POST' }), 'Время синхронизировано'); }
-async function simulateFinish() { await action(async () => api('/api/finish/simulate', { method: 'POST' }), 'Финишный датчик сработал'); }
-async function resetSystem() { await action(async () => api('/api/system/reset', { method: 'POST' }), 'Система сброшена'); }
-async function dnf(id) { await action(async () => api(`/api/runs/${id}/dnf`, { method: 'POST' }), 'Заезд отмечен как DNF'); }
-async function action(fn, ok) { try { $('message').textContent = 'Выполняется…'; await fn(); $('message').textContent = ok; await refresh(); } catch (err) { $('message').textContent = err.message; } }
-refresh();
-setInterval(refresh, 250);
+async function refreshStatistics() { const stats = await api('/api/statistics/riders'); $('statisticsBody').innerHTML = stats.map(s => `<tr${s.bestResultMs != null ? ' class="personal-best"' : ''}><td>${escapeHtml(s.riderName)}</td><td>${s.totalRuns}</td><td>${s.finishedRuns}</td><td>${s.dnfRuns}</td><td class="personal-best-result">${s.bestResultFormatted || '-'}</td><td>${s.averageResultFormatted || '-'}</td><td>${s.lastResultFormatted || '-'}</td><td>${fmtTime(s.lastRunAt)}</td><td>${escapeHtml(s.bestTrailName || '-')}</td><td>${s.personalBestCount ?? 0}</td></tr>`).join(''); }
+function escapeHtml(value) { return String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }
+async function startRun() { await action(async () => api('/api/runs/start', { method:'POST', body:JSON.stringify({ riderName:$('rider').value, trailName:$('trailName').value }) }), 'Заезд запущен'); }
+async function syncTime() { await action(async () => api('/api/time/sync', { method:'POST' }), 'Время синхронизировано'); }
+async function simulateFinish() { await action(async () => api('/api/finish/simulate', { method:'POST' }), 'Финишный датчик сработал'); }
+async function resetSystem() { await action(async () => api('/api/system/reset', { method:'POST' }), 'Система сброшена'); }
+async function dnf(id) { await action(async () => api(`/api/runs/${id}/dnf`, { method:'POST' }), 'Заезд отмечен как DNF'); }
+async function action(fn, ok) { try { $('message').textContent = 'Выполняется…'; await fn(); $('message').textContent = ok; await refresh(); if (isStatsPage()) await refreshStatistics(); } catch (err) { $('message').textContent = err.message; } }
+function isStatsPage() { return location.pathname.toLowerCase().startsWith('/statistics'); }
+function route() { const stats = isStatsPage(); $('homePage').classList.toggle('hidden', stats); $('statisticsPage').classList.toggle('hidden', !stats); $('homeNav').classList.toggle('active', !stats); $('statsNav').classList.toggle('active', stats); }
+route(); refresh(); if (isStatsPage()) refreshStatistics(); setInterval(refresh, 250); setInterval(() => { if (isStatsPage()) refreshStatistics(); }, 1000);
 </script>
 </body>
 </html>
