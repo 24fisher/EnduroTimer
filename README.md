@@ -19,21 +19,23 @@ tests/EnduroTimer.Tests   Dependency-free console test runner for the core timin
 dotnet run --project src/EnduroTimer.Web/EnduroTimer.Web.csproj
 ```
 
-Open the URL printed by ASP.NET Core, then use the single-page UI. The default static page is served from `/`.
+Open the URL printed by ASP.NET Core, then use the Russian-language single-page UI. The default static page is served from `/`.
 
 ## How to use the UI
 
-1. Enter a rider name or rider number.
-2. Click **Start**.
+The web UI is localized to Russian while this README is maintained in English. The main controls are:
+
+1. Enter a rider name or rider number in **Имя или номер райдера**.
+2. Click **Старт**.
 3. The backend performs the `3`, `2`, `1`, `GO` countdown. On `GO`, the upper station records `startTimestampMs`, creates a `Run` in `Riding`, and sends `RunStart` to the lower station.
-4. Click **Simulate finish sensor** to emulate the E3JK finish beam trigger.
+4. Click **Сымитировать финиш** to emulate the E3JK finish beam trigger.
 5. The lower station records `finishTimestampMs`, sends `Finish` to the upper station, and the upper station calculates `resultMs = finishTimestampMs - startTimestampMs`.
-6. The latest result is displayed as `mm:ss.fff`, and recent runs are listed in the table.
+6. The latest result is displayed as `mm:ss.fff`, and recent runs are listed in **Последние заезды**.
 
 Additional controls:
 
-- **Sync time** sends `SyncTime` and displays the RTC offset warning if the emulated clock offset is greater than 100 ms.
-- **Reset** clears in-memory runs and returns stations to their ready/idle state.
+- **Синхронизировать время** sends `SyncTime` and displays the RTC offset warning if the emulated clock offset is greater than 100 ms.
+- **Сброс** clears in-memory runs and returns stations to their ready/idle state.
 - **DNF** is available for active/riding runs in the recent runs table.
 
 ## API endpoints
