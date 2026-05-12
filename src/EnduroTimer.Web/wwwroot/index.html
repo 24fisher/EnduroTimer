@@ -1,71 +1,189 @@
 <!doctype html>
-<html lang="en">
+<html lang="ru">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>EnduroTimer Prototype</title>
+  <title>EnduroTimer — прототип тайминга</title>
   <style>
-    :root { color-scheme: dark; font-family: Inter, system-ui, sans-serif; }
-    body { margin: 0; background: #101418; color: #edf2f7; }
-    main { max-width: 1100px; margin: 0 auto; padding: 28px; }
-    h1 { margin-top: 0; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
-    .card { background: #1b232c; border: 1px solid #2f3d4a; border-radius: 14px; padding: 18px; box-shadow: 0 10px 30px #0005; }
-    label { display: block; margin-bottom: 6px; color: #aeb8c2; }
-    input { box-sizing: border-box; width: 100%; padding: 12px; border-radius: 10px; border: 1px solid #455564; background: #101820; color: #fff; }
-    button { margin: 8px 8px 0 0; padding: 11px 14px; border: 0; border-radius: 10px; background: #38bdf8; color: #05131c; font-weight: 700; cursor: pointer; }
-    button.secondary { background: #94a3b8; }
-    button.danger { background: #fb7185; }
-    .status { font-size: 2rem; font-weight: 800; color: #fbbf24; }
-    .result { font-size: 2.4rem; font-variant-numeric: tabular-nums; }
-    .ok { color: #86efac; } .warn { color: #fcd34d; } .bad { color: #fca5a5; }
-    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-    th, td { text-align: left; padding: 9px; border-bottom: 1px solid #334155; font-size: .92rem; }
-    code { color: #bae6fd; }
+    :root {
+      color-scheme: dark;
+      font-family: Inter, "Segoe UI", system-ui, sans-serif;
+      --bg: #07110f;
+      --panel: #111c18;
+      --panel-soft: #162820;
+      --line: #284136;
+      --text: #f4fbf7;
+      --muted: #9db3aa;
+      --accent: #2dd4bf;
+      --accent-strong: #facc15;
+      --danger: #fb7185;
+      --ok: #86efac;
+      --warn: #fde68a;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at top left, #164e45 0, transparent 34rem),
+        linear-gradient(135deg, #050807 0%, var(--bg) 54%, #0d1b16 100%);
+      color: var(--text);
+    }
+
+    main { max-width: 1180px; margin: 0 auto; padding: 32px 20px 40px; }
+    header { display: flex; justify-content: space-between; gap: 18px; align-items: flex-end; margin-bottom: 22px; }
+    .eyebrow { margin: 0 0 8px; color: var(--accent); font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: clamp(2rem, 5vw, 4.4rem); line-height: .95; }
+    h2 { margin: 0 0 16px; font-size: 1.15rem; }
+    p { color: var(--muted); }
+
+    .hero-card {
+      min-width: 240px;
+      padding: 16px 18px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: #0b1713cc;
+      box-shadow: 0 20px 70px #0007;
+    }
+    .hero-card span { display: block; color: var(--muted); font-size: .9rem; }
+    .hero-card strong { display: block; margin-top: 6px; color: var(--accent-strong); font-size: 1.4rem; }
+
+    .grid { display: grid; grid-template-columns: 1.1fr .9fr .9fr; gap: 16px; }
+    .card {
+      background: linear-gradient(180deg, var(--panel) 0%, #0c1713 100%);
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      padding: 20px;
+      box-shadow: 0 18px 50px #0006;
+    }
+    .wide { margin-top: 16px; overflow: hidden; }
+
+    label { display: block; margin-bottom: 8px; color: var(--muted); font-weight: 700; }
+    input {
+      width: 100%;
+      padding: 14px 15px;
+      border-radius: 14px;
+      border: 1px solid #3d5a4e;
+      background: #07110f;
+      color: #fff;
+      font-size: 1rem;
+      outline: none;
+    }
+    input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px #2dd4bf22; }
+
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+    button {
+      padding: 12px 15px;
+      border: 0;
+      border-radius: 999px;
+      background: var(--accent);
+      color: #03110e;
+      font-weight: 900;
+      cursor: pointer;
+      transition: transform .15s ease, filter .15s ease;
+    }
+    button:hover { transform: translateY(-1px); filter: brightness(1.05); }
+    button.secondary { background: #cbd5e1; }
+    button.danger { background: var(--danger); color: #24060c; }
+
+    .status { font-size: clamp(2rem, 5vw, 3.4rem); font-weight: 950; color: var(--accent-strong); }
+    .result { font-size: clamp(2.2rem, 5vw, 3.6rem); font-variant-numeric: tabular-nums; color: var(--text); }
+    .metric { display: flex; justify-content: space-between; gap: 14px; padding: 10px 0; border-bottom: 1px solid #233a31; }
+    .metric:last-child { border-bottom: 0; }
+    .metric span:first-child { color: var(--muted); }
+
+    .message { min-height: 24px; margin-bottom: 0; color: var(--accent-strong); font-weight: 700; }
+    .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: #fca5a5; }
+    code { color: #99f6e4; }
+
+    .table-wrap { overflow-x: auto; margin: 0 -20px -20px; }
+    table { width: 100%; border-collapse: collapse; min-width: 780px; }
+    th, td { text-align: left; padding: 12px 20px; border-bottom: 1px solid #233a31; font-size: .93rem; }
+    th { color: var(--muted); font-size: .78rem; letter-spacing: .08em; text-transform: uppercase; }
+    tbody tr:hover { background: var(--panel-soft); }
+
+    @media (max-width: 900px) {
+      header { display: block; }
+      .hero-card { margin-top: 18px; }
+      .grid { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
 <main>
-  <h1>MTB Enduro Timer Prototype</h1>
+  <header>
+    <div>
+      <p class="eyebrow">MTB Enduro Timing</p>
+      <h1>Тайминг эндуро-заездов</h1>
+      <p>Панель старта, финиша и диагностики для тренировочного прототипа EnduroTimer.</p>
+    </div>
+    <aside class="hero-card">
+      <span>Последний результат</span>
+      <strong id="lastResultHero">--:--.---</strong>
+    </aside>
+  </header>
+
   <div class="grid">
     <section class="card">
-      <h2>Run control</h2>
-      <label for="rider">Rider name/number</label>
-      <input id="rider" placeholder="e.g. 42 or Anna">
-      <button onclick="startRun()">Start</button>
-      <button class="secondary" onclick="syncTime()">Sync time</button>
-      <button onclick="simulateFinish()">Simulate finish sensor</button>
-      <button class="danger" onclick="resetSystem()">Reset</button>
-      <p id="message"></p>
+      <h2>Управление заездом</h2>
+      <label for="rider">Имя или номер райдера</label>
+      <input id="rider" placeholder="например, 42 или Анна" autocomplete="off">
+      <div class="actions">
+        <button onclick="startRun()">Старт</button>
+        <button class="secondary" onclick="syncTime()">Синхронизировать время</button>
+        <button onclick="simulateFinish()">Сымитировать финиш</button>
+        <button class="danger" onclick="resetSystem()">Сброс</button>
+      </div>
+      <p id="message" class="message"></p>
     </section>
+
     <section class="card">
-      <h2>Current status</h2>
-      <div id="upperState" class="status">Loading…</div>
-      <p>Lower station: <strong id="lowerState"></strong></p>
-      <p>Last result</p>
-      <div id="lastResult" class="result">--:--.---</div>
+      <h2>Текущее состояние</h2>
+      <div id="upperState" class="status">Загрузка…</div>
+      <div class="metric"><span>Нижняя станция</span><strong id="lowerState"></strong></div>
+      <div class="metric"><span>Последний результат</span><strong id="lastResult" class="result">--:--.---</strong></div>
     </section>
+
     <section class="card">
-      <h2>Diagnostics</h2>
-      <p>Upper: <span id="upperOnline"></span>, battery <code id="upperBattery"></code></p>
-      <p>Lower: <span id="lowerOnline"></span>, battery <code id="lowerBattery"></code>, RSSI <code id="rssi"></code></p>
-      <p>Beam: <strong id="beam"></strong></p>
-      <p>RTC offset: <strong id="rtc"></strong></p>
+      <h2>Диагностика</h2>
+      <div class="metric"><span>Верхняя станция</span><strong id="upperOnline"></strong></div>
+      <div class="metric"><span>Батарея верха</span><code id="upperBattery"></code></div>
+      <div class="metric"><span>Нижняя станция</span><strong id="lowerOnline"></strong></div>
+      <div class="metric"><span>Батарея низа</span><code id="lowerBattery"></code></div>
+      <div class="metric"><span>RSSI</span><code id="rssi"></code></div>
+      <div class="metric"><span>Луч датчика</span><strong id="beam"></strong></div>
+      <div class="metric"><span>Смещение RTC</span><strong id="rtc"></strong></div>
     </section>
   </div>
 
-  <section class="card" style="margin-top:16px">
-    <h2>Recent runs</h2>
-    <table>
-      <thead><tr><th>Run ID</th><th>Rider</th><th>Start time</th><th>Finish time</th><th>Result</th><th>Status</th><th></th></tr></thead>
-      <tbody id="runsBody"></tbody>
-    </table>
+  <section class="card wide">
+    <h2>Последние заезды</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>ID заезда</th><th>Райдер</th><th>Старт</th><th>Финиш</th><th>Результат</th><th>Статус</th><th></th></tr></thead>
+        <tbody id="runsBody"></tbody>
+      </table>
+    </div>
   </section>
 </main>
 <script>
 const $ = id => document.getElementById(id);
+const stateLabels = {
+  Boot: 'Загрузка',
+  Ready: 'Готово',
+  Countdown: 'Отсчёт',
+  Riding: 'На трассе',
+  Finished: 'Финиш',
+  Error: 'Ошибка',
+  Idle: 'Ожидание',
+  WaitFinish: 'Ждёт финиш',
+  SensorBlocked: 'Луч перекрыт',
+  Dnf: 'DNF'
+};
+const label = value => stateLabels[value] || value;
 const fmtResult = ms => ms == null ? '--:--.---' : `${String(Math.floor(ms / 60000)).padStart(2,'0')}:${String(Math.floor((ms % 60000) / 1000)).padStart(2,'0')}.${String(ms % 1000).padStart(3,'0')}`;
-const fmtTime = ms => ms == null ? '' : new Date(ms).toLocaleTimeString([], { hour12: false }) + '.' + String(ms % 1000).padStart(3,'0');
+const fmtTime = ms => ms == null ? '' : new Date(ms).toLocaleTimeString('ru-RU', { hour12: false }) + '.' + String(ms % 1000).padStart(3,'0');
 async function api(path, options) {
   const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...options });
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
@@ -73,29 +191,31 @@ async function api(path, options) {
 }
 async function refresh() {
   const [status, runs] = await Promise.all([api('/api/status'), api('/api/runs')]);
-  $('upperState').textContent = status.upperState;
-  $('lowerState').textContent = status.lowerState;
-  $('lastResult').textContent = fmtResult(status.lastRun?.resultMs);
-  $('upperOnline').textContent = status.upper.online ? 'online' : 'offline';
+  const lastResult = fmtResult(status.lastRun?.resultMs);
+  $('upperState').textContent = label(status.upperState);
+  $('lowerState').textContent = label(status.lowerState);
+  $('lastResult').textContent = lastResult;
+  $('lastResultHero').textContent = lastResult;
+  $('upperOnline').textContent = status.upper.online ? 'на связи' : 'нет связи';
   $('upperOnline').className = status.upper.online ? 'ok' : 'bad';
-  $('lowerOnline').textContent = status.lower.online ? 'online' : 'offline';
+  $('lowerOnline').textContent = status.lower.online ? 'на связи' : 'нет связи';
   $('lowerOnline').className = status.lower.online ? 'ok' : 'bad';
-  $('upperBattery').textContent = `${status.upper.batteryVoltage.toFixed(2)} V`;
-  $('lowerBattery').textContent = `${status.lower.batteryVoltage.toFixed(2)} V`;
+  $('upperBattery').textContent = `${status.upper.batteryVoltage.toFixed(2)} В`;
+  $('lowerBattery').textContent = `${status.lower.batteryVoltage.toFixed(2)} В`;
   $('rssi').textContent = `${status.lower.lastRssi} dBm`;
-  $('beam').textContent = status.beamClear ? 'BeamClear' : 'BeamBlocked';
+  $('beam').textContent = status.beamClear ? 'свободен' : 'перекрыт';
   $('beam').className = status.beamClear ? 'ok' : 'bad';
-  $('rtc').textContent = `${status.rtcOffsetMs} ms${status.rtcOffsetWarning ? ' warning' : ''}`;
+  $('rtc').textContent = `${status.rtcOffsetMs} мс${status.rtcOffsetWarning ? ' — проверьте синхронизацию' : ''}`;
   $('rtc').className = status.rtcOffsetWarning ? 'warn' : 'ok';
-  $('runsBody').innerHTML = runs.map(r => `<tr><td><code>${r.runId.slice(0,8)}</code></td><td>${escapeHtml(r.rider)}</td><td>${fmtTime(r.startTimestampMs)}</td><td>${fmtTime(r.finishTimestampMs)}</td><td>${fmtResult(r.resultMs)}</td><td>${r.status}</td><td>${r.status === 'Riding' ? `<button class="danger" onclick="dnf('${r.runId}')">DNF</button>` : ''}</td></tr>`).join('');
+  $('runsBody').innerHTML = runs.map(r => `<tr><td><code>${r.runId.slice(0,8)}</code></td><td>${escapeHtml(r.rider)}</td><td>${fmtTime(r.startTimestampMs)}</td><td>${fmtTime(r.finishTimestampMs)}</td><td>${fmtResult(r.resultMs)}</td><td>${label(r.status)}</td><td>${r.status === 'Riding' ? `<button class="danger" onclick="dnf('${r.runId}')">DNF</button>` : ''}</td></tr>`).join('');
 }
 function escapeHtml(value) { return value.replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }
-async function startRun() { await action(async () => api('/api/runs/start', { method: 'POST', body: JSON.stringify({ rider: $('rider').value }) }), 'Run started'); }
-async function syncTime() { await action(async () => api('/api/time/sync', { method: 'POST' }), 'Time sync completed'); }
-async function simulateFinish() { await action(async () => api('/api/finish/simulate', { method: 'POST' }), 'Finish sensor triggered'); }
-async function resetSystem() { await action(async () => api('/api/system/reset', { method: 'POST' }), 'System reset'); }
-async function dnf(id) { await action(async () => api(`/api/runs/${id}/dnf`, { method: 'POST' }), 'Run marked DNF'); }
-async function action(fn, ok) { try { $('message').textContent = 'Working…'; await fn(); $('message').textContent = ok; await refresh(); } catch (err) { $('message').textContent = err.message; } }
+async function startRun() { await action(async () => api('/api/runs/start', { method: 'POST', body: JSON.stringify({ rider: $('rider').value }) }), 'Заезд запущен'); }
+async function syncTime() { await action(async () => api('/api/time/sync', { method: 'POST' }), 'Время синхронизировано'); }
+async function simulateFinish() { await action(async () => api('/api/finish/simulate', { method: 'POST' }), 'Финишный датчик сработал'); }
+async function resetSystem() { await action(async () => api('/api/system/reset', { method: 'POST' }), 'Система сброшена'); }
+async function dnf(id) { await action(async () => api(`/api/runs/${id}/dnf`, { method: 'POST' }), 'Заезд отмечен как DNF'); }
+async function action(fn, ok) { try { $('message').textContent = 'Выполняется…'; await fn(); $('message').textContent = ok; await refresh(); } catch (err) { $('message').textContent = err.message; } }
 refresh();
 setInterval(refresh, 1500);
 </script>
