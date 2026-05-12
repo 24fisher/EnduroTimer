@@ -90,6 +90,15 @@ public sealed class LowerStationService : IFinishSensorService
         }
     }
 
+    private void AcknowledgeFinish()
+    {
+        lock (_gate)
+        {
+            _activeRunId = null;
+            State = BeamClear ? LowerStationState.Idle : LowerStationState.SensorBlocked;
+        }
+    }
+
     private async Task OnRadioMessageAsync(RadioMessage message, CancellationToken cancellationToken)
     {
         if (message.StationId == DefaultStationId)
@@ -121,7 +130,7 @@ public sealed class LowerStationService : IFinishSensorService
                 }
                 break;
             case RadioMessageType.FinishAck:
-                Reset();
+                AcknowledgeFinish();
                 break;
         }
     }

@@ -114,7 +114,8 @@ public sealed class UpperStationService : IStartButtonService
                 OperationMode = operationMode,
                 QueuePosition = queuePosition,
                 TrailName = string.IsNullOrWhiteSpace(trailName) ? RunRecord.DefaultTrailName : trailName.Trim(),
-                Status = RunStatus.Pending
+                Status = RunStatus.Pending,
+                CreatedAtMs = _clock.GetUnixTimeMilliseconds()
             };
             _activeRun = run;
             _lastRun = run;
@@ -210,6 +211,23 @@ public sealed class UpperStationService : IStartButtonService
         await _radio.SendAsync(RadioMessage.Create(RadioMessageType.SyncTime, DefaultStationId, timestampMs: _clock.GetUnixTimeMilliseconds()), cancellationToken);
     }
 
+    public void SimulateRtcOffset(long rtcOffsetMs)
+    {
+        RtcOffsetMs = rtcOffsetMs;
+        IsTimeSynchronized = !RtcOffsetWarning;
+    }
+
+    public void ReadyAfterFinish()
+    {
+        lock (_gate)
+        {
+            if (State == UpperStationState.Finished)
+            {
+                State = UpperStationState.Ready;
+            }
+        }
+    }
+
     public async Task MarkDnfAsync(Guid runId, CancellationToken cancellationToken = default)
     {
         var run = await _runs.GetAsync(runId, cancellationToken) ?? throw new KeyNotFoundException("Run not found.");
@@ -242,8 +260,6 @@ public sealed class UpperStationService : IStartButtonService
             IsTimeSynchronized = false;
             _countdownText = string.Empty;
         }
-
-        await _runs.ClearAsync(cancellationToken);
     }
 
     private async Task OnRadioMessageAsync(RadioMessage message, CancellationToken cancellationToken)

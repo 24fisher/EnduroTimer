@@ -10,3 +10,16 @@ public interface IRunRepository
     Task UpdateAsync(RunRecord run, CancellationToken cancellationToken = default);
     Task ClearAsync(CancellationToken cancellationToken = default);
 }
+
+
+public interface ISystemSettingsRepository
+{
+    Task<EnduroTimer.Core.Models.SystemSettings> GetAsync(CancellationToken cancellationToken = default);
+    Task<EnduroTimer.Core.Models.SystemSettings> SaveAsync(EnduroTimer.Core.Models.SystemSettings settings, CancellationToken cancellationToken = default);
+}
+
+public interface IGroupQueueRepository
+{
+    Task<EnduroTimer.Core.Models.PersistedGroupQueue> GetAsync(CancellationToken cancellationToken = default);
+    Task SaveAsync(EnduroTimer.Core.Models.PersistedGroupQueue queue, CancellationToken cancellationToken = default);
+}

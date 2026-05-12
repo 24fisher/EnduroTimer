@@ -16,7 +16,8 @@ public enum LowerStationState
     Idle,
     WaitFinish,
     Finished,
-    SensorBlocked
+    SensorBlocked,
+    Offline
 }
 
 public enum RunStatus

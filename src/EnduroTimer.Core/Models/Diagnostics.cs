@@ -13,8 +13,10 @@ public sealed class SystemStatus
 {
     public UpperStationState UpperState { get; init; }
     public UpperStationState StartStationState => UpperState;
+    public UpperStationState StartState => UpperState;
     public LowerStationState LowerState { get; init; }
     public LowerStationState FinishStationState => LowerState;
+    public LowerStationState FinishState => LowerState;
     public string CountdownText { get; init; } = string.Empty;
     public bool IsCountdownActive { get; init; }
     public StationDiagnostics Upper { get; init; } = new();
