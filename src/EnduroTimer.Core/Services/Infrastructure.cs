@@ -80,10 +80,16 @@ public sealed class InMemoryRunRepository : IRunRepository
     {
         lock (_gate)
         {
+            var personalBestIds = _runs
+                .Where(run => run.Status == RunStatus.Finished && run.ResultMs is not null)
+                .GroupBy(run => run.Rider, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.OrderBy(run => run.ResultMs!.Value).ThenBy(run => run.StartTimestampMs).First().RunId)
+                .ToHashSet();
+
             return Task.FromResult<IReadOnlyList<RunRecord>>(_runs
                 .OrderByDescending(run => run.StartTimestampMs)
                 .Take(take)
-                .Select(Clone)
+                .Select(run => Clone(run, personalBestIds.Contains(run.RunId)))
                 .ToList());
         }
     }
@@ -100,13 +106,14 @@ public sealed class InMemoryRunRepository : IRunRepository
         return Task.CompletedTask;
     }
 
-    private static RunRecord Clone(RunRecord run) => new()
+    private static RunRecord Clone(RunRecord run, bool isPersonalBest = false) => new()
     {
         RunId = run.RunId,
         Rider = run.Rider,
         StartTimestampMs = run.StartTimestampMs,
         FinishTimestampMs = run.FinishTimestampMs,
         ResultMs = run.ResultMs,
-        Status = run.Status
+        Status = run.Status,
+        IsPersonalBest = isPersonalBest
     };
 }

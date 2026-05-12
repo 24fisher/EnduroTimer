@@ -88,6 +88,22 @@
     button.danger { background: var(--danger); color: #24060c; }
 
     .status { font-size: clamp(2rem, 5vw, 3.4rem); font-weight: 950; color: var(--accent-strong); }
+    .countdown-display {
+      display: grid;
+      place-items: center;
+      min-height: 130px;
+      margin: 12px 0 16px;
+      border: 1px solid #3d5a4e;
+      border-radius: 22px;
+      background: radial-gradient(circle, #164e45 0%, #07110f 72%);
+      color: var(--accent-strong);
+      font-size: clamp(4rem, 14vw, 8rem);
+      font-weight: 1000;
+      line-height: 1;
+      text-shadow: 0 8px 35px #000;
+    }
+    .countdown-display.idle { color: var(--muted); font-size: clamp(1.2rem, 4vw, 2rem); }
+    .countdown-display.go { color: var(--ok); border-color: var(--ok); box-shadow: 0 0 36px #86efac44; }
     .result { font-size: clamp(2.2rem, 5vw, 3.6rem); font-variant-numeric: tabular-nums; color: var(--text); }
     .metric { display: flex; justify-content: space-between; gap: 14px; padding: 10px 0; border-bottom: 1px solid #233a31; }
     .metric:last-child { border-bottom: 0; }
@@ -102,6 +118,8 @@
     th, td { text-align: left; padding: 12px 20px; border-bottom: 1px solid #233a31; font-size: .93rem; }
     th { color: var(--muted); font-size: .78rem; letter-spacing: .08em; text-transform: uppercase; }
     tbody tr:hover { background: var(--panel-soft); }
+    tr.personal-best td { background: #14532d55; }
+    td.personal-best-result { color: var(--ok); font-weight: 950; box-shadow: inset 4px 0 0 var(--ok); }
 
     @media (max-width: 900px) {
       header { display: block; }
@@ -141,6 +159,7 @@
     <section class="card">
       <h2>Текущее состояние</h2>
       <div id="upperState" class="status">Загрузка…</div>
+      <div id="countdownText" class="countdown-display idle">Ожидание старта</div>
       <div class="metric"><span>Нижняя станция</span><strong id="lowerState"></strong></div>
       <div class="metric"><span>Последний результат</span><strong id="lastResult" class="result">--:--.---</strong></div>
     </section>
@@ -183,7 +202,7 @@ const stateLabels = {
 };
 const label = value => stateLabels[value] || value;
 const fmtResult = ms => ms == null ? '--:--.---' : `${String(Math.floor(ms / 60000)).padStart(2,'0')}:${String(Math.floor((ms % 60000) / 1000)).padStart(2,'0')}.${String(ms % 1000).padStart(3,'0')}`;
-const fmtTime = ms => ms == null ? '' : new Date(ms).toLocaleTimeString('ru-RU', { hour12: false }) + '.' + String(ms % 1000).padStart(3,'0');
+const fmtTime = ms => ms == null || ms === 0 ? '' : new Date(ms).toLocaleTimeString('ru-RU', { hour12: false }) + '.' + String(ms % 1000).padStart(3,'0');
 async function api(path, options) {
   const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...options });
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
@@ -191,23 +210,31 @@ async function api(path, options) {
 }
 async function refresh() {
   const [status, runs] = await Promise.all([api('/api/status'), api('/api/runs')]);
-  const lastResult = fmtResult(status.lastRun?.resultMs);
-  $('upperState').textContent = label(status.upperState);
-  $('lowerState').textContent = label(status.lowerState);
+  const lastResult = status.lastResultFormatted || fmtResult(status.lastRun?.resultMs);
+  const countdown = status.countdownText || '';
+  $('upperState').textContent = status.startStationState === 'Riding' ? 'Riding' : label(status.startStationState || status.upperState);
+  $('countdownText').textContent = countdown || (status.startStationState === 'Riding' ? 'Riding' : 'Ожидание старта');
+  $('countdownText').className = `countdown-display ${countdown ? '' : 'idle'} ${countdown === 'GO' ? 'go' : ''}`.trim();
+  $('lowerState').textContent = label(status.finishStationState || status.lowerState);
   $('lastResult').textContent = lastResult;
   $('lastResultHero').textContent = lastResult;
   $('upperOnline').textContent = status.upper.online ? 'на связи' : 'нет связи';
   $('upperOnline').className = status.upper.online ? 'ok' : 'bad';
-  $('lowerOnline').textContent = status.lower.online ? 'на связи' : 'нет связи';
-  $('lowerOnline').className = status.lower.online ? 'ok' : 'bad';
-  $('upperBattery').textContent = `${status.upper.batteryVoltage.toFixed(2)} В`;
-  $('lowerBattery').textContent = `${status.lower.batteryVoltage.toFixed(2)} В`;
+  $('lowerOnline').textContent = status.finishStationOnline ? 'на связи' : 'нет связи';
+  $('lowerOnline').className = status.finishStationOnline ? 'ok' : 'bad';
+  $('upperBattery').textContent = `${status.startBatteryVoltage.toFixed(2)} В`;
+  $('lowerBattery').textContent = `${status.finishBatteryVoltage.toFixed(2)} В`;
   $('rssi').textContent = `${status.lower.lastRssi} dBm`;
   $('beam').textContent = status.beamClear ? 'свободен' : 'перекрыт';
   $('beam').className = status.beamClear ? 'ok' : 'bad';
-  $('rtc').textContent = `${status.rtcOffsetMs} мс${status.rtcOffsetWarning ? ' — проверьте синхронизацию' : ''}`;
-  $('rtc').className = status.rtcOffsetWarning ? 'warn' : 'ok';
-  $('runsBody').innerHTML = runs.map(r => `<tr><td><code>${r.runId.slice(0,8)}</code></td><td>${escapeHtml(r.rider)}</td><td>${fmtTime(r.startTimestampMs)}</td><td>${fmtTime(r.finishTimestampMs)}</td><td>${fmtResult(r.resultMs)}</td><td>${label(r.status)}</td><td>${r.status === 'Riding' ? `<button class="danger" onclick="dnf('${r.runId}')">DNF</button>` : ''}</td></tr>`).join('');
+  $('rtc').textContent = `${status.rtcOffsetMs} мс${(status.rtcWarning || status.rtcOffsetWarning) ? ' — проверьте синхронизацию' : ''}`;
+  $('rtc').className = (status.rtcWarning || status.rtcOffsetWarning) ? 'warn' : 'ok';
+  $('runsBody').innerHTML = runs.map(r => {
+    const result = r.resultFormatted || fmtResult(r.resultMs);
+    const rowClass = r.isPersonalBest ? ' class="personal-best"' : '';
+    const resultClass = r.isPersonalBest ? ' class="personal-best-result" title="Personal best"' : '';
+    return `<tr${rowClass}><td><code>${r.runId.slice(0,8)}</code></td><td>${escapeHtml(r.riderName || r.rider)}</td><td>${fmtTime(r.startTimestampMs)}</td><td>${fmtTime(r.finishTimestampMs)}</td><td${resultClass}>${result}</td><td>${label(r.status)}</td><td>${r.status === 'Riding' ? `<button class="danger" onclick="dnf('${r.runId}')">DNF</button>` : ''}</td></tr>`;
+  }).join('');
 }
 function escapeHtml(value) { return value.replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }
 async function startRun() { await action(async () => api('/api/runs/start', { method: 'POST', body: JSON.stringify({ rider: $('rider').value }) }), 'Заезд запущен'); }
@@ -217,7 +244,7 @@ async function resetSystem() { await action(async () => api('/api/system/reset',
 async function dnf(id) { await action(async () => api(`/api/runs/${id}/dnf`, { method: 'POST' }), 'Заезд отмечен как DNF'); }
 async function action(fn, ok) { try { $('message').textContent = 'Выполняется…'; await fn(); $('message').textContent = ok; await refresh(); } catch (err) { $('message').textContent = err.message; } }
 refresh();
-setInterval(refresh, 1500);
+setInterval(refresh, 250);
 </script>
 </body>
 </html>

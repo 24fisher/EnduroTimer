@@ -24,6 +24,8 @@ public sealed class EnduroTimerSystem
         {
             UpperState = Upper.State,
             LowerState = Lower.State,
+            CountdownText = Upper.CountdownText,
+            IsCountdownActive = Upper.IsCountdownActive,
             Upper = Upper.Diagnostics,
             Lower = Lower.Diagnostics,
             BeamClear = Lower.BeamClear,
