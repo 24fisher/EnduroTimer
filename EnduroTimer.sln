@@ -1,0 +1,30 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EnduroTimer.Core", "src\EnduroTimer.Core\EnduroTimer.Core.csproj", "{5A4A3F81-DB3E-4D0B-A5A3-EB3A9DBA2F21}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EnduroTimer.Web", "src\EnduroTimer.Web\EnduroTimer.Web.csproj", "{9E90F3D1-FE93-4A5B-8177-D17D488F71A2}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EnduroTimer.Tests", "tests\EnduroTimer.Tests\EnduroTimer.Tests.csproj", "{1E1D14E4-D8C3-42C2-9F4A-93B43E525F50}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{5A4A3F81-DB3E-4D0B-A5A3-EB3A9DBA2F21}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5A4A3F81-DB3E-4D0B-A5A3-EB3A9DBA2F21}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5A4A3F81-DB3E-4D0B-A5A3-EB3A9DBA2F21}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5A4A3F81-DB3E-4D0B-A5A3-EB3A9DBA2F21}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9E90F3D1-FE93-4A5B-8177-D17D488F71A2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9E90F3D1-FE93-4A5B-8177-D17D488F71A2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9E90F3D1-FE93-4A5B-8177-D17D488F71A2}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9E90F3D1-FE93-4A5B-8177-D17D488F71A2}.Release|Any CPU.Build.0 = Release|Any CPU
+		{1E1D14E4-D8C3-42C2-9F4A-93B43E525F50}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1E1D14E4-D8C3-42C2-9F4A-93B43E525F50}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{1E1D14E4-D8C3-42C2-9F4A-93B43E525F50}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{1E1D14E4-D8C3-42C2-9F4A-93B43E525F50}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

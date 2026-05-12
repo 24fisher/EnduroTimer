@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EnduroTimer Prototype</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, system-ui, sans-serif; }
+    body { margin: 0; background: #101418; color: #edf2f7; }
+    main { max-width: 1100px; margin: 0 auto; padding: 28px; }
+    h1 { margin-top: 0; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+    .card { background: #1b232c; border: 1px solid #2f3d4a; border-radius: 14px; padding: 18px; box-shadow: 0 10px 30px #0005; }
+    label { display: block; margin-bottom: 6px; color: #aeb8c2; }
+    input { box-sizing: border-box; width: 100%; padding: 12px; border-radius: 10px; border: 1px solid #455564; background: #101820; color: #fff; }
+    button { margin: 8px 8px 0 0; padding: 11px 14px; border: 0; border-radius: 10px; background: #38bdf8; color: #05131c; font-weight: 700; cursor: pointer; }
+    button.secondary { background: #94a3b8; }
+    button.danger { background: #fb7185; }
+    .status { font-size: 2rem; font-weight: 800; color: #fbbf24; }
+    .result { font-size: 2.4rem; font-variant-numeric: tabular-nums; }
+    .ok { color: #86efac; } .warn { color: #fcd34d; } .bad { color: #fca5a5; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { text-align: left; padding: 9px; border-bottom: 1px solid #334155; font-size: .92rem; }
+    code { color: #bae6fd; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>MTB Enduro Timer Prototype</h1>
+  <div class="grid">
+    <section class="card">
+      <h2>Run control</h2>
+      <label for="rider">Rider name/number</label>
+      <input id="rider" placeholder="e.g. 42 or Anna">
+      <button onclick="startRun()">Start</button>
+      <button class="secondary" onclick="syncTime()">Sync time</button>
+      <button onclick="simulateFinish()">Simulate finish sensor</button>
+      <button class="danger" onclick="resetSystem()">Reset</button>
+      <p id="message"></p>
+    </section>
+    <section class="card">
+      <h2>Current status</h2>
+      <div id="upperState" class="status">Loading…</div>
+      <p>Lower station: <strong id="lowerState"></strong></p>
+      <p>Last result</p>
+      <div id="lastResult" class="result">--:--.---</div>
+    </section>
+    <section class="card">
+      <h2>Diagnostics</h2>
+      <p>Upper: <span id="upperOnline"></span>, battery <code id="upperBattery"></code></p>
+      <p>Lower: <span id="lowerOnline"></span>, battery <code id="lowerBattery"></code>, RSSI <code id="rssi"></code></p>
+      <p>Beam: <strong id="beam"></strong></p>
+      <p>RTC offset: <strong id="rtc"></strong></p>
+    </section>
+  </div>
+
+  <section class="card" style="margin-top:16px">
+    <h2>Recent runs</h2>
+    <table>
+      <thead><tr><th>Run ID</th><th>Rider</th><th>Start time</th><th>Finish time</th><th>Result</th><th>Status</th><th></th></tr></thead>
+      <tbody id="runsBody"></tbody>
+    </table>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const fmtResult = ms => ms == null ? '--:--.---' : `${String(Math.floor(ms / 60000)).padStart(2,'0')}:${String(Math.floor((ms % 60000) / 1000)).padStart(2,'0')}.${String(ms % 1000).padStart(3,'0')}`;
+const fmtTime = ms => ms == null ? '' : new Date(ms).toLocaleTimeString([], { hour12: false }) + '.' + String(ms % 1000).padStart(3,'0');
+async function api(path, options) {
+  const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...options });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+  return res.status === 204 ? null : res.json();
+}
+async function refresh() {
+  const [status, runs] = await Promise.all([api('/api/status'), api('/api/runs')]);
+  $('upperState').textContent = status.upperState;
+  $('lowerState').textContent = status.lowerState;
+  $('lastResult').textContent = fmtResult(status.lastRun?.resultMs);
+  $('upperOnline').textContent = status.upper.online ? 'online' : 'offline';
+  $('upperOnline').className = status.upper.online ? 'ok' : 'bad';
+  $('lowerOnline').textContent = status.lower.online ? 'online' : 'offline';
+  $('lowerOnline').className = status.lower.online ? 'ok' : 'bad';
+  $('upperBattery').textContent = `${status.upper.batteryVoltage.toFixed(2)} V`;
+  $('lowerBattery').textContent = `${status.lower.batteryVoltage.toFixed(2)} V`;
+  $('rssi').textContent = `${status.lower.lastRssi} dBm`;
+  $('beam').textContent = status.beamClear ? 'BeamClear' : 'BeamBlocked';
+  $('beam').className = status.beamClear ? 'ok' : 'bad';
+  $('rtc').textContent = `${status.rtcOffsetMs} ms${status.rtcOffsetWarning ? ' warning' : ''}`;
+  $('rtc').className = status.rtcOffsetWarning ? 'warn' : 'ok';
+  $('runsBody').innerHTML = runs.map(r => `<tr><td><code>${r.runId.slice(0,8)}</code></td><td>${escapeHtml(r.rider)}</td><td>${fmtTime(r.startTimestampMs)}</td><td>${fmtTime(r.finishTimestampMs)}</td><td>${fmtResult(r.resultMs)}</td><td>${r.status}</td><td>${r.status === 'Riding' ? `<button class="danger" onclick="dnf('${r.runId}')">DNF</button>` : ''}</td></tr>`).join('');
+}
+function escapeHtml(value) { return value.replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }
+async function startRun() { await action(async () => api('/api/runs/start', { method: 'POST', body: JSON.stringify({ rider: $('rider').value }) }), 'Run started'); }
+async function syncTime() { await action(async () => api('/api/time/sync', { method: 'POST' }), 'Time sync completed'); }
+async function simulateFinish() { await action(async () => api('/api/finish/simulate', { method: 'POST' }), 'Finish sensor triggered'); }
+async function resetSystem() { await action(async () => api('/api/system/reset', { method: 'POST' }), 'System reset'); }
+async function dnf(id) { await action(async () => api(`/api/runs/${id}/dnf`, { method: 'POST' }), 'Run marked DNF'); }
+async function action(fn, ok) { try { $('message').textContent = 'Working…'; await fn(); $('message').textContent = ok; await refresh(); } catch (err) { $('message').textContent = err.message; } }
+refresh();
+setInterval(refresh, 1500);
+</script>
+</body>
+</html>
