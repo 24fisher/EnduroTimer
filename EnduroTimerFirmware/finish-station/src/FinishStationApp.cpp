@@ -31,8 +31,7 @@ void FinishStationApp::begin() {
 
 #if ENABLE_OLED
   if (display_.begin()) {
-    display_.showBoot("FINISH STATION");
-    delay(1200);
+    display_.showBootScreen("FINISH");
   }
 #else
   Serial.println("OLED init skipped (ENABLE_OLED=0)");
@@ -234,12 +233,11 @@ void FinishStationApp::updateDisplay() {
   }
 
   display_.showLines({
+    "ENDURO TIMER",
     "FINISH",
-    String("LoRa: ") + (radioReady_ ? "OK" : "OFF"),
-    "State: " + state_.stateText(),
-    "Run: " + runShort,
-    state_.state() == FinishRunState::WaitFinish ? "Btn: finish" : "Btn: finish sim",
-    "Sent: " + String(finishAttempts_) + "/5 H:" + String(heartbeatCounter_),
+    state_.stateText(),
+    "RUN: " + runShort,
+    String("LORA: ") + (radioReady_ ? "OK" : "OFF"),
   });
 }
 
