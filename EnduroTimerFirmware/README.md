@@ -50,6 +50,9 @@ Default built-in OLED pins are configured for Heltec WiFi LoRa 32 V3 and can be 
 | `OLED_VEXT_ON_LEVEL` | `0` | Usually active LOW on Heltec V3. |
 | `OLED_SCAN_ONLY` | `0` | Diagnostic mode: probe I2C only, skip display initialization/drawing. |
 | `OLED_DRAW_TEST_ONLY` | `0` | Temporary bypass: after a successful scan, skip display initialization/drawing and return success so the heartbeat can prove the main loop is alive. |
+| `OLED_TEST_PATTERN_ONLY` | `1` in the diagnostic config | Draw the high-contrast U8g2 test pattern after `begin()` and prevent app display refreshes from overwriting it. |
+| `OLED_INVERT_TEST` | `0` | Optional diagnostic tick that reasserts display power and max contrast every second from the normal app loop. |
+| `OLED_DRIVER_TYPE` | `SSD1306_NONAME` | U8g2 SW I2C driver selector. Try `SSD1306_VCOMH0`, then `SH1106`, if the panel ACKs I2C but stays blank. |
 | OLED address | `0x3C` | The firmware also probes `0x3D`. |
 
 When the selected ESP32 board package provides Heltec-style pin definitions such as `SDA_OLED`, `SCL_OLED`, `RST_OLED`, or `Vext`, the OLED helper uses those as fallback defaults before falling back to the values above. If `OLED_VEXT >= 0`, the firmware logs the VEXT pin and level, enables that GPIO before OLED probing, and waits for the rail to settle. Keep `OLED_VEXT=-1` if the VEXT control pin is unknown.
@@ -177,6 +180,9 @@ The default PlatformIO build flags intentionally keep LoRa, Wi-Fi, and the Web U
 -D OLED_VEXT_ON_LEVEL=0
 -D OLED_SCAN_ONLY=0
 -D OLED_DRAW_TEST_ONLY=0
+-D OLED_TEST_PATTERN_ONLY=1
+-D OLED_INVERT_TEST=0
+-D OLED_DRIVER_TYPE=SSD1306_NONAME
 -D ARDUINO_USB_CDC_ON_BOOT=0
 -D ARDUINO_USB_MODE=0
 ```
@@ -203,7 +209,7 @@ After the U8g2 OLED path and serial heartbeat are confirmed, enable modules one 
 
 ### Heltec V3 OLED diagnostics
 
-The built-in OLED now uses **U8g2** with the `U8G2_SSD1306_128X64_NONAME_F_HW_I2C` driver. For Heltec WiFi LoRa 32 V3 / ESP32-S3 the expected built-in OLED wiring is:
+The built-in OLED now uses **U8g2 SW I2C** so display rendering does not depend on the ESP32 hardware I2C peripheral after the address scan. For Heltec WiFi LoRa 32 V3 / ESP32-S3 the expected built-in OLED wiring is:
 
 - `OLED_SDA=17`
 - `OLED_SCL=18`
@@ -212,31 +218,57 @@ The built-in OLED now uses **U8g2** with the `U8G2_SSD1306_128X64_NONAME_F_HW_I2
 - `OLED_VEXT_ON_LEVEL=0` (VEXT active LOW)
 - OLED I2C address `0x3C` (the firmware also checks `0x3D`)
 
-The OLED boot path is intentionally serial-first and step-by-step. A healthy StartStation OLED test should show these serial checkpoints before the normal heartbeat continues:
+Recommended diagnostic flags for a blank physical display are:
+
+```ini
+-D ENABLE_OLED=1
+-D OLED_SCAN_ONLY=0
+-D OLED_DRAW_TEST_ONLY=0
+-D OLED_TEST_PATTERN_ONLY=1
+-D OLED_DRIVER_TYPE=SSD1306_NONAME
+-D OLED_SDA=17
+-D OLED_SCL=18
+-D OLED_RST=21
+-D OLED_VEXT=36
+-D OLED_VEXT_ON_LEVEL=0
+-D ARDUINO_USB_CDC_ON_BOOT=0
+-D ARDUINO_USB_MODE=0
+```
+
+With `OLED_TEST_PATTERN_ONLY=1`, the firmware draws a high-contrast test pattern and the StartStation/FinishStation display refresh code intentionally leaves it on screen. The serial heartbeat continues, and Wi-Fi, LoRa, and Web remain controlled only by their existing build flags.
+
+Supported `OLED_DRIVER_TYPE` values are:
+
+- `SSD1306_NONAME` (default): `U8G2_SSD1306_128X64_NONAME_F_SW_I2C`
+- `SSD1306_VCOMH0`: `U8G2_SSD1306_128X64_VCOMH0_F_SW_I2C`
+- `SH1106`: `U8G2_SH1106_128X64_NONAME_F_SW_I2C`
+- `SSD1306_64_NONAME`: diagnostic alias that keeps the same 128x64 SSD1306 NONAME constructor because there is no separate supported U8g2 constructor for this project
+
+If the OLED is found at `0x3C` but the glass stays blank, try `OLED_DRIVER_TYPE=SSD1306_VCOMH0` first, then `OLED_DRIVER_TYPE=SH1106`.
+
+A healthy StartStation OLED render test should show these serial checkpoints before the normal heartbeat continues:
 
 ```text
-OLED init begin
-OLED VEXT enable...
-OLED reset...
-I2C begin...
-Checking OLED I2C addr 0x3C...
-OLED found at 0x3C
-U8g2 create begin
-U8g2 create returned
+OLED driver type: SSD1306_NONAME
 U8g2 begin...
 U8g2 begin returned
-U8g2 splash draw begin
-U8g2 splash draw returned
+U8g2 setPowerSave 0
+U8g2 setContrast 255
+U8g2 render test begin
+U8g2 sendBuffer begin
+U8g2 sendBuffer returned
+OLED test pattern displayed
 OLED OK
-APP alive ms=...
 ```
+
+The test pattern draws a perimeter frame, a filled corner block, large visible labels, and diagonal/axis lines. It is intentionally not cleared by the boot path when `OLED_TEST_PATTERN_ONLY=1`. In normal mode, `showStatus()` still renders visible fallback text (`START`, `READY`, and uptime seconds) even if callers pass empty fields.
 
 If the display or driver blocks, use only the bypass flags and the last printed serial line to isolate the step:
 
 1. Set `ENABLE_OLED=0` to avoid touching the OLED path at all and confirm the heartbeat continues.
 2. Set `ENABLE_OLED=1` and `OLED_SCAN_ONLY=1` to enable VEXT, reset the panel, start I2C, and check only `0x3C`/`0x3D` without creating U8g2.
 3. Set `OLED_SCAN_ONLY=0` and `OLED_DRAW_TEST_ONLY=1` to create the U8g2 object but skip `begin()` and `sendBuffer()`.
-4. Set `OLED_SCAN_ONLY=0` and `OLED_DRAW_TEST_ONLY=0` for the full U8g2 initialization and splash draw.
+4. Set `OLED_SCAN_ONLY=0` and `OLED_DRAW_TEST_ONLY=0` for the full U8g2 initialization and render test.
 
 The OLED path never restarts the ESP, aborts, or enters a retry loop. If the OLED is not found, initialization returns `false`, logs `OLED not found, U8g2 init skipped`, and the main loop heartbeat continues.
 
