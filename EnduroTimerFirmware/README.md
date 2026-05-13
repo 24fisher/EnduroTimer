@@ -154,6 +154,28 @@ pio run -e finish_station -t upload
 9. Press the physical button on the lower Heltec.
 10. Confirm that the result appears on the upper OLED and in the Web UI.
 
+## Diagnostic boot mode
+
+The default PlatformIO build flags intentionally keep the Heltec startup path minimal for first-pass diagnostics:
+
+```ini
+-D ENABLE_OLED=0
+-D ENABLE_LORA=0
+-D ENABLE_WIFI=0
+-D ENABLE_WEB=0
+```
+
+With those flags, reset the StartStation board and confirm the serial monitor shows the application entry banner and one-second heartbeat before enabling hardware modules:
+
+```text
+ENDURO TIMER START STATION APP ENTRY
+Build: ...
+Serial OK
+APP alive ms=...
+```
+
+After the serial heartbeat is confirmed, enable modules one at a time in this order: `ENABLE_OLED`, `ENABLE_WIFI`, `ENABLE_WEB`, then `ENABLE_LORA`. Each enabled initializer logs an `init...` line followed by `OK` or `FAIL`; failures are reported to Serial and the firmware keeps running so the heartbeat can continue.
+
 ## Troubleshooting
 
 ### Wi-Fi is not visible

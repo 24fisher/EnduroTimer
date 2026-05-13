@@ -18,6 +18,7 @@ class StartStationApp {
 public:
   void begin();
   void loop();
+  void beginRadio();
 
   bool requestStartRun(String& error);
   void resetSystem();
@@ -26,7 +27,6 @@ public:
   String runsJson() const;
 
 private:
-  void beginRadio();
   void configureButton();
   void updateButton(uint32_t nowMs);
   void updateLed(uint32_t nowMs);

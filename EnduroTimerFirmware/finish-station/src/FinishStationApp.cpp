@@ -17,7 +17,9 @@ static constexpr uint8_t MaxFinishAttempts = 5;
 static constexpr uint32_t StatusIntervalMs = 2000UL;
 static constexpr uint32_t DisplayRefreshMs = 200UL;
 RTC_DATA_ATTR static uint32_t finishBootCounter = 0;
+#if ENABLE_LORA
 static SX1262 radio = new Module(LORA_NSS, LORA_DIO1, LORA_RST, LORA_BUSY);
+#endif
 
 void FinishStationApp::begin() {
   finishBootCounter += 1;
@@ -27,10 +29,14 @@ void FinishStationApp::begin() {
   Serial.printf("Boot counter: %lu\n", static_cast<unsigned long>(finishBootCounter));
   Serial.printf("Chip: %s rev %u cores=%u efuseMac=%llX\n", ESP.getChipModel(), ESP.getChipRevision(), ESP.getChipCores(), ESP.getEfuseMac());
 
+#if ENABLE_OLED
   if (display_.begin()) {
     display_.showBoot("FINISH STATION");
     delay(1200);
   }
+#else
+  Serial.println("OLED init skipped (ENABLE_OLED=0)");
+#endif
 
   buzzer_.begin();
   beginRadio();
@@ -43,7 +49,9 @@ void FinishStationApp::begin() {
 
 void FinishStationApp::loop() {
   const uint32_t now = clock_.nowMs();
+#if ENABLE_LORA
   pollRadio();
+#endif
   updateLed(now);
 
   uint32_t finishTimestampMs = 0;
@@ -74,15 +82,18 @@ void FinishStationApp::loop() {
     lastStatusMs_ = now;
   }
 
+#if ENABLE_OLED
   if (now - lastDisplayMs_ >= DisplayRefreshMs) {
     updateDisplay();
     lastDisplayMs_ = now;
   }
+#endif
 
   logHeartbeat(now);
 }
 
 void FinishStationApp::beginRadio() {
+#if ENABLE_LORA
   Serial.printf("LoRa init... %.0f MHz\n", LORA_FREQUENCY_MHZ);
   SPI.begin(9, 11, 10, LORA_NSS);
   const int initState = radio.begin(LORA_FREQUENCY_MHZ);
@@ -97,6 +108,10 @@ void FinishStationApp::beginRadio() {
   radio.setCodingRate(5);
   radio.setOutputPower(14);
   Serial.println("LoRa OK");
+#else
+  Serial.println("LoRa init skipped (ENABLE_LORA=0)");
+  radioReady_ = false;
+#endif
 }
 
 void FinishStationApp::updateLed(uint32_t nowMs) {
@@ -121,6 +136,7 @@ void FinishStationApp::updateLed(uint32_t nowMs) {
 }
 
 void FinishStationApp::pollRadio() {
+#if ENABLE_LORA
   if (!radioReady_) return;
 
   String payload;
@@ -135,9 +151,13 @@ void FinishStationApp::pollRadio() {
     lastPacket_ = RadioProtocol::typeToString(message.type);
     handleRadioMessage(message);
   }
+#else
+  (void)this;
+#endif
 }
 
 bool FinishStationApp::sendRadio(const RadioMessage& message) {
+#if ENABLE_LORA
   if (!radioReady_) return false;
 
   String payload;
@@ -148,6 +168,10 @@ bool FinishStationApp::sendRadio(const RadioMessage& message) {
     return false;
   }
   return true;
+#else
+  (void)message;
+  return false;
+#endif
 }
 
 void FinishStationApp::sendStatus() {
