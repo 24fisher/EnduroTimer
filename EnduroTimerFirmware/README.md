@@ -39,13 +39,16 @@ EnduroTimerFirmware/
 
 The firmware uses Arduino framework for ESP32, RadioLib for SX1262, LittleFS for the StartStation Web UI, and U8g2 for the OLED.
 
-Default built-in OLED pins are configured for Heltec WiFi LoRa 32 V3:
+Default built-in OLED pins are configured for Heltec WiFi LoRa 32 V3 and can be overridden from `platformio.ini` build flags:
 
 - `OLED_SDA = 17`
 - `OLED_SCL = 18`
 - `OLED_RST = 21`
-- `VEXT_PIN = 36`
-- OLED I2C address is handled by U8g2's SSD1306 driver.
+- `OLED_VEXT = -1` by default for safe boot, so firmware does not touch VEXT unless you explicitly set a GPIO.
+- `OLED_SCAN_ONLY = 0` by default; set it to `1` for an I2C-only OLED smoke test that skips display initialization and drawing.
+- OLED I2C address is `0x3C`.
+
+When the selected ESP32 board package provides Heltec-style pin definitions such as `SDA_OLED`, `SCL_OLED`, `RST_OLED`, or `Vext`, the OLED helper uses those as fallback defaults before falling back to the values above. If `OLED_VEXT >= 0`, the firmware enables that GPIO with an active-low write before OLED probing; keep `OLED_VEXT=-1` if the VEXT control pin is unknown.
 
 Default button pins use the board boot/user button as a temporary bare-board input:
 
@@ -163,6 +166,11 @@ The default PlatformIO build flags intentionally keep the Heltec startup path mi
 -D ENABLE_LORA=0
 -D ENABLE_WIFI=0
 -D ENABLE_WEB=0
+-D OLED_SDA=17
+-D OLED_SCL=18
+-D OLED_RST=21
+-D OLED_VEXT=-1
+-D OLED_SCAN_ONLY=0
 ```
 
 With those flags, reset the StartStation board and confirm the serial monitor shows the application entry banner and one-second heartbeat before enabling hardware modules:
@@ -185,12 +193,16 @@ After the serial heartbeat is confirmed, enable modules one at a time in this or
 - Confirm that `WiFi.softAP` returned `true` in the Serial log.
 - Check USB power and try another cable or port.
 
-### OLED is blank
+### OLED is blank or boot stops at OLED init
 
-- Check Serial logs for `OLED: init failed`.
-- Confirm that the firmware is using the Heltec WiFi LoRa 32 V3 OLED pins.
+- If the Serial log stops after `OLED init...`, first build with `ENABLE_OLED=0` and confirm the one-second `APP alive ms=...` heartbeat continues.
+- Next build with `ENABLE_OLED=1` and `OLED_SCAN_ONLY=1`; this runs only `Wire.begin(...)` plus an I2C scan and does not call `display.begin()` or draw to the OLED.
+- A healthy built-in display should normally appear as `Found I2C device: 0x3C` between `I2C scan start` and `I2C scan done`.
+- If the scan prints `No I2C devices found` or `OLED not found at 0x3C`, verify `OLED_SDA`, `OLED_SCL`, and `OLED_RST` for the exact Heltec WiFi LoRa 32 V3 board revision.
+- Keep `OLED_VEXT=-1` unless you are sure which GPIO controls VEXT on your board; do not call `pinMode` on an unknown VEXT pin.
+- If your board requires VEXT power control, set `OLED_VEXT` explicitly in `platformio.ini` and retest with `OLED_SCAN_ONLY=1` before enabling full OLED initialization.
 - Confirm that U8g2 is installed by PlatformIO.
-- The firmware continues to run even if OLED initialization fails.
+- The firmware returns `OLED FAIL` and continues to Wi-Fi, LoRa, state initialization, and heartbeat logging when OLED probing fails or scan-only mode is enabled.
 
 ### LoRa is offline
 
