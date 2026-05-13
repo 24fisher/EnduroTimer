@@ -3,6 +3,8 @@
 #include <U8g2lib.h>
 #include <Wire.h>
 
+#include <memory>
+
 // Heltec WiFi LoRa 32 V3 built-in OLED usually uses SDA GPIO17, SCL GPIO18,
 // RST GPIO21, address 0x3C. VextCtrl is often GPIO36 and usually active LOW,
 // but revisions/clones may differ.
@@ -44,6 +46,10 @@
 #define OLED_SCAN_ONLY 1
 #endif
 
+#ifndef OLED_DRAW_TEST_ONLY
+#define OLED_DRAW_TEST_ONLY 0
+#endif
+
 #ifndef OLED_VEXT_ON_LEVEL
 #define OLED_VEXT_ON_LEVEL 0
 #endif
@@ -62,7 +68,18 @@ static const uint8_t OLED_ADDR_CANDIDATES[] = {
   0x3C,
   0x3D
 };
-static U8G2_SSD1306_128X64_NONAME_F_HW_I2C display(U8G2_R0, OLED_RST, OLED_SCL, OLED_SDA);
+
+using OledDisplayDriver = U8G2_SSD1306_128X64_NONAME_F_HW_I2C;
+static std::unique_ptr<OledDisplayDriver> display;
+
+static OledDisplayDriver& ensureDisplayDriver() {
+  if (!display) {
+    Serial.println("OLED display driver create begin");
+    display.reset(new OledDisplayDriver(U8G2_R0, OLED_RST, OLED_SCL, OLED_SDA));
+    Serial.println("OLED display driver create returned");
+  }
+  return *display;
+}
 
 static void enableOledVext(int level) {
 #if OLED_VEXT >= 0
@@ -160,13 +177,14 @@ bool OledDisplay::begin() {
   address_ = 0;
   vextLevel_ = OLED_VEXT_ON_LEVEL;
   Serial.printf(
-      "OLED init... SDA=%d SCL=%d RST=%d VEXT=%d VEXT_ON_LEVEL=%d SCAN_ONLY=%d FULL_I2C_SCAN=%d TRY_BOTH_VEXT_LEVELS=%d\n",
+      "OLED init... SDA=%d SCL=%d RST=%d VEXT=%d VEXT_ON_LEVEL=%d SCAN_ONLY=%d DRAW_TEST_ONLY=%d FULL_I2C_SCAN=%d TRY_BOTH_VEXT_LEVELS=%d\n",
       OLED_SDA,
       OLED_SCL,
       OLED_RST,
       OLED_VEXT,
       OLED_VEXT_ON_LEVEL,
       OLED_SCAN_ONLY,
+      OLED_DRAW_TEST_ONLY,
       OLED_FULL_I2C_SCAN,
       OLED_TRY_BOTH_VEXT_LEVELS);
   Serial.println("OLED init begin");
@@ -187,7 +205,8 @@ bool OledDisplay::begin() {
   }
 #endif
 
-  if (!oledAddressFound) {
+  if (!oledAddressFound || foundAddress == 0) {
+    Serial.println("OLED display init skipped: no address");
     Serial.println("OLED not found at 0x3C or 0x3D");
     Serial.println("OLED FAIL");
     return false;
@@ -199,37 +218,51 @@ bool OledDisplay::begin() {
   Serial.println("OLED scan-only mode, display init skipped");
   Serial.println("OLED OK");
   return true;
+#elif OLED_DRAW_TEST_ONLY
+  Serial.println("OLED draw-test-only mode, display init skipped");
+  Serial.println("OLED OK");
+  return true;
 #else
-  display.setI2CAddress(address_ << 1);
-  initialized_ = display.begin();
+  Serial.println("OLED display init begin");
+  yield();
+
+  OledDisplayDriver& driver = ensureDisplayDriver();
+  driver.setI2CAddress(address_ << 1);
+  initialized_ = driver.begin();
+  yield();
+  Serial.printf("OLED display init returned result=%d\n", initialized_ ? 1 : 0);
+
   if (!initialized_) {
     Serial.println("Serial OLED display init failed");
     Serial.println("OLED FAIL");
     return false;
   }
 
-  display.setFont(u8g2_font_6x10_tf);
-  display.clearBuffer();
-  display.drawStr(0, 12, "ENDURO TIMER");
-  display.drawStr(0, 28, "OLED OK");
-  display.sendBuffer();
+  driver.setFont(u8g2_font_6x10_tf);
+  driver.clearBuffer();
+  driver.drawStr(0, 12, "ENDURO TIMER");
+  driver.drawStr(0, 28, "START STATION");
+  driver.drawStr(0, 44, "READY");
+  driver.sendBuffer();
+  Serial.println("OLED splash drawn");
   Serial.println("OLED OK");
   return true;
 #endif
 }
 
 void OledDisplay::showLines(const std::vector<String>& lines) {
-  if (!initialized_) return;
+  if (!initialized_ || !display) return;
 
-  display.clearBuffer();
-  display.setFont(u8g2_font_6x10_tf);
+  OledDisplayDriver& driver = *display;
+  driver.clearBuffer();
+  driver.setFont(u8g2_font_6x10_tf);
   int y = 10;
   for (const String& line : lines) {
-    display.drawStr(0, y, line.c_str());
+    driver.drawStr(0, y, line.c_str());
     y += 10;
     if (y > 64) break;
   }
-  display.sendBuffer();
+  driver.sendBuffer();
 }
 
 void OledDisplay::showBoot(const String& role) {
@@ -237,13 +270,14 @@ void OledDisplay::showBoot(const String& role) {
 }
 
 void OledDisplay::showCountdown(const String& text) {
-  if (!initialized_) return;
+  if (!initialized_ || !display) return;
 
-  display.clearBuffer();
-  display.setFont(u8g2_font_logisoso46_tf);
-  const int16_t width = display.getStrWidth(text.c_str());
+  OledDisplayDriver& driver = *display;
+  driver.clearBuffer();
+  driver.setFont(u8g2_font_logisoso46_tf);
+  const int16_t width = driver.getStrWidth(text.c_str());
   int16_t x = (128 - width) / 2;
   if (x < 0) x = 0;
-  display.drawStr(x, 56, text.c_str());
-  display.sendBuffer();
+  driver.drawStr(x, 56, text.c_str());
+  driver.sendBuffer();
 }

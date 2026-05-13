@@ -48,7 +48,8 @@ Default built-in OLED pins are configured for Heltec WiFi LoRa 32 V3 and can be 
 | `OLED_RST` | `21` | Set to `-1` to skip the OLED reset pulse during diagnostics. |
 | `OLED_VEXT` | `36` | Set to `-1` only when firmware must not touch a VEXT control pin. |
 | `OLED_VEXT_ON_LEVEL` | `0` | Usually active LOW on Heltec V3. |
-| `OLED_SCAN_ONLY` | `1` | Diagnostic mode: probe I2C only, skip `display.init()`/drawing. |
+| `OLED_SCAN_ONLY` | `1` | Diagnostic mode: probe I2C only, skip display initialization/drawing. |
+| `OLED_DRAW_TEST_ONLY` | `0` | Temporary bypass: after a successful scan, skip display initialization/drawing and return success so the heartbeat can prove the main loop is alive. |
 | `OLED_FULL_I2C_SCAN` | `0` | Optional full scan of I2C addresses `0x08..0x77`. |
 | `OLED_TRY_BOTH_VEXT_LEVELS` | `0` | Optional diagnostic retry with the opposite VEXT level. |
 | OLED address | `0x3C` | The firmware also probes `0x3D`. |
@@ -177,6 +178,7 @@ The default PlatformIO build flags intentionally keep the Heltec startup path mi
 -D OLED_VEXT=36
 -D OLED_VEXT_ON_LEVEL=0
 -D OLED_SCAN_ONLY=1
+-D OLED_DRAW_TEST_ONLY=0
 -D OLED_FULL_I2C_SCAN=0
 -D OLED_TRY_BOTH_VEXT_LEVELS=0
 -D ARDUINO_USB_CDC_ON_BOOT=0
@@ -209,9 +211,10 @@ The built-in OLED is usually at I2C address `0x3C` on GPIO17/GPIO18. Vext is usu
 
 1. Enable `ENABLE_OLED=1`.
 2. Enable `OLED_SCAN_ONLY=1` so the firmware performs only OLED/I2C diagnostics, does not initialize U8g2, and does not draw to the display.
-3. Enable `OLED_TRY_BOTH_VEXT_LEVELS=1` to try both the configured `OLED_VEXT_ON_LEVEL` and the opposite level.
-4. Enable `OLED_FULL_I2C_SCAN=1` to supplement the quick `0x3C`/`0x3D` OLED probe with a bounded scan of `0x08..0x77`.
-5. Watch Serial result codes and keep the one-second `APP alive ms=...` heartbeat running while changing one build flag at a time.
+3. If the scan succeeds but display initialization is suspected of blocking, set `OLED_SCAN_ONLY=0` and `OLED_DRAW_TEST_ONLY=1` to bypass U8g2 initialization/drawing after the scan while keeping the heartbeat alive.
+4. Enable `OLED_TRY_BOTH_VEXT_LEVELS=1` to try both the configured `OLED_VEXT_ON_LEVEL` and the opposite level.
+5. Enable `OLED_FULL_I2C_SCAN=1` to supplement the quick `0x3C`/`0x3D` OLED probe with a bounded scan of `0x08..0x77`.
+6. Watch Serial result codes and keep the one-second `APP alive ms=...` heartbeat running while changing one build flag at a time.
 
 Diagnostic flags can be changed without code edits:
 
@@ -220,6 +223,7 @@ Diagnostic flags can be changed without code edits:
 | Default Heltec V3 diagnostic pinout | `OLED_SDA=17`, `OLED_SCL=18`, `OLED_RST=21`, `OLED_VEXT=36`, `OLED_VEXT_ON_LEVEL=0`, OLED address `0x3C` |
 | Try both VEXT power levels | `OLED_TRY_BOTH_VEXT_LEVELS=1` |
 | Run a bounded full bus scan | `OLED_FULL_I2C_SCAN=1` |
+| Bypass display initialization after a successful scan | `OLED_SCAN_ONLY=0`, `OLED_DRAW_TEST_ONLY=1` |
 | Skip the reset pulse | `OLED_RST=-1` |
 | Verify board selection | Use PlatformIO board `heltec_wifi_lora_32_V3` |
 | Suspect hardware mismatch | Check whether the board is a different revision or clone. |
@@ -236,7 +240,8 @@ If no OLED is found, try `OLED_TRY_BOTH_VEXT_LEVELS=1`, then `OLED_FULL_I2C_SCAN
 
 - If the Serial log stops after `OLED init...`, first build with `ENABLE_OLED=0` and confirm the one-second `APP alive ms=...` heartbeat continues.
 - With `OLED_SCAN_ONLY=1`, the firmware returns `OLED OK` only when `0x3C` or `0x3D` responds; otherwise it returns `OLED FAIL`. In both cases it skips display initialization/drawing and the main loop heartbeat continues.
-- With `OLED_SCAN_ONLY=0`, the firmware first finds the OLED address from the candidates, then initializes U8g2 at the found address. If display initialization fails, Serial prints `Serial OLED display init failed`, the firmware returns `OLED FAIL`, and the main loop continues.
+- With `OLED_SCAN_ONLY=0` and `OLED_DRAW_TEST_ONLY=0`, the firmware first finds the OLED address from the candidates, creates the U8g2 display driver only after the scan, logs `OLED display init begin`, yields to the scheduler, calls display initialization, yields again, and logs `OLED display init returned result=...`. If display initialization fails, Serial prints `Serial OLED display init failed`, the firmware returns `OLED FAIL`, and the main loop continues.
+- With `OLED_DRAW_TEST_ONLY=1`, the firmware skips display initialization/drawing after a successful scan and returns `OLED OK`; use it only as a temporary bypass while diagnosing a blocking OLED backend.
 - Confirm that U8g2 is installed by PlatformIO.
 
 ### LoRa is offline
