@@ -32,6 +32,7 @@ private:
   FinishSensorStub sensor_;
   FinishState state_;
 
+  bool oledReady_ = false;
   bool radioReady_ = false;
   uint32_t lastStatusMs_ = 0;
   uint32_t lastDisplayMs_ = 0;
@@ -42,4 +43,5 @@ private:
   uint8_t finishAttempts_ = 0;
   bool ledOn_ = false;
   String lastPacket_ = "-";
+  uint32_t showNoRunUntilMs_ = 0;
 };

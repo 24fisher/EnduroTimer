@@ -16,6 +16,7 @@ function showMessage(text, isError = false) {
 function renderStatus(status) {
   $('stateBadge').textContent = status.state;
   $('stateBadge').className = `badge state-${String(status.state).toLowerCase()}`;
+  $('serviceFlags').innerHTML = `OLED <span class="${status.oledOk ? 'online' : 'offline'}">${status.oledOk ? 'OK' : 'FAIL'}</span> · Wi-Fi <span class="${status.wifiOk ? 'online' : 'offline'}">${status.wifiOk ? 'OK' : 'FAIL'}</span> · Web <span class="${status.webOk ? 'online' : 'offline'}">${status.webOk ? 'OK' : 'FAIL'}</span> · LoRa <span class="${status.loraOk ? 'online' : 'offline'}">${status.loraOk ? 'OK' : 'FAIL'}</span>`;
   $('finishOnline').textContent = status.finishStationOnline ? 'Online' : 'Offline';
   $('finishOnline').className = status.finishStationOnline ? 'online' : 'offline';
   $('finishState').textContent = `state: ${status.finishState || '—'}`;

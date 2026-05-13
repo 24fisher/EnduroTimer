@@ -30,10 +30,10 @@ void FinishState::fail() {
 String FinishState::stateText() const {
   switch (state_) {
     case FinishRunState::Boot: return "Boot";
-    case FinishRunState::Idle: return "IDLE";
-    case FinishRunState::WaitFinish: return "WAIT_FINISH";
-    case FinishRunState::FinishSent: return "FINISH_SENT";
-    case FinishRunState::Error: return "ERROR";
+    case FinishRunState::Idle: return "Idle";
+    case FinishRunState::WaitFinish: return "WaitFinish";
+    case FinishRunState::FinishSent: return "FinishSent";
+    case FinishRunState::Error: return "Error";
   }
-  return "ERROR";
+  return "Error";
 }

@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <rom/rtc.h>
 
 #include "StartStationApp.h"
 
@@ -60,24 +61,29 @@ void setup() {
   Serial.println("Build: " __DATE__ " " __TIME__);
   Serial.println("Serial OK");
   Serial.println("================================");
+  Serial.printf("[BOOT] Reset reason CPU0=%d CPU1=%d\n", rtc_get_reset_reason(0), rtc_get_reset_reason(1));
 
   app.begin();
 
 #if ENABLE_WIFI && ENABLE_WEB
   web.begin();
   app.setWifiStatus(web.apStarted(), WiFi.softAPIP(), WiFi.softAPmacAddress());
+  app.setWebStatus(web.webStarted());
 #elif ENABLE_WIFI
   const bool apStarted = beginWifiApOnly();
   app.setWifiStatus(apStarted, WiFi.softAPIP(), WiFi.softAPmacAddress());
+  app.setWebStatus(false);
 #else
-  Serial.println("WiFi AP init skipped (ENABLE_WIFI=0)");
+  Serial.println("[BOOT] WiFi AP init skipped (ENABLE_WIFI=0)");
+  app.setWebStatus(false);
 #endif
 
 #if ENABLE_LORA
   app.beginRadio();
 #else
-  Serial.println("LoRa init skipped (ENABLE_LORA=0)");
+  Serial.println("[BOOT] LoRa init skipped (ENABLE_LORA=0)");
 #endif
+  Serial.println("[BOOT] State Ready");
 }
 
 void loop() {
