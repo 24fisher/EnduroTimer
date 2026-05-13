@@ -62,6 +62,7 @@ public sealed class FileSystemSettingsRepository(DataDirectory data) : ISystemSe
         {
             var settings = await JsonFile.ReadAsync(Path, new SystemSettings(), cancellationToken);
             if (string.IsNullOrWhiteSpace(settings.TrailName)) settings.TrailName = RunRecord.DefaultTrailName;
+            settings.GroupStartIntervalSeconds = Math.Max(3, settings.GroupStartIntervalSeconds);
             return settings;
         }
         finally { _gate.Release(); }
@@ -73,6 +74,7 @@ public sealed class FileSystemSettingsRepository(DataDirectory data) : ISystemSe
         try
         {
             settings.TrailName = string.IsNullOrWhiteSpace(settings.TrailName) ? RunRecord.DefaultTrailName : settings.TrailName.Trim();
+            settings.GroupStartIntervalSeconds = Math.Max(3, settings.GroupStartIntervalSeconds);
             await JsonFile.WriteAsync(Path, settings, cancellationToken);
             return settings;
         }
@@ -255,5 +257,5 @@ public sealed class FileRunRepository(DataDirectory data) : IRunRepository
     private static byte[] CsvBomWithHeader() => Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes("runId;riderId;riderName;trailName;operationMode;queuePosition;startTimestampMs;finishTimestampMs;resultMs;resultFormatted;status;isPersonalBest;createdAtMs\n")).ToArray();
     private static string ToCsvLine(RunRecord r) => string.Join(';', new[] { r.RunId.ToString(), r.RiderId?.ToString() ?? string.Empty, Escape(r.RiderName), Escape(r.TrailName), r.OperationMode.ToString(), r.QueuePosition?.ToString(CultureInfo.InvariantCulture) ?? string.Empty, r.StartTimestampMs.ToString(CultureInfo.InvariantCulture), r.FinishTimestampMs?.ToString(CultureInfo.InvariantCulture) ?? string.Empty, r.ResultMs?.ToString(CultureInfo.InvariantCulture) ?? string.Empty, r.ResultFormatted, r.Status.ToString(), r.IsPersonalBest ? "true" : "false", r.CreatedAtMs.ToString(CultureInfo.InvariantCulture) }) + "\n";
     private static string Escape(string? value) { var v = value ?? string.Empty; return v.Contains('"') || v.Contains('\n') || v.Contains('\r') || v.Contains(';') ? $"\"{v.Replace("\"", "\"\"")}\"" : v; }
-    private static RunRecord Clone(RunRecord r, bool personalBest) => new() { RunId = r.RunId, RiderId = r.RiderId, Rider = r.Rider, OperationMode = r.OperationMode, QueuePosition = r.QueuePosition, TrailName = string.IsNullOrWhiteSpace(r.TrailName) ? RunRecord.DefaultTrailName : r.TrailName, StartTimestampMs = r.StartTimestampMs, FinishTimestampMs = r.FinishTimestampMs, ResultMs = r.ResultMs, Status = r.Status, IsPersonalBest = personalBest, CreatedAtMs = r.CreatedAtMs };
+    private static RunRecord Clone(RunRecord r, bool personalBest) => new() { RunId = r.RunId, RiderId = r.RiderId, Rider = r.Rider, OperationMode = r.OperationMode, QueuePosition = r.QueuePosition, SequenceNumber = r.SequenceNumber, TrailName = string.IsNullOrWhiteSpace(r.TrailName) ? RunRecord.DefaultTrailName : r.TrailName, StartTimestampMs = r.StartTimestampMs, FinishTimestampMs = r.FinishTimestampMs, ResultMs = r.ResultMs, Status = r.Status, IsPersonalBest = personalBest, CreatedAtMs = r.CreatedAtMs };
 }

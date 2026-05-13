@@ -45,7 +45,7 @@ The prototype is kept close to the intended Heltec ESP32-S3 implementation:
 Runtime data is stored under `src/EnduroTimer.Web/data/` by default:
 
 ```text
-data/settings.json      Current system settings, including trailName
+data/settings.json      Current system settings, including trailName and groupStartIntervalSeconds
 data/riders.json        Registered riders
 data/group_queue.json   Group queue rider IDs, position, and loop flag
 data/runs.jsonl         Main append-style run journal, one JSON record per line
@@ -60,13 +60,13 @@ The single `index.html` page contains these ESP32-style blocks:
 
 - System status
 - LED display preview
-- Settings / trail name
+- Settings / trail name / group start interval
 - Rider selection
 - Encoder simulation
 - RFID simulation
 - Group queue
 - Start controls
-- Current run
+- Active runs
 - Recent runs
 - Rider statistics
 - Export CSV/Backup
@@ -151,21 +151,51 @@ RFID is simulated only:
 
 A known active tag selects the rider and updates the LED preview. An unknown tag shows `UNKNOWN TAG` and blocks start.
 
-## Group queue
+## Group queue continuous start mode
 
-`GroupQueue` mode starts the rider at the current queue position. After a finished run, the position advances automatically.
+`GroupQueue` mode runs a continuous start session instead of a single isolated run. The key trail assumption is **no overtaking**: riders are expected to finish in the same order they started.
+
+When `POST /api/runs/start` is called in `GroupQueue`, it starts the queue auto-start session:
+
+- the current queue rider becomes `NOW`;
+- the following queue rider becomes `NEXT`;
+- the first rider receives an immediate `3`, `2`, `1`, `GO` countdown;
+- after `GO`, the run is marked `Riding`, assigned an increasing `sequenceNumber`, and appended to the in-memory FIFO `activeRuns` list;
+- the queue position advances immediately and the next rider preparation begins without waiting for the previous rider to finish;
+- the last three seconds before each subsequent start show `3 Rider`, `2 Rider`, `1 Rider`, then `GO Rider`.
+
+`groupStartIntervalSeconds` controls spacing between starts and is clamped to a minimum of 3 seconds. The default is 10 seconds and it is stored in `data/settings.json`:
+
+```json
+{
+  "trailName": "Default trail",
+  "groupStartIntervalSeconds": 10
+}
+```
+
+The LED/Web UI meanings are:
+
+- `NOW` = who is starting now;
+- `NEXT` = who is preparing next;
+- `Expected finisher` = the first active FIFO run and therefore the rider expected at the finish next.
+
+Finish logic in `GroupQueue` is FIFO. Each finish sensor trigger completes the earliest active `Riding` run by `sequenceNumber` / start timestamp. The finish API does not require a `runId` in this mode. Manual DNF still targets a specific `runId`, removes that run from `activeRuns`, and preserves the order of the remaining riders.
+
+Stopping a group session only stops future starts. It does not finish or DNF riders already on course; they remain available for FIFO finish simulation or manual DNF. Active queue sessions are held in memory and are not intended to be restored after an application restart in this prototype.
 
 Endpoints:
 
 - `GET /api/group-queue`
 - `POST /api/group-queue`
+- `POST /api/group-queue/start-session`
+- `POST /api/group-queue/stop-session`
 - `POST /api/group-queue/next`
 - `POST /api/group-queue/reset`
 - `POST /api/group-queue/move-up`
 - `POST /api/group-queue/move-down`
 - `POST /api/group-queue/remove`
 
-Stored shape:
+Stored queue shape:
 
 ```json
 {
@@ -179,8 +209,8 @@ Stored shape:
 
 `POST /api/runs/start` does not use a manually typed rider name as the main scenario. The rider is selected by the active mode:
 
-- `ManualEncoderSelection` uses `selectedRiderId`.
-- `GroupQueue` uses the current queue rider.
+- `ManualEncoderSelection` starts one run for `selectedRiderId` and blocks another start while that run is counting down or riding.
+- `GroupQueue` starts the queue auto-start session; a running session returns a conflict instead of starting another session.
 
 Common start blockers:
 
@@ -197,18 +227,20 @@ Finish is emulated with:
 
 - `POST /api/finish/simulate`
 
-The finish timestamp is captured, `resultMs` and `resultFormatted` are calculated, the run is saved to `runs.jsonl` and `runs.csv`, and duplicate finish triggers inside five seconds are ignored.
+In `ManualEncoderSelection`, the simulated finish completes the single active run and duplicate finish triggers inside five seconds are ignored by the finish station simulation.
+
+In `GroupQueue`, the same button is global: it completes the next expected FIFO finisher from `activeRuns`, calculates `resultMs` / `resultFormatted`, saves the finished run to `runs.jsonl` / `runs.csv`, and briefly shows `FIN Rider 00:00.000` before returning the LED preview to the current starter.
 
 ## Settings
 
-Trail name is stored in `data/settings.json` and is read at run start.
+Trail name and `groupStartIntervalSeconds` are stored in `data/settings.json` and are read at run start / group session start.
 
 Endpoints:
 
 - `GET /api/settings`
 - `POST /api/settings`
 
-An empty trail name falls back to `Default trail`.
+An empty trail name falls back to `Default trail`. `groupStartIntervalSeconds` defaults to 10 and is clamped to at least 3.
 
 ## Statistics and export
 

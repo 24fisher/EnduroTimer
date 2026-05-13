@@ -65,9 +65,21 @@ public sealed class TimerController : ControllerBase
     [HttpPost("finish/simulate")]
     public async Task<ActionResult<SystemStatus>> SimulateFinish(CancellationToken cancellationToken)
     {
-        if (_system.Lower.State != LowerStationState.WaitFinish || _upper.ActiveRun is null) return Conflict(new { error = "Finish station is not waiting for a run" });
-        await _finishSensor.TriggerAsync(cancellationToken);
-        return Ok(await _system.GetStatusAsync(cancellationToken));
+        try
+        {
+            if (_system.OperationMode == SystemOperationMode.GroupQueue)
+            {
+                await _system.FinishNextRunAsync(cancellationToken);
+            }
+            else
+            {
+                if (_system.Lower.State != LowerStationState.WaitFinish || _upper.ActiveRun is null) return Conflict(new { error = "Finish station is not waiting for a run" });
+                await _finishSensor.TriggerAsync(cancellationToken);
+            }
+
+            return Ok(await _system.GetStatusAsync(cancellationToken));
+        }
+        catch (InvalidOperationException ex) { return Conflict(new { error = ex.Message }); }
     }
 
     [HttpGet("runs")]
@@ -77,7 +89,7 @@ public sealed class TimerController : ControllerBase
     public async Task<ActionResult<RunRecord>> GetRun(Guid id, CancellationToken cancellationToken) => await _runs.GetAsync(id, cancellationToken) is { } run ? Ok(run) : NotFound();
 
     [HttpPost("runs/{id:guid}/dnf")]
-    public async Task<IActionResult> MarkDnf(Guid id, CancellationToken cancellationToken) { try { await _upper.MarkDnfAsync(id, cancellationToken); return NoContent(); } catch (KeyNotFoundException) { return NotFound(); } }
+    public async Task<IActionResult> MarkDnf(Guid id, CancellationToken cancellationToken) { try { await _system.MarkDnfAsync(id, cancellationToken); return NoContent(); } catch (KeyNotFoundException) { return NotFound(); } }
 
     [HttpPost("runs/clear")]
     [HttpPost("system/clear-runs")]
@@ -131,6 +143,10 @@ public sealed class TimerController : ControllerBase
     public async Task<ActionResult<GroupQueueState>> QueueMoveDown([FromBody] QueueIndexRequest request, CancellationToken cancellationToken) => Ok(await _system.MoveGroupQueueItemAsync(request.Index, 1, cancellationToken));
     [HttpPost("group-queue/remove")]
     public async Task<ActionResult<GroupQueueState>> QueueRemove([FromBody] QueueIndexRequest request, CancellationToken cancellationToken) => Ok(await _system.RemoveGroupQueueAtAsync(request.Index, cancellationToken));
+    [HttpPost("group-queue/start-session")]
+    public async Task<ActionResult<SystemStatus>> StartQueueSession([FromBody] StartRunRequest? request, CancellationToken cancellationToken) { try { await _system.StartGroupQueueSessionAsync(request?.TrailName ?? request?.TrackName, cancellationToken); return Ok(await _system.GetStatusAsync(cancellationToken)); } catch (InvalidOperationException ex) { return Conflict(new { error = ex.Message }); } }
+    [HttpPost("group-queue/stop-session")]
+    public async Task<ActionResult<SystemStatus>> StopQueueSession(CancellationToken cancellationToken) { await _system.StopGroupQueueSessionAsync(cancellationToken); return Ok(await _system.GetStatusAsync(cancellationToken)); }
 
     [HttpPost("rfid/simulate")]
     public async Task<ActionResult<object>> SimulateRfid([FromBody] RfidSimulateRequest request, CancellationToken cancellationToken)
@@ -199,7 +215,7 @@ public sealed class TimerController : ControllerBase
     }
 
     private static IActionResult CsvFile(string fileName, string csv) => new FileContentResult(Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(csv)).ToArray(), "text/csv; charset=utf-8") { FileDownloadName = fileName };
-    private static string BuildRunsCsv(IEnumerable<RunRecord> runs) => Csv(new[] { "runId", "riderId", "riderName", "trailName", "operationMode", "queuePosition", "startTimestampMs", "finishTimestampMs", "resultMs", "resultFormatted", "status", "isPersonalBest", "createdAtMs" }, runs.OrderByDescending(r => r.StartTimestampMs).Select(r => new[] { r.RunId.ToString(), r.RiderId?.ToString() ?? string.Empty, r.RiderName, r.TrailName, r.OperationMode.ToString(), r.QueuePosition?.ToString() ?? string.Empty, r.StartTimestampMs.ToString(), r.FinishTimestampMs?.ToString() ?? string.Empty, r.ResultMs?.ToString() ?? string.Empty, r.ResultFormatted, r.Status.ToString(), r.IsPersonalBest.ToString(), r.CreatedAtMs.ToString() }));
+    private static string BuildRunsCsv(IEnumerable<RunRecord> runs) => Csv(new[] { "runId", "riderId", "riderName", "trailName", "operationMode", "queuePosition", "sequenceNumber", "startTimestampMs", "finishTimestampMs", "resultMs", "resultFormatted", "status", "isPersonalBest", "createdAtMs" }, runs.OrderByDescending(r => r.StartTimestampMs).Select(r => new[] { r.RunId.ToString(), r.RiderId?.ToString() ?? string.Empty, r.RiderName, r.TrailName, r.OperationMode.ToString(), r.QueuePosition?.ToString() ?? string.Empty, r.SequenceNumber.ToString(), r.StartTimestampMs.ToString(), r.FinishTimestampMs?.ToString() ?? string.Empty, r.ResultMs?.ToString() ?? string.Empty, r.ResultFormatted, r.Status.ToString(), r.IsPersonalBest.ToString(), r.CreatedAtMs.ToString() }));
     private static string BuildRidersCsv(IEnumerable<RegisteredRider> riders) => Csv(new[] { "riderId", "displayName", "rfidTagId", "isActive", "createdAtMs" }, riders.Select(r => new[] { r.RiderId.ToString(), r.DisplayName, r.RfidTagId ?? string.Empty, r.IsActive.ToString(), r.CreatedAtMs.ToString() }));
     private static string BuildStatisticsCsv(IEnumerable<RiderStatisticsDto> stats) => Csv(new[] { "riderId", "riderName", "totalRuns", "finishedRuns", "dnfRuns", "bestResultMs", "bestResultFormatted", "averageResultMs", "averageResultFormatted", "lastResultMs", "lastResultFormatted", "bestTrailName" }, stats.Select(s => new[] { s.RiderId?.ToString() ?? string.Empty, s.RiderName, s.TotalRuns.ToString(), s.FinishedRuns.ToString(), s.DnfRuns.ToString(), s.BestResultMs?.ToString() ?? string.Empty, s.BestResultFormatted ?? string.Empty, s.AverageResultMs?.ToString() ?? string.Empty, s.AverageResultFormatted ?? string.Empty, s.LastResultMs?.ToString() ?? string.Empty, s.LastResultFormatted ?? string.Empty, s.BestTrailName }));
     private static string Csv(string[] header, IEnumerable<string[]> rows) => string.Join('\n', new[] { string.Join(';', header.Select(Escape)) }.Concat(rows.Select(row => string.Join(';', row.Select(Escape))))) + "\n";
