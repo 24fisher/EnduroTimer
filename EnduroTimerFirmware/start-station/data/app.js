@@ -22,7 +22,7 @@ function renderStatus(status) {
   $('loraStats').textContent = status.loraLastRssi === null ? 'No packets' : `${status.loraLastRssi.toFixed(0)} dBm / ${status.loraLastSnr.toFixed(1)} dB`;
   $('countdown').textContent = status.countdownText || '—';
   $('lastResult').textContent = status.lastResultFormatted || '—';
-  $('lastSource').textContent = status.lastFinishSource || 'Finish simulation: 20 seconds after RUN_START';
+  $('lastSource').textContent = status.lastFinishSource || 'Finish button on lower Heltec';
   $('riderName').textContent = status.currentRiderName || 'Test Rider';
   $('runId').textContent = status.currentRunId || '—';
   $('startBtn').disabled = status.state === 'Countdown' || status.state === 'Riding';
@@ -57,7 +57,7 @@ async function refresh() {
 $('startBtn').addEventListener('click', async () => {
   try {
     await api('/api/runs/start', { method: 'POST' });
-    showMessage('Countdown started. FinishStation will simulate finish after 20 seconds.');
+    showMessage('Countdown started. Press the finish button on the lower Heltec after RUN_START.');
     refresh();
   } catch (error) {
     showMessage(error.message, true);

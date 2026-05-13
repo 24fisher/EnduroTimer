@@ -1,6 +1,7 @@
 #include "FinishStationApp.h"
 
 #include <SPI.h>
+#include <esp_system.h>
 
 #include "RadioProtocol.h"
 
@@ -13,60 +14,82 @@ static constexpr int LORA_DIO1 = 14;
 static constexpr int LORA_RST = 12;
 static constexpr int LORA_BUSY = 13;
 static constexpr uint8_t MaxFinishAttempts = 5;
+static constexpr uint32_t StatusIntervalMs = 2000UL;
+static constexpr uint32_t DisplayRefreshMs = 200UL;
+RTC_DATA_ATTR static uint32_t finishBootCounter = 0;
 static SX1262 radio = new Module(LORA_NSS, LORA_DIO1, LORA_RST, LORA_BUSY);
 
 void FinishStationApp::begin() {
   Serial.begin(115200);
   delay(300);
-  Serial.println("[FinishStation] boot");
+  finishBootCounter += 1;
+
+  Serial.println();
+  Serial.println("FINISH STATION BOOT");
+  Serial.println("Firmware: EnduroTimer FinishStation");
+  Serial.printf("Build: %s %s\n", __DATE__, __TIME__);
+  Serial.println("Serial: OK");
+  Serial.println("Board/role: Heltec WiFi LoRa 32 V3 / FinishStation");
+  Serial.printf("Boot counter: %lu\n", static_cast<unsigned long>(finishBootCounter));
+  Serial.printf("Chip: %s rev %u cores=%u efuseMac=%llX\n", ESP.getChipModel(), ESP.getChipRevision(), ESP.getChipCores(), ESP.getEfuseMac());
 
   display_.begin();
-  display_.showBoot("FINISH");
+  display_.showBoot("FINISH STATION");
+  delay(1200);
+
   buzzer_.begin();
   beginRadio();
+  sensor_.begin();
   state_.begin();
+  Serial.printf("State: %s\n", state_.stateText().c_str());
 }
 
 void FinishStationApp::loop() {
+  const uint32_t now = clock_.nowMs();
   pollRadio();
+  updateLed(now);
 
   uint32_t finishTimestampMs = 0;
-  if (sensor_.update(clock_.nowMs(), finishTimestampMs)) {
-    Serial.printf("[FinishStation] simulated finish fired: %lu\n", static_cast<unsigned long>(finishTimestampMs));
-    state_.markFinishSent(finishTimestampMs);
-    finishAttempts_ = 0;
-    lastFinishSendMs_ = 0;
-    sendFinish();
+  if (sensor_.update(now, finishTimestampMs)) {
+    if (state_.state() == FinishRunState::WaitFinish) {
+      state_.markFinishSent(finishTimestampMs);
+      finishAttempts_ = 0;
+      lastFinishSendMs_ = 0;
+      sendFinish();
+    } else {
+      Serial.println("Finish button ignored: no active run");
+    }
   }
 
   if (state_.state() == FinishRunState::FinishSent && finishAttempts_ < MaxFinishAttempts &&
-      clock_.nowMs() - lastFinishSendMs_ >= 1000UL) {
+      now - lastFinishSendMs_ >= 1000UL) {
     sendFinish();
   }
 
-  if (state_.state() == FinishRunState::FinishSent && finishAttempts_ >= MaxFinishAttempts) {
-    Serial.println("[FinishStation] FINISH attempts exceeded");
+  if (state_.state() == FinishRunState::FinishSent && finishAttempts_ >= MaxFinishAttempts &&
+      now - lastFinishSendMs_ >= 1000UL) {
+    Serial.println("FINISH_ACK timeout.");
     state_.fail();
   }
 
-  if (clock_.nowMs() - lastStatusMs_ >= 3000UL) {
+  if (now - lastStatusMs_ >= StatusIntervalMs) {
     sendStatus();
-    lastStatusMs_ = clock_.nowMs();
+    lastStatusMs_ = now;
   }
 
-  if (clock_.nowMs() - lastDisplayMs_ >= 500UL) {
+  if (now - lastDisplayMs_ >= DisplayRefreshMs) {
     updateDisplay();
-    lastDisplayMs_ = clock_.nowMs();
+    lastDisplayMs_ = now;
   }
 }
 
 void FinishStationApp::beginRadio() {
-  Serial.println("[FinishStation] initializing LoRa SX1262");
+  Serial.printf("LoRa: init %.0f MHz...\n", LORA_FREQUENCY_MHZ);
   SPI.begin(9, 11, 10, LORA_NSS);
   const int initState = radio.begin(LORA_FREQUENCY_MHZ);
   radioReady_ = initState == RADIOLIB_ERR_NONE;
   if (!radioReady_) {
-    Serial.printf("[FinishStation] LoRa init failed: %d\n", initState);
+    Serial.printf("LoRa: init failed (%d)\n", initState);
     return;
   }
 
@@ -74,7 +97,28 @@ void FinishStationApp::beginRadio() {
   radio.setSpreadingFactor(7);
   radio.setCodingRate(5);
   radio.setOutputPower(14);
-  Serial.println("[FinishStation] LoRa initialized");
+  Serial.println("LoRa: OK");
+}
+
+void FinishStationApp::updateLed(uint32_t nowMs) {
+#ifdef LED_BUILTIN
+  static bool configured = false;
+  if (!configured) {
+    pinMode(LED_BUILTIN, OUTPUT);
+    configured = true;
+  }
+  uint32_t interval = 1000UL;
+  if (state_.state() == FinishRunState::Boot) interval = 120UL;
+  if (state_.state() == FinishRunState::WaitFinish || state_.state() == FinishRunState::FinishSent) interval = 180UL;
+  if (state_.state() == FinishRunState::Error) interval = 100UL;
+  if (nowMs - lastLedMs_ >= interval) {
+    ledOn_ = !ledOn_;
+    digitalWrite(LED_BUILTIN, ledOn_ ? HIGH : LOW);
+    lastLedMs_ = nowMs;
+  }
+#else
+  (void)nowMs;
+#endif
 }
 
 void FinishStationApp::pollRadio() {
@@ -113,10 +157,14 @@ void FinishStationApp::sendStatus() {
   message.messageId = RadioProtocol::makeMessageId("finish-status");
   message.stationId = "finish";
   message.state = state_.stateText();
+  message.source = "FinishStation";
   message.beamClear = true;
+  message.buttonReady = true;
   message.timestampMs = clock_.nowMs();
+  if (state_.runId().length() > 0) message.runId = state_.runId();
   if (sendRadio(message)) {
-    Serial.printf("[FinishStation] STATUS sent: %s\n", message.state.c_str());
+    heartbeatCounter_ += 1;
+    Serial.printf("[FinishStation] STATUS sent: %s heartbeat=%lu\n", message.state.c_str(), static_cast<unsigned long>(heartbeatCounter_));
   }
 }
 
@@ -126,7 +174,7 @@ void FinishStationApp::sendFinish() {
   message.messageId = RadioProtocol::makeMessageId("finish");
   message.runId = state_.runId();
   message.finishTimestampMs = state_.finishTimestampMs();
-  message.source = "SIMULATED_SENSOR_20S";
+  message.source = "BUTTON_STUB";
   if (sendRadio(message)) {
     finishAttempts_ += 1;
     lastFinishSendMs_ = clock_.nowMs();
@@ -136,16 +184,6 @@ void FinishStationApp::sendFinish() {
 }
 
 void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
-  if (message.type == RadioMessageType::Ping) {
-    RadioMessage pong;
-    pong.type = RadioMessageType::Pong;
-    pong.messageId = RadioProtocol::makeMessageId("pong");
-    pong.stationId = "finish";
-    pong.timestampMs = clock_.nowMs();
-    sendRadio(pong);
-    return;
-  }
-
   if (message.type == RadioMessageType::RunStart) {
     Serial.printf("[FinishStation] RUN_START received: run=%s start=%lu\n", message.runId.c_str(),
                   static_cast<unsigned long>(message.startTimestampMs));
@@ -166,14 +204,18 @@ void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
 
 void FinishStationApp::updateDisplay() {
   const String runShort = state_.runId().length() > 0 ? state_.runId().substring(max(0, static_cast<int>(state_.runId().length()) - 6)) : "-";
-  const uint32_t simSeconds = min<uint32_t>(20, sensor_.elapsedMs(clock_.nowMs()) / 1000UL);
+
+  if (state_.state() == FinishRunState::Error) {
+    display_.showLines({"FINISH", String("LoRa: ") + (radioReady_ ? "OK" : "OFF"), "ACK TIMEOUT", "Run: " + runShort, "Sent: " + String(finishAttempts_) + "/5"});
+    return;
+  }
 
   display_.showLines({
     "FINISH",
-    String("LoRa ") + (radioReady_ ? "OK" : "ERR"),
+    String("LoRa: ") + (radioReady_ ? "OK" : "OFF"),
     "State: " + state_.stateText(),
     "Run: " + runShort,
-    "Sim: " + String(simSeconds) + "/20s",
-    "Sent: " + String(finishAttempts_) + "/5 " + lastPacket_,
+    state_.state() == FinishRunState::WaitFinish ? "Btn: finish" : "Btn: finish sim",
+    "Sent: " + String(finishAttempts_) + "/5 H:" + String(heartbeatCounter_),
   });
 }

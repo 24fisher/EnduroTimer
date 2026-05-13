@@ -5,9 +5,11 @@
 
 class OledDisplay {
 public:
-  void begin();
+  bool begin();
+  bool available() const { return initialized_; }
   void showLines(const std::vector<String>& lines);
   void showBoot(const String& role);
+  void showCountdown(const String& text);
 
 private:
   bool initialized_ = false;
