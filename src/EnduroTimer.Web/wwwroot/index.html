@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="ru">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -14,33 +14,43 @@
     button { cursor:pointer; }
     button.primary { background:#0b5; border-color:#0c6; color:#001b0c; font-weight:bold; }
     button.warn { background:#633; }
+    button.active { background:#1677ff; border-color:#8dc1ff; box-shadow:0 0 0 2px rgba(22,119,255,.35); font-weight:bold; }
     table { width:100%; border-collapse:collapse; font-size:13px; }
-    th, td { border-bottom:1px solid #333; padding:5px; text-align:left; }
+    th, td { border-bottom:1px solid #333; padding:5px; text-align:left; vertical-align:top; }
     .led { background:#000; color:#ff3; font:700 38px/1.3 monospace; text-align:center; padding:22px; border-radius:8px; border:2px solid #555; min-height:52px; }
+    .modeLine { margin-top:8px; color:#8dc1ff; font-weight:bold; text-align:center; }
     .status { display:grid; grid-template-columns:1fr 1fr; gap:4px 12px; font-size:14px; }
     .bad { color:#ff7777; } .good { color:#66e088; }
     .small { font-size:12px; opacity:.8; }
+    .currentTrail { margin:4px 0 8px; color:#66e088; }
   </style>
 </head>
 <body>
-  <h1>EnduroTimer Heltec ESP32-S3 reference UI</h1>
-  <p class="small">Single static HTML/CSS/JS page backed by JSON API and JSON/CSV/JSONL files.</p>
+  <h1>EnduroTimer Heltec ESP32-S3</h1>
+  <p class="small">Русский интерфейс для будущей Heltec/ESP32-вебки: статический HTML/CSS/JS, JSON API и файловое хранилище.</p>
   <div class="grid">
-    <section><h2>System status</h2><div id="status" class="status"></div><button onclick="api('/api/time/sync','POST')">Sync time</button><input id="offset" type="number" value="250"><button onclick="simulateOffset()">Simulate RTC offset</button></section>
-    <section><h2>LED display preview</h2><div id="led" class="led">SYNC TIME</div></section>
-    <section><h2>Settings</h2><input id="trailName" placeholder="Trail name"><input id="groupStartIntervalSeconds" type="number" min="3" value="10" title="Group start interval, seconds"><button onclick="saveSettings()">Save settings</button></section>
-    <section><h2>Rider selection</h2><div id="selected"></div><button onclick="api('/api/encoder/left','POST')">Encoder Left</button><button onclick="api('/api/encoder/press','POST')">Select</button><button onclick="api('/api/encoder/right','POST')">Encoder Right</button></section>
-    <section><h2>RFID simulation</h2><input id="tagId" placeholder="E2000017221101441890ABCD"><button onclick="simulateRfid()">Simulate RFID</button><div id="rfidResult" class="small"></div></section>
-    <section><h2>Start controls</h2><button onclick="setMode('ManualEncoderSelection')">ManualEncoderSelection</button><button onclick="setMode('GroupQueue')">GroupQueue</button><br><button class="primary" onclick="api('/api/runs/start','POST',{})">START</button><button onclick="api('/api/group-queue/stop-session','POST')">Stop group session</button><button onclick="api('/api/finish/simulate','POST')">Simulate finish sensor</button><div class="small" id="nextFinisher">Next finisher: -</div><button class="warn" onclick="api('/api/system/reset','POST')">Reset</button></section>
-    <section><h2>Registered riders</h2><input id="riderName" placeholder="Display name"><input id="riderTag" placeholder="RFID tag id"><button onclick="addRider()">Add rider</button><table><tbody id="riders"></tbody></table></section>
-    <section><h2>Group queue</h2><label><input id="loopQueue" type="checkbox" checked onchange="saveQueue()"> Loop</label><div class="status" id="queueSummary"></div><div id="activeRiders"></div><table><tbody id="queue"></tbody></table><button onclick="api('/api/group-queue/next','POST')">Next</button><button onclick="api('/api/group-queue/reset','POST')">Reset position</button></section>
-    <section><h2>Active runs</h2><table><thead><tr><th>FIFO #</th><th>Run ID</th><th>Rider</th><th>Started</th><th>Elapsed</th><th>Status</th><th>Expected finisher</th><th>Actions</th></tr></thead><tbody id="activeRuns"></tbody></table></section>
-    <section><h2>Recent runs</h2><table><tbody id="runs"></tbody></table></section>
-    <section><h2>Rider statistics</h2><table><tbody id="stats"></tbody></table></section>
-    <section><h2>Export CSV/Backup</h2><a href="/api/export/runs.csv">Export runs CSV</a><br><a href="/api/export/riders.csv">Export riders CSV</a><br><a href="/api/export/statistics.csv">Export statistics CSV</a><br><a href="/api/export/backup.json">Export backup JSON</a></section>
+    <section><h2>Статус системы</h2><div id="status" class="status"></div><button onclick="api('/api/time/sync','POST')">Синхронизировать время</button><input id="offset" type="number" value="250"><button onclick="simulateOffset()">Эмулировать сдвиг RTC</button></section>
+    <section><h2>LED-дисплей</h2><div id="led" class="led">SYNC TIME</div><div id="ledMode" class="modeLine">Режим: -</div></section>
+    <section><h2>Настройки</h2><div id="currentTrail" class="currentTrail">Текущая трасса: -</div><input id="trailName" placeholder="Название трассы"><input id="groupStartIntervalSeconds" type="number" min="3" value="10" title="Интервал старта группы, секунд"><button onclick="saveSettings()">Сохранить трассу</button></section>
+    <section><h2>Выбор райдера</h2><div id="selected"></div><button onclick="api('/api/encoder/left','POST')">Энкодер влево</button><button onclick="api('/api/encoder/press','POST')">Выбрать</button><button onclick="api('/api/encoder/right','POST')">Энкодер вправо</button></section>
+    <section><h2>Эмуляция RFID</h2><input id="tagId" placeholder="E2000017221101441890ABCD"><button onclick="simulateRfid()">Эмулировать RFID</button><div id="rfidResult" class="small"></div></section>
+    <section><h2>Старт</h2><div id="modeLabel" class="modeLine">Режим: -</div><button id="modeManual" onclick="setMode('ManualEncoderSelection')">Выбор райдера</button><button id="modeQueue" onclick="setMode('GroupQueue')">Очередь группы</button><br><button class="primary" onclick="api('/api/runs/start','POST',{})">Старт</button><button class="primary" onclick="api('/api/group-queue/start-session','POST',{})">Запустить очередь</button><button onclick="api('/api/group-queue/stop-session','POST')">Остановить очередь</button><button onclick="api('/api/finish/simulate','POST')">Эмулировать финишный датчик</button><div class="small" id="nextFinisher">Следующий финиширующий: -</div><button class="warn" onclick="api('/api/system/reset','POST')">Сброс</button></section>
+    <section><h2>Зарегистрированные райдеры</h2><input id="riderName" placeholder="Имя"><input id="riderTag" placeholder="RFID-метка"><button onclick="addRider()">Добавить райдера</button><table><thead><tr><th>Имя</th><th>Активен</th><th>Действия</th></tr></thead><tbody id="riders"></tbody></table></section>
+    <section><h2>Очередь группы</h2><div class="status" id="queueSummary"></div><div id="activeRiders"></div><table><tbody id="queue"></tbody></table><button onclick="api('/api/group-queue/next','POST')">Следующий</button><button onclick="api('/api/group-queue/reset','POST')">Сбросить позицию</button></section>
+    <section><h2>Текущий заезд</h2><table><thead><tr><th>FIFO #</th><th>Run ID</th><th>Райдер</th><th>Трасса</th><th>Старт</th><th>Время</th><th>Статус</th><th>Ожидаемый финиш</th><th>Действия</th></tr></thead><tbody id="activeRuns"></tbody></table></section>
+    <section><h2>Результаты</h2><table><thead><tr><th>Райдер</th><th>Трасса</th><th>Результат</th><th>Статус</th></tr></thead><tbody id="runs"></tbody></table></section>
+    <section><h2>Статистика райдеров</h2><table><thead><tr><th>Райдер</th><th>Финиши/Всего</th><th>Лучшее</th><th>Среднее</th><th>Лучшая трасса</th></tr></thead><tbody id="stats"></tbody></table></section>
+    <section><h2>Экспорт CSV/Backup</h2><a href="/api/export/runs.csv">Экспорт заездов CSV</a><br><a href="/api/export/riders.csv">Экспорт райдеров CSV</a><br><a href="/api/export/statistics.csv">Экспорт статистики CSV</a><br><a href="/api/export/backup.json">Резервная копия JSON</a></section>
   </div>
 <script>
 let state={status:{},riders:[],queue:{groupQueue:[]},settings:{}};
+let trailInputDirty=false;
+const modeNames={ManualEncoderSelection:'Выбор райдера',GroupQueue:'Очередь группы'};
+const statusNames={Ready:'Готово',Countdown:'Отсчёт',Riding:'На трассе',Finished:'Финишировал',Error:'Ошибка',WaitFinish:'Ожидание финиша',Offline:'Нет связи',Boot:'Загрузка',Pending:'Ожидает',Dnf:'DNF'};
+const blockedNames={'Finish beam is blocked':'Луч перекрыт','Time synchronization required':'Нужно синхронизировать время','Finish station is offline':'Нет связи с финишем','No rider selected':'Райдер не выбран','No active riders registered':'Нет активных райдеров','Group queue session already running':'Очередь уже запущена','Group queue is empty':'Очередь пуста','Critical station error':'Ошибка станции','Run already active':'Заезд уже активен'};
+const trailInput=document.getElementById('trailName');
+trailInput.addEventListener('input',()=>trailInputDirty=true);
+trailInput.addEventListener('focus',()=>trailInputDirty=true);
 async function api(url, method='GET', body){
   const res=await fetch(url,{method,headers:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});
   if(!res.ok){ alert((await res.json()).error||res.statusText); throw new Error(res.statusText); }
@@ -50,29 +60,37 @@ async function load(url){ const res=await fetch(url); return res.json(); }
 async function refresh(){
   state.status=await load('/api/status'); state.riders=await load('/api/riders'); state.queue=await load('/api/group-queue'); state.settings=await load('/api/settings');
   const runs=await load('/api/runs'); const stats=await load('/api/statistics/riders');
-  document.getElementById('led').textContent=state.status.ledDisplayText||''; document.getElementById('trailName').value=state.settings.trailName||''; document.getElementById('groupStartIntervalSeconds').value=state.settings.groupStartIntervalSeconds||10;
-  document.getElementById('status').innerHTML=rows({startState:state.status.startStationState,finishState:state.status.finishStationState,operationMode:state.status.operationMode,timeSync:state.status.isTimeSynchronized,canStart:state.status.canStartRun,blocked:state.status.startBlockedReason,beamClear:state.status.beamClear,finishOnline:state.status.finishStationOnline,rtcOffsetMs:state.status.rtcOffsetMs,lastResult:state.status.lastResultFormatted});
-  document.getElementById('selected').textContent=`Selected: ${state.status.selectedRiderName||'-'} / Next: ${state.status.nextRiderName||'-'}`;
-  document.getElementById('nextFinisher').textContent=`Next finisher: ${state.status.expectedFinisherRiderName||'-'}`;
+  document.getElementById('led').textContent=state.status.ledDisplayText||'';
+  const modeText=`Режим: ${modeNames[state.status.operationMode]||state.status.operationMode||'-'}`;
+  document.getElementById('modeLabel').textContent=modeText; document.getElementById('ledMode').textContent=modeText;
+  document.getElementById('modeManual').classList.toggle('active',state.status.operationMode==='ManualEncoderSelection');
+  document.getElementById('modeQueue').classList.toggle('active',state.status.operationMode==='GroupQueue');
+  document.getElementById('currentTrail').textContent=`Текущая трасса: ${state.settings.trailName||'Трасса по умолчанию'}`;
+  if(!trailInputDirty && document.activeElement!==trailInput) trailInput.value=state.settings.trailName||'';
+  document.getElementById('groupStartIntervalSeconds').value=state.settings.groupStartIntervalSeconds||10;
+  document.getElementById('status').innerHTML=rows({'Стартовая станция':trState(state.status.startStationState),'Финишная станция':trState(state.status.finishStationState),'Режим':modeNames[state.status.operationMode]||state.status.operationMode,'Синхронизация времени':state.status.isTimeSynchronized,'Можно стартовать':state.status.canStartRun,'Блокировка':blockedNames[state.status.startBlockedReason]||state.status.startBlockedReason||'-','Луч свободен':state.status.beamClear,'Финиш онлайн':state.status.finishStationOnline,'Сдвиг RTC, мс':state.status.rtcOffsetMs,'Последний результат':state.status.lastResultFormatted});
+  document.getElementById('selected').textContent=`Выбран: ${state.status.selectedRiderName||'-'} / Следующий: ${state.status.nextRiderName||'-'}`;
+  document.getElementById('nextFinisher').textContent=`Следующий финиширующий: ${state.status.expectedFinisherRiderName||'-'}`;
   renderRiders(); renderQueue(); renderActiveRuns(); renderRuns(runs); renderStats(stats);
 }
-function rows(o){return Object.entries(o).map(([k,v])=>`<div>${k}</div><div class="${v===true?'good':v===false?'bad':''}">${v??''}</div>`).join('')}
+function trState(v){return statusNames[v]||v||'-'}
+function rows(o){return Object.entries(o).map(([k,v])=>`<div>${k}</div><div class="${v===true?'good':v===false?'bad':''}">${v===true?'Да':v===false?'Нет':esc(v??'')}</div>`).join('')}
 function renderRiders(){
-  document.getElementById('riders').innerHTML=state.riders.map(r=>`<tr><td>${esc(r.displayName)}<br><span class="small">${r.rfidTagId||''}</span></td><td>${r.isActive?'active':'inactive'}</td><td><button onclick="editRider('${r.riderId}','${esc(r.displayName)}','${esc(r.rfidTagId||'')}')">Edit</button><button onclick="api('/api/riders/${r.riderId}/deactivate','POST')">Deactivate</button></td></tr>`).join('');
+  document.getElementById('riders').innerHTML=state.riders.map(r=>`<tr><td>${esc(r.displayName)}<br><span class="small">${esc(r.rfidTagId||'')}</span></td><td>${r.isActive?'Да':'Нет'}</td><td><button onclick="editRider('${r.riderId}','${esc(r.displayName)}','${esc(r.rfidTagId||'')}')">Сохранить</button><button onclick="api('/api/riders/${r.riderId}/deactivate','POST')">Деактивировать</button></td></tr>`).join('');
   document.getElementById('activeRiders').innerHTML=state.riders.filter(r=>r.isActive).map(r=>`<button onclick="addToQueue('${r.riderId}')">+ ${esc(r.displayName)}</button>`).join('');
 }
-function renderQueue(){ document.getElementById('loopQueue').checked=state.queue.loopGroupQueue; document.getElementById('queueSummary').innerHTML=rows({'Session running':state.status.queueAutoStartEnabled,'Now starting':state.status.currentStartingRiderName||'-','Next preparing':state.status.nextQueuedRiderName||'-','On trail':state.status.activeRunsCount||0,'Position':`${state.status.groupQueuePosition}/${state.status.groupQueueLength}`}); document.getElementById('queue').innerHTML=(state.queue.groupQueue||[]).map((r,i)=>`<tr><td>${i===state.queue.groupQueuePosition?'▶ ':''}${esc(r.displayName)}</td><td><button onclick="move(${i},'up')">Up</button><button onclick="move(${i},'down')">Down</button><button onclick="removeQ(${i})">Remove</button></td></tr>`).join(''); }
-function renderActiveRuns(){ const runs=state.status.activeRuns||[]; document.getElementById('activeRuns').innerHTML=runs.map((r,i)=>`<tr><td>${i+1}</td><td>${String(r.runId).slice(0,8)}</td><td>${esc(r.riderName)}</td><td>${new Date(r.startedAtMs).toLocaleTimeString()}</td><td>${r.elapsedFormatted}</td><td>Riding</td><td>${i===0?'Expected finisher':''}</td><td><button onclick="api('/api/runs/${r.runId}/dnf','POST')">DNF</button></td></tr>`).join(''); }
-function renderRuns(runs){ document.getElementById('runs').innerHTML=runs.map(r=>`<tr><td>${esc(r.riderName)}</td><td>${r.resultFormatted}</td><td>${r.status}</td></tr>`).join(''); }
-function renderStats(stats){ document.getElementById('stats').innerHTML=stats.map(s=>`<tr><td>${esc(s.riderName)}</td><td>${s.finishedRuns}/${s.totalRuns}</td><td>${s.bestResultFormatted||''}</td><td>${s.averageResultFormatted||''}</td></tr>`).join(''); }
+function renderQueue(){ document.getElementById('queueSummary').innerHTML=rows({'Сессия запущена':state.status.queueAutoStartEnabled,'Сейчас стартует':state.status.currentStartingRiderName||'-','Следующий готовится':state.status.nextQueuedRiderName||'-','На трассе':state.status.activeRunsCount||0,'Позиция':`${state.status.groupQueuePosition}/${state.status.groupQueueLength}`}); document.getElementById('queue').innerHTML=(state.queue.groupQueue||[]).map((r,i)=>`<tr><td>${i===state.queue.groupQueuePosition?'▶ ':''}${esc(r.displayName)}</td><td><button onclick="move(${i},'up')">Вверх</button><button onclick="move(${i},'down')">Вниз</button><button onclick="removeQ(${i})">Удалить</button></td></tr>`).join(''); }
+function renderActiveRuns(){ const runs=state.status.activeRuns||[]; document.getElementById('activeRuns').innerHTML=runs.map((r,i)=>`<tr><td>${i+1}</td><td>${String(r.runId).slice(0,8)}</td><td>${esc(r.riderName)}</td><td>${esc(r.trailName||'')}</td><td>${new Date(r.startedAtMs).toLocaleTimeString()}</td><td>${r.elapsedFormatted}</td><td>На трассе</td><td>${i===0?'Ожидаемый финиш':''}</td><td><button onclick="api('/api/runs/${r.runId}/dnf','POST')">DNF</button></td></tr>`).join(''); }
+function renderRuns(runs){ document.getElementById('runs').innerHTML=runs.map(r=>`<tr><td>${esc(r.riderName)}</td><td>${esc(r.trailName||'')}</td><td>${r.resultFormatted}</td><td>${trState(r.status)}</td></tr>`).join(''); }
+function renderStats(stats){ document.getElementById('stats').innerHTML=stats.map(s=>`<tr><td>${esc(s.riderName)}</td><td>${s.finishedRuns}/${s.totalRuns}</td><td>${s.bestResultFormatted||''}</td><td>${s.averageResultFormatted||''}</td><td>${esc(s.bestTrailName||'')}</td></tr>`).join(''); }
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function setMode(operationMode){return api('/api/mode','POST',{operationMode})}
 function simulateOffset(){return api('/api/time/simulate-offset','POST',{rtcOffsetMs:Number(document.getElementById('offset').value)})}
-function saveSettings(){return api('/api/settings','POST',{trailName:document.getElementById('trailName').value,groupStartIntervalSeconds:Number(document.getElementById('groupStartIntervalSeconds').value)})}
+async function saveSettings(){await api('/api/settings','POST',{trailName:trailInput.value,groupStartIntervalSeconds:Number(document.getElementById('groupStartIntervalSeconds').value)}); trailInputDirty=false; await refresh();}
 function addRider(){return api('/api/riders','POST',{displayName:document.getElementById('riderName').value,rfidTagId:document.getElementById('riderTag').value})}
-function editRider(id,name,tag){const displayName=prompt('Display name',name); if(!displayName)return; const rfidTagId=prompt('RFID tag id',tag); return api(`/api/riders/${id}`,'PUT',{displayName,rfidTagId,isActive:true})}
-async function simulateRfid(){const data=await api('/api/rfid/simulate','POST',{tagId:document.getElementById('tagId').value}); document.getElementById('rfidResult').textContent=`Last: ${data.tagId}, matched: ${data.matchedRiderName||'none'}`;}
-function saveQueue(ids){ const riderIds=ids||state.queue.groupQueue.map(x=>x.riderId); return api('/api/group-queue','POST',{riderIds,loop:document.getElementById('loopQueue').checked});}
+function editRider(id,name,tag){const displayName=prompt('Имя',name); if(!displayName)return; const rfidTagId=prompt('RFID-метка',tag); return api(`/api/riders/${id}`,'PUT',{displayName,rfidTagId,isActive:true})}
+async function simulateRfid(){const data=await api('/api/rfid/simulate','POST',{tagId:document.getElementById('tagId').value}); document.getElementById('rfidResult').textContent=`Последняя метка: ${data.tagId}, райдер: ${data.matchedRiderName||'нет'}`;}
+function saveQueue(ids){ const riderIds=ids||state.queue.groupQueue.map(x=>x.riderId); return api('/api/group-queue','POST',{riderIds});}
 function addToQueue(id){ saveQueue([...state.queue.groupQueue.map(x=>x.riderId),id]); }
 function move(index,d){return api(`/api/group-queue/move-${d}`,'POST',{index})}
 function removeQ(index){return api('/api/group-queue/remove','POST',{index})}

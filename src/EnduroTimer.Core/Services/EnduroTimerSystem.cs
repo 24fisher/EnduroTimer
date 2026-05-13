@@ -18,7 +18,7 @@ public sealed class EnduroTimerSystem
     private string? _selectedRiderName;
     private readonly List<Guid> _groupQueue = new();
     private int _groupQueuePosition;
-    private bool _loopGroupQueue = true;
+    private bool _groupQueueFinished;
     private string? _rfidBlockedReason;
     private long _showFinishedResultUntilMs;
     private string? _finishedResultLedText;
@@ -115,28 +115,26 @@ public sealed class EnduroTimerSystem
     {
         await EnsureQueueLoadedAsync(cancellationToken);
         var riders = await _riders.ListAsync(true, cancellationToken);
-        Guid[] ids; int pos; bool loop; lock (_gate) { ids = _groupQueue.ToArray(); pos = _groupQueuePosition; loop = _loopGroupQueue; }
+        Guid[] ids; int pos; lock (_gate) { ids = _groupQueue.ToArray(); pos = _groupQueuePosition; }
         var entries = ids.Select(id => riders.FirstOrDefault(r => r.RiderId == id)).Where(r => r is not null).Select(r => new GroupQueueEntry { RiderId = r!.RiderId, DisplayName = r.DisplayName }).ToList();
         var next = entries.Count == 0 || pos >= entries.Count ? null : entries[pos];
-        return new GroupQueueState { GroupQueue = entries, GroupQueuePosition = pos, LoopGroupQueue = loop, NextRiderId = next?.RiderId, NextRiderName = next?.DisplayName };
+        return new GroupQueueState { GroupQueue = entries, GroupQueuePosition = pos, NextRiderId = next?.RiderId, NextRiderName = next?.DisplayName };
     }
 
-    public async Task<GroupQueueState> SetGroupQueueAsync(IEnumerable<Guid> riderIds, bool loopGroupQueue, CancellationToken cancellationToken = default)
+    public async Task<GroupQueueState> SetGroupQueueAsync(IEnumerable<Guid> riderIds, CancellationToken cancellationToken = default)
     {
         await EnsureQueueLoadedAsync(cancellationToken);
         var active = await _riders.ListAsync(false, cancellationToken); var unique = riderIds.Distinct().ToList();
         if (unique.Any(id => active.All(r => r.RiderId != id))) throw new ArgumentException("Group queue can contain only active riders");
-        lock (_gate) { _groupQueue.Clear(); _groupQueue.AddRange(unique); _groupQueuePosition = 0; _loopGroupQueue = loopGroupQueue; }
+        lock (_gate) { _groupQueue.Clear(); _groupQueue.AddRange(unique); _groupQueuePosition = 0; _groupQueueFinished = false; }
         await PersistQueueAsync(cancellationToken);
         await RefreshLedAsync(cancellationToken); return await GetGroupQueueAsync(cancellationToken);
     }
 
     public async Task<GroupQueueState> MoveGroupQueueNextAsync(CancellationToken cancellationToken = default) { await AdvanceQueueAsync(cancellationToken); return await GetGroupQueueAsync(cancellationToken); }
-    public async Task<GroupQueueState> ResetGroupQueueAsync(CancellationToken cancellationToken = default) { await EnsureQueueLoadedAsync(cancellationToken); lock (_gate) _groupQueuePosition = 0; await PersistQueueAsync(cancellationToken); await RefreshLedAsync(cancellationToken); return await GetGroupQueueAsync(cancellationToken); }
+    public async Task<GroupQueueState> ResetGroupQueueAsync(CancellationToken cancellationToken = default) { await EnsureQueueLoadedAsync(cancellationToken); lock (_gate) { _groupQueuePosition = 0; _groupQueueFinished = false; } await PersistQueueAsync(cancellationToken); await RefreshLedAsync(cancellationToken); return await GetGroupQueueAsync(cancellationToken); }
     public async Task<GroupQueueState> RemoveGroupQueueAtAsync(int index, CancellationToken cancellationToken = default) { await EnsureQueueLoadedAsync(cancellationToken); lock (_gate) { if (index >= 0 && index < _groupQueue.Count) _groupQueue.RemoveAt(index); if (_groupQueuePosition > _groupQueue.Count) _groupQueuePosition = _groupQueue.Count; } await PersistQueueAsync(cancellationToken); await RefreshLedAsync(cancellationToken); return await GetGroupQueueAsync(cancellationToken); }
     public async Task<GroupQueueState> MoveGroupQueueItemAsync(int index, int delta, CancellationToken cancellationToken = default) { await EnsureQueueLoadedAsync(cancellationToken); lock (_gate) { var target = index + delta; if (index >= 0 && index < _groupQueue.Count && target >= 0 && target < _groupQueue.Count) { (_groupQueue[index], _groupQueue[target]) = (_groupQueue[target], _groupQueue[index]); if (_groupQueuePosition == index) _groupQueuePosition = target; else if (_groupQueuePosition == target) _groupQueuePosition = index; } } await PersistQueueAsync(cancellationToken); await RefreshLedAsync(cancellationToken); return await GetGroupQueueAsync(cancellationToken); }
-    public async Task<GroupQueueState> SetQueueLoopAsync(bool loop, CancellationToken cancellationToken = default) { await EnsureQueueLoadedAsync(cancellationToken); lock (_gate) _loopGroupQueue = loop; await PersistQueueAsync(cancellationToken); await RefreshLedAsync(cancellationToken); return await GetGroupQueueAsync(cancellationToken); }
-
     public async Task<RfidReadResult> SimulateRfidAsync(string tagId, CancellationToken cancellationToken = default) => await _rfid.SimulateReadAsync(tagId, cancellationToken);
 
     public async Task<RunRecord> StartRunAsync(string? fallbackRider, string? trailName, CancellationToken cancellationToken = default)
@@ -168,9 +166,12 @@ public sealed class EnduroTimerSystem
         lock (_gate)
         {
             if (_queueSessionCts is not null) throw new InvalidOperationException("Group queue session already running");
+            _groupQueuePosition = 0;
+            _groupQueueFinished = false;
             _queueSessionCts = cts;
         }
-        _ = Task.Run(() => RunGroupQueueLoopAsync(trailName!, intervalSeconds, cts.Token), CancellationToken.None);
+        await PersistQueueAsync(cancellationToken);
+        _ = Task.Run(() => RunGroupQueueSessionAsync(trailName!, intervalSeconds, cts.Token), CancellationToken.None);
     }
 
     public async Task StopGroupQueueSessionAsync(CancellationToken cancellationToken = default)
@@ -234,10 +235,10 @@ public sealed class EnduroTimerSystem
     public async Task ResetAsync(CancellationToken cancellationToken = default)
     {
         StopGroupQueueSession();
-        Lower.Reset(); await Upper.ResetAsync(cancellationToken); lock (_gate) { _selectedRiderId = null; _selectedRiderName = null; _groupQueuePosition = 0; _rfidBlockedReason = null; _activeRuns.Clear(); ClearStartingState(); } await RefreshLedAsync(cancellationToken);
+        Lower.Reset(); await Upper.ResetAsync(cancellationToken); lock (_gate) { _selectedRiderId = null; _selectedRiderName = null; _groupQueuePosition = 0; _groupQueueFinished = false; _rfidBlockedReason = null; _activeRuns.Clear(); ClearStartingState(); } await RefreshLedAsync(cancellationToken);
     }
 
-    private async Task RunGroupQueueLoopAsync(string trailName, int intervalSeconds, CancellationToken token)
+    private async Task RunGroupQueueSessionAsync(string trailName, int intervalSeconds, CancellationToken token)
     {
         try
         {
@@ -360,7 +361,7 @@ public sealed class EnduroTimerSystem
             if (!Lower.Diagnostics.Online) return "Finish station is offline";
             if (!Lower.BeamClear) return "Finish beam is blocked";
             if (!Upper.IsTimeSynchronized) return "Time synchronization required";
-            var q = await GetGroupQueueAsync(ct); if (q.GroupQueue.Count == 0) return "Group queue is empty"; if (q.GroupQueuePosition >= q.GroupQueue.Count && !q.LoopGroupQueue) return "Group queue finished";
+            var q = await GetGroupQueueAsync(ct); if (q.GroupQueue.Count == 0) return "Group queue is empty";
             return null;
         }
 
@@ -392,8 +393,7 @@ public sealed class EnduroTimerSystem
             var nextIndex = _groupQueuePosition + 1;
             if (nextIndex >= _groupQueue.Count)
             {
-                if (!_loopGroupQueue) return null;
-                nextIndex = 0;
+                return null;
             }
             id = _groupQueue[nextIndex];
         }
@@ -406,7 +406,7 @@ public sealed class EnduroTimerSystem
     {
         RunRecord[] runs; lock (_gate) runs = _activeRuns.OrderBy(r => r.SequenceNumber).ThenBy(r => r.StartTimestampMs).ToArray();
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        return runs.Select(r => new ActiveRunStatus { RunId = r.RunId, RiderId = r.RiderId, RiderName = r.RiderName, StartedAtMs = r.StartTimestampMs, ElapsedFormatted = TimeFormatter.FormatResult(now - r.StartTimestampMs), SequenceNumber = r.SequenceNumber }).ToList();
+        return runs.Select(r => new ActiveRunStatus { RunId = r.RunId, RiderId = r.RiderId, RiderName = r.RiderName, TrailName = r.TrailName, StartedAtMs = r.StartTimestampMs, ElapsedFormatted = TimeFormatter.FormatResult(now - r.StartTimestampMs), SequenceNumber = r.SequenceNumber }).ToList();
     }
 
     private async Task RefreshLedAsync(CancellationToken ct)
@@ -416,23 +416,24 @@ public sealed class EnduroTimerSystem
         if (!Lower.BeamClear) { _led.SetText("BEAM BLOCKED"); return; }
         if (OperationMode == SystemOperationMode.GroupQueue)
         {
-            string? finished; long until; string countdown; string? current; string? next;
-            lock (_gate) { finished = _finishedResultLedText; until = _showFinishedResultUntilMs; countdown = _groupCountdownText; current = _currentStartingRiderName; next = _nextQueuedRiderName; }
+            string? finished; long until; string countdown; string? current; string? next; bool queueFinished;
+            lock (_gate) { finished = _finishedResultLedText; until = _showFinishedResultUntilMs; countdown = _groupCountdownText; current = _currentStartingRiderName; next = _nextQueuedRiderName; queueFinished = _groupQueueFinished || (_groupQueue.Count > 0 && _groupQueuePosition >= _groupQueue.Count && _queueSessionCts is null); }
             if (!string.IsNullOrEmpty(finished) && DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() < until) { _led.SetText(finished); return; }
             if (!string.IsNullOrEmpty(countdown) && !string.IsNullOrWhiteSpace(current)) { _led.SetText($"{countdown} {current}"); return; }
             var q = await GetGroupQueueAsync(ct);
-            if (q.GroupQueue.Count == 0) { _led.SetText("QUEUE EMPTY"); return; }
+            if (q.GroupQueue.Count == 0) { _led.SetText("ОЧЕРЕДЬ ПУСТА"); return; }
+            if (queueFinished) { _led.SetText("ОЧЕРЕДЬ ГОТОВА"); return; }
             var nowName = current ?? q.NextRiderName;
             var nextName = next ?? (await GetQueuedRiderAfterCurrentAsync(ct))?.DisplayName;
-            _led.SetText(nowName is null ? "QUEUE DONE" : $"NOW {nowName} | NEXT {nextName ?? "-"}");
+            _led.SetText(nowName is null ? "ОЧЕРЕДЬ ГОТОВА" : $"СЕЙЧАС {nowName} | ДАЛЬШЕ {nextName ?? "-"}");
             return;
         }
 
-        if (!string.IsNullOrEmpty(Upper.CountdownText)) { _led.SetText(Upper.CountdownText); return; }
-        if (Upper.ActiveRun is { } active) { _led.SetText(string.IsNullOrWhiteSpace(active.RiderName) ? "RIDING" : active.RiderName); return; }
+        if (!string.IsNullOrEmpty(Upper.CountdownText)) { _led.SetText(string.IsNullOrWhiteSpace(SelectedRiderName) ? Upper.CountdownText : $"{Upper.CountdownText} {SelectedRiderName}"); return; }
+        if (Upper.ActiveRun is { } active) { _led.SetText(string.IsNullOrWhiteSpace(active.RiderName) ? "НА ТРАССЕ" : $"{active.RiderName} on course"); return; }
         if (Upper.LastRun?.Status == RunStatus.Finished && Upper.LastRun.ResultMs is not null && DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() < _showFinishedResultUntilMs) { _led.SetText(TimeFormatter.FormatResult(Upper.LastRun.ResultMs)); return; }
-        if (!(await _riders.ListAsync(false, ct)).Any()) _led.SetText("NO RIDERS");
-        else _led.SetText(SelectedRiderName ?? "SELECT RIDER");
+        if (!(await _riders.ListAsync(false, ct)).Any()) _led.SetText("НЕТ РАЙДЕРОВ");
+        else _led.SetText(string.IsNullOrWhiteSpace(SelectedRiderName) ? "ВЫБЕРИ РАЙДЕРА" : $"{SelectedRiderName} on course");
     }
 
     private async Task EnsureQueueLoadedAsync(CancellationToken ct)
@@ -445,20 +446,20 @@ public sealed class EnduroTimerSystem
             _groupQueue.Clear();
             _groupQueue.AddRange(persisted.RiderIds);
             _groupQueuePosition = persisted.Position;
-            _loopGroupQueue = persisted.Loop;
+            _groupQueueFinished = _groupQueue.Count > 0 && _groupQueuePosition >= _groupQueue.Count;
             _queueLoaded = true;
         }
     }
 
     private Task PersistQueueAsync(CancellationToken ct)
     {
-        Guid[] ids; int position; bool loop;
-        lock (_gate) { ids = _groupQueue.ToArray(); position = _groupQueuePosition; loop = _loopGroupQueue; }
-        return _queueRepository.SaveAsync(new PersistedGroupQueue { RiderIds = ids.ToList(), Position = position, Loop = loop }, ct);
+        Guid[] ids; int position;
+        lock (_gate) { ids = _groupQueue.ToArray(); position = _groupQueuePosition; }
+        return _queueRepository.SaveAsync(new PersistedGroupQueue { RiderIds = ids.ToList(), Position = position }, ct);
     }
 
     private async Task OnManualRunFinishedAsync(RunRecord run, CancellationToken ct) { _showFinishedResultUntilMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 3000; await RefreshLedAsync(ct); _ = Task.Run(async () => { await Task.Delay(3000); Upper.ReadyAfterFinish(); await RefreshLedAsync(CancellationToken.None); }); }
-    private async Task AdvanceQueueAsync(CancellationToken ct) { await EnsureQueueLoadedAsync(ct); lock (_gate) { if (_groupQueue.Count == 0) return; _groupQueuePosition++; if (_groupQueuePosition >= _groupQueue.Count && _loopGroupQueue) _groupQueuePosition = 0; } await PersistQueueAsync(ct); await RefreshLedAsync(ct); }
+    private async Task AdvanceQueueAsync(CancellationToken ct) { await EnsureQueueLoadedAsync(ct); lock (_gate) { if (_groupQueue.Count == 0) return; _groupQueuePosition++; if (_groupQueuePosition >= _groupQueue.Count) _groupQueueFinished = true; } await PersistQueueAsync(ct); await RefreshLedAsync(ct); }
     private void ClearStartingState() { _currentStartingRunId = null; _currentStartingRiderId = null; _currentStartingRiderName = null; _nextQueuedRiderId = null; _nextQueuedRiderName = null; _groupCountdownText = string.Empty; }
     private async Task OnTagReadAsync(RfidReadResult read, CancellationToken ct)
     {

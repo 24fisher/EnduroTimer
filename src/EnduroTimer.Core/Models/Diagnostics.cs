@@ -17,6 +17,7 @@ public sealed class ActiveRunStatus
     public long StartedAtMs { get; init; }
     public string ElapsedFormatted { get; init; } = string.Empty;
     public int SequenceNumber { get; init; }
+    public string TrailName { get; init; } = RunRecord.DefaultTrailName;
 }
 
 public sealed class SystemStatus
