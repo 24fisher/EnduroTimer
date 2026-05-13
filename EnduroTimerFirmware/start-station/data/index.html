@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EnduroTimer StartStation</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="shell">
+    <section class="hero card">
+      <div>
+        <p class="eyebrow">Heltec WiFi LoRa 32 V3</p>
+        <h1>EnduroTimer StartStation</h1>
+        <p class="muted">LoRa smoke test with simulated finish sensor after 20 seconds.</p>
+      </div>
+      <div id="stateBadge" class="badge">Boot</div>
+    </section>
+
+    <section class="grid">
+      <article class="card metric">
+        <span>Finish station</span>
+        <strong id="finishOnline">—</strong>
+        <small id="finishState">state: —</small>
+      </article>
+      <article class="card metric">
+        <span>LoRa</span>
+        <strong id="loraStats">—</strong>
+        <small>RSSI / SNR from last packet</small>
+      </article>
+      <article class="card metric">
+        <span>Countdown</span>
+        <strong id="countdown">—</strong>
+        <small>3, 2, 1, GO</small>
+      </article>
+      <article class="card metric">
+        <span>Last result</span>
+        <strong id="lastResult">—</strong>
+        <small id="lastSource">—</small>
+      </article>
+    </section>
+
+    <section class="card controls">
+      <div>
+        <h2>Test run</h2>
+        <p>Rider: <strong id="riderName">Test Rider</strong></p>
+        <p>Current run: <code id="runId">—</code></p>
+      </div>
+      <div class="buttons">
+        <button id="startBtn">Start test run</button>
+        <button id="resetBtn" class="secondary">Reset</button>
+      </div>
+      <p id="message" class="message"></p>
+    </section>
+
+    <section class="card">
+      <h2>Recent runs in RAM</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Run ID</th><th>Rider</th><th>Result</th><th>Status</th></tr>
+          </thead>
+          <tbody id="runsBody"><tr><td colspan="4">No runs yet</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
