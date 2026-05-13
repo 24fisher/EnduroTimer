@@ -25,6 +25,8 @@ struct RadioMessage {
   bool hasBatteryVoltage = false;
   float batteryVoltage = 0.0F;
   uint32_t timestampMs = 0;
+  uint32_t uptimeMs = 0;
+  uint32_t heartbeat = 0;
   uint32_t startTimestampMs = 0;
   uint32_t finishTimestampMs = 0;
 };

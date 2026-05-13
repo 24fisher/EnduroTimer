@@ -26,6 +26,7 @@ bool WebServerController::begin() {
   Serial.println("[BOOT] WiFi AP init...");
   Serial.println("WiFi AP starting...");
   WiFi.mode(WIFI_AP);
+  WiFi.setSleep(false);
   apStarted_ = WiFi.softAP("EnduroTimer", "endurotimer");
   if (apStarted_) {
     Serial.println("WiFi AP OK");
@@ -108,6 +109,7 @@ void WebServerController::loop() {
 
 void WebServerController::sendJson(int code, const String& body) {
   server_.sendHeader("Access-Control-Allow-Origin", "*");
+  server_.sendHeader("Cache-Control", "no-store");
   server_.send(code, "application/json", body);
 }
 

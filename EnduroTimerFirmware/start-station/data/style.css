@@ -15,7 +15,7 @@ h1, h2, p { margin-top: 0; }
 .muted, small { color: #8b949e; }
 .badge { border-radius: 999px; padding: 10px 16px; background: #30363d; font-weight: 800; }
 .state-ready, .online { color: #3fb950; }
-.state-riding, .state-countdown { color: #d29922; }
+.state-riding, .state-countdown, .pending { color: #d29922; }
 .state-finished { color: #58a6ff; }
 .offline { color: #f85149; }
 .grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; margin-bottom: 14px; }
@@ -30,6 +30,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .message { min-height: 1.4em; margin: 8px 0 0; }
 .message.error { color: #ff7b72; }
 .message.ok { color: #7ee787; }
+.message.warning { color: #d29922; }
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; }
 th, td { border-bottom: 1px solid #30363d; padding: 10px; text-align: left; }

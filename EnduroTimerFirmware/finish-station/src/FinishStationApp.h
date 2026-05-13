@@ -44,4 +44,5 @@ private:
   bool ledOn_ = false;
   String lastPacket_ = "-";
   uint32_t showNoRunUntilMs_ = 0;
+  uint32_t showAckOkUntilMs_ = 0;
 };

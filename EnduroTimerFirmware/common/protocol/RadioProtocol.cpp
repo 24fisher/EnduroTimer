@@ -41,6 +41,8 @@ bool RadioProtocol::serialize(const RadioMessage& message, String& output) {
   if (message.state.length() > 0) doc["state"] = message.state;
   if (message.source.length() > 0) doc["source"] = message.source;
   if (message.timestampMs > 0) doc["timestampMs"] = message.timestampMs;
+  if (message.uptimeMs > 0) doc["uptimeMs"] = message.uptimeMs;
+  if (message.heartbeat > 0) doc["heartbeat"] = message.heartbeat;
   if (message.startTimestampMs > 0) doc["startTimestampMs"] = message.startTimestampMs;
   if (message.finishTimestampMs > 0) doc["finishTimestampMs"] = message.finishTimestampMs;
 
@@ -79,6 +81,8 @@ bool RadioProtocol::deserialize(const String& input, RadioMessage& output, Strin
   output.beamClear = doc["beamClear"] | true;
   output.buttonReady = doc["buttonReady"] | false;
   output.timestampMs = doc["timestampMs"] | 0;
+  output.uptimeMs = doc["uptimeMs"] | 0;
+  output.heartbeat = doc["heartbeat"] | 0;
   output.startTimestampMs = doc["startTimestampMs"] | 0;
   output.finishTimestampMs = doc["finishTimestampMs"] | 0;
 

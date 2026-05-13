@@ -34,6 +34,25 @@ The current Heltec V3 OLED configuration is fixed in `platformio.ini`:
 
 `OLED_TEST_PATTERN_ONLY=0` for the full smoke-test mode so application screens can update after the U8g2 boot test.
 
+
+## First hardware test fixes
+
+The first field smoke test on two Heltec WiFi LoRa 32 V3 boards led to these firmware adjustments:
+
+- Buttons now use debounced short press events, not long press. One press creates one start or finish request, and holding the BOOT/PRG button does not repeat the action.
+- StartStation accepts the physical start button only in `Ready`; other states are logged as ignored.
+- FinishStation accepts the physical finish button only in `WaitFinish`; `Idle` presses are logged as no active run, and `FinishSent` presses do not create duplicate `FINISH` messages.
+- Power saving is disabled at boot. StartStation disables Wi-Fi sleep with `WiFi.setSleep(false)`, and both roles log `Power save: disabled`.
+- FinishStation sends a `STATUS` heartbeat every 1 second with `stationId`, `state`, `uptimeMs`, `heartbeat`, `activeRunId`, and `buttonReady`.
+- StartStation keeps FinishStation online for 5 seconds after the last `STATUS`, so one lost heartbeat does not immediately flip the Web UI to offline.
+- `/api/status` now includes `finishLastSeenAgoMs`, `finishLastStatusMs`, `finishHeartbeatCount`, `loraLastRssi`, and `loraLastSnr` for easier LoRa diagnostics.
+- The countdown is non-blocking and OLED should show `3`, `2`, `1`, and `GO` as separate visible steps before `RUN_START`.
+- `FinishSent` is not an error. It means the lower station sent `FINISH` and is waiting for `FINISH_ACK`; it should be shown as a pending/normal state in the UI.
+- Finish retry remains timer-driven: one `FINISH` per second, up to 5 attempts. Only an ACK timeout after the final attempt becomes an error.
+- StartStation resends `FINISH_ACK` when it receives a duplicate `FINISH` for the already completed run, without creating a second result.
+- StartStation OLED keeps the finished result visible for at least 5 seconds, then the normal status screen keeps `Last: mm:ss.mmm`.
+- The Web UI polls less aggressively, uses `cache: no-store`, treats one or two fetch failures as a soft unstable-connection warning, and only shows `No response from station` after repeated failures. If `failed to fetch` appears, check for loop blocking, missing `webServer.handleClient()` calls, Wi-Fi AP stability, and LoRa/OLED calls that take too long.
+
 ## Build environments
 
 ### StartStation
@@ -187,6 +206,9 @@ Returns current smoke-test status, for example:
   "finishState": "Idle",
   "loraLastRssi": -72,
   "loraLastSnr": 8.5,
+  "finishLastSeenAgoMs": 1200,
+  "finishLastStatusMs": 123000,
+  "finishHeartbeatCount": 42,
   "currentRunId": "",
   "currentRiderName": "Test Rider",
   "countdownText": "",
@@ -242,13 +264,13 @@ The minimum Web UI shows:
 - Notes: `Старт: кнопка на верхнем Heltec или кнопка в вебке.` and `Финиш: кнопка на нижнем Heltec.`
 - Recent runs table
 
-The UI polls `/api/status` every 500 ms.
+The UI polls `/api/status` every 1000 ms and handles short fetch outages without breaking the dashboard.
 
 ## LoRa protocol
 
 The firmware uses the shared `RadioProtocol` / `RadioMessage` JSON protocol.
 
-FinishStation sends `STATUS` every 2 seconds. StartStation marks FinishStation online when a status packet was received within the last 6 seconds.
+FinishStation sends `STATUS` every 1 second. StartStation marks FinishStation online when a status packet was received within the last 5 seconds.
 
 StartStation sends `RUN_START` on GO:
 

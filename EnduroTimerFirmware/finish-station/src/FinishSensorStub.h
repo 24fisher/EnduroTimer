@@ -2,6 +2,8 @@
 
 #include <Arduino.h>
 
+#include "ButtonDebouncer.h"
+
 #ifndef FINISH_BUTTON_PIN
 #define FINISH_BUTTON_PIN 0
 #endif
@@ -20,8 +22,5 @@ private:
   String runId_;
   uint32_t localArmedAtMs_ = 0;
   uint32_t startTimestampMs_ = 0;
-  int stableState_ = HIGH;
-  int lastReading_ = HIGH;
-  uint32_t lastChangeMs_ = 0;
-  bool pressConsumed_ = false;
+  ButtonDebouncer button_;
 };

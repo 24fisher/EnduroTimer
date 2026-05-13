@@ -20,6 +20,7 @@ WebServerController web(app);
 static bool beginWifiApOnly() {
   Serial.println("WiFi AP init...");
   WiFi.mode(WIFI_AP);
+  WiFi.setSleep(false);
   const bool apStarted = WiFi.softAP("EnduroTimer", "endurotimer");
   if (apStarted) {
     Serial.printf("WiFi AP OK, IP=%s\n", WiFi.softAPIP().toString().c_str());
@@ -97,6 +98,9 @@ void loop() {
     Serial.println(now);
   }
 
+#if ENABLE_WIFI && ENABLE_WEB
+  web.loop();
+#endif
   app.loop();
 #if ENABLE_WIFI && ENABLE_WEB
   web.loop();
