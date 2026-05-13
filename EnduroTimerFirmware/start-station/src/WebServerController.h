@@ -8,7 +8,7 @@ class StartStationApp;
 class WebServerController {
 public:
   explicit WebServerController(StartStationApp& app);
-  void begin();
+  bool begin();
   void loop();
   bool apStarted() const { return apStarted_; }
 
@@ -20,4 +20,5 @@ private:
   StartStationApp& app_;
   WebServer server_;
   bool apStarted_ = false;
+  bool webStarted_ = false;
 };

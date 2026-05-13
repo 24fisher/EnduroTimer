@@ -8,20 +8,22 @@
 
 WebServerController::WebServerController(StartStationApp& app) : app_(app), server_(80) {}
 
-void WebServerController::begin() {
-  Serial.println("WiFi AP: starting...");
+bool WebServerController::begin() {
+  Serial.println("WiFi AP init...");
   WiFi.mode(WIFI_AP);
   apStarted_ = WiFi.softAP("EnduroTimer", "endurotimer");
-  Serial.printf("WiFi AP: softAP result=%s\n", apStarted_ ? "true" : "false");
   if (apStarted_) {
+    Serial.println("WiFi AP OK");
     Serial.println("WiFi AP: SSID EnduroTimer");
     Serial.printf("WiFi AP: IP %s\n", WiFi.softAPIP().toString().c_str());
     Serial.printf("WiFi AP: MAC %s\n", WiFi.softAPmacAddress().c_str());
   } else {
-    Serial.println("WiFi AP failed.");
+    Serial.println("WiFi AP FAIL");
   }
 
-  if (!LittleFS.begin(true)) {
+  Serial.println("WebServer init...");
+  const bool fsMounted = LittleFS.begin(true);
+  if (!fsMounted) {
     Serial.println("[StartStation] LittleFS mount failed");
   }
 
@@ -69,7 +71,9 @@ void WebServerController::begin() {
   });
 
   server_.begin();
-  Serial.println("WebServer: started");
+  webStarted_ = apStarted_ && fsMounted;
+  Serial.println(webStarted_ ? "WebServer OK" : "WebServer FAIL");
+  return webStarted_;
 }
 
 void WebServerController::loop() {

@@ -184,6 +184,24 @@ pio run -e finish_station -t upload
 - Some board revisions may require changing the GPIO in `platformio.ini`.
 - Buttons are configured as `INPUT_PULLUP`; pressed state is `LOW`.
 
+
+### Serial monitor is empty after flashing
+
+- Keep the serial monitor open at `115200` baud and press the board **Reset/EN** button to replay the boot log.
+- Confirm that the expected PlatformIO environment was flashed: `start_station` for the StartStation board or `finish_station` for the FinishStation board.
+- Confirm that `monitor_speed = 115200` is set in `platformio.ini`.
+- Confirm that `Serial.begin(115200)` is the first action in each firmware `setup()` before OLED, LoRa, Wi-Fi, WebServer, or other services are initialized.
+- Check the USB cable, selected COM port, and whether the cable supports data rather than charge-only power.
+
+### PlatformIO warns that `data_dir` is ignored
+
+- `data_dir` must be configured in the top-level `[platformio]` section, not inside an `[env:*]` section.
+- The StartStation Web UI filesystem uses `data_dir = start-station/data` and `board_build.filesystem = littlefs`.
+- After flashing StartStation firmware, upload the Web UI filesystem:
+  ```bash
+  pio run -e start_station -t uploadfs
+  ```
+
 ## Current stubs and intentional limitations
 
 - Finish sensor: physical finish button stub only, no E3JK GPIO implementation yet.

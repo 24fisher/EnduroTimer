@@ -22,22 +22,17 @@ RTC_DATA_ATTR static uint32_t startBootCounter = 0;
 static SX1262 radio = new Module(LORA_NSS, LORA_DIO1, LORA_RST, LORA_BUSY);
 
 void StartStationApp::begin() {
-  Serial.begin(115200);
-  delay(300);
   startBootCounter += 1;
 
-  Serial.println();
-  Serial.println("START STATION BOOT");
   Serial.println("Firmware: EnduroTimer StartStation");
-  Serial.printf("Build: %s %s\n", __DATE__, __TIME__);
-  Serial.println("Serial: OK");
   Serial.println("Board/role: Heltec WiFi LoRa 32 V3 / StartStation");
   Serial.printf("Boot counter: %lu\n", static_cast<unsigned long>(startBootCounter));
   Serial.printf("Chip: %s rev %u cores=%u efuseMac=%llX\n", ESP.getChipModel(), ESP.getChipRevision(), ESP.getChipCores(), ESP.getEfuseMac());
 
-  display_.begin();
-  display_.showBoot("START STATION");
-  delay(1200);
+  if (display_.begin()) {
+    display_.showBoot("START STATION");
+    delay(1200);
+  }
 
   buzzer_.begin();
   beginRadio();
@@ -64,6 +59,8 @@ void StartStationApp::loop() {
     updateDisplay();
     lastDisplayMs_ = now;
   }
+
+  logHeartbeat(now);
 }
 
 bool StartStationApp::requestStartRun(String& error) {
@@ -140,12 +137,12 @@ String StartStationApp::runsJson() const {
 }
 
 void StartStationApp::beginRadio() {
-  Serial.printf("LoRa: init %.0f MHz...\n", LORA_FREQUENCY_MHZ);
+  Serial.printf("LoRa init... %.0f MHz\n", LORA_FREQUENCY_MHZ);
   SPI.begin(9, 11, 10, LORA_NSS);
   const int state = radio.begin(LORA_FREQUENCY_MHZ);
   radioReady_ = state == RADIOLIB_ERR_NONE;
   if (!radioReady_) {
-    Serial.printf("LoRa: init failed (%d)\n", state);
+    Serial.printf("LoRa FAIL (%d)\n", state);
     return;
   }
 
@@ -153,7 +150,7 @@ void StartStationApp::beginRadio() {
   radio.setSpreadingFactor(7);
   radio.setCodingRate(5);
   radio.setOutputPower(14);
-  Serial.println("LoRa: OK");
+  Serial.println("LoRa OK");
 }
 
 void StartStationApp::configureButton() {
@@ -314,4 +311,13 @@ void StartStationApp::updateDisplay() {
     String("Finish: ") + (finishOnline() ? "OK" : "OFF"),
     "State: " + state_.stateText(),
   });
+}
+
+void StartStationApp::logHeartbeat(uint32_t nowMs) {
+  if (nowMs - lastHeartbeatMs_ < 1000UL) return;
+
+  String heartbeatState = state_.stateText();
+  heartbeatState.toUpperCase();
+  Serial.printf("START alive state=%s uptime=%lu\n", heartbeatState.c_str(), static_cast<unsigned long>(nowMs));
+  lastHeartbeatMs_ = nowMs;
 }
