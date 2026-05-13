@@ -41,37 +41,35 @@
 #define OLED_SCAN_ONLY 0
 #endif
 
-#ifndef OLED_I2C_ADDRESS
-#define OLED_I2C_ADDRESS 0x3C
+#ifndef OLED_VEXT_ON_LEVEL
+#define OLED_VEXT_ON_LEVEL 0
 #endif
 
 static constexpr uint32_t OledI2cClockHz = 100000UL;
-static constexpr uint16_t OledI2cTimeoutMs = 10;
+static constexpr uint16_t OledI2cTimeoutMs = 50;
+static constexpr uint8_t OledI2cAddress3c = 0x3C;
+static constexpr uint8_t OledI2cAddress3d = 0x3D;
 static U8G2_SSD1306_128X64_NONAME_F_HW_I2C display(U8G2_R0, OLED_RST, OLED_SCL, OLED_SDA);
 
-static bool scanI2cBus(uint8_t requiredAddress) {
-  bool foundAny = false;
-  bool foundRequired = false;
-
+static bool checkOledI2cAddresses() {
   Serial.println("I2C scan start");
-  for (uint8_t address = 1; address < 127; ++address) {
-    Wire.beginTransmission(address);
-    const uint8_t error = Wire.endTransmission();
-    if (error == 0) {
-      foundAny = true;
-      Serial.printf("Found I2C device: 0x%02X\n", address);
-      if (address == requiredAddress) {
-        foundRequired = true;
-      }
-    }
-    delay(1);
-  }
 
-  if (!foundAny) {
-    Serial.println("No I2C devices found");
+  Serial.println("Checking OLED I2C addr 0x3C...");
+  Wire.beginTransmission(OledI2cAddress3c);
+  const uint8_t err3c = Wire.endTransmission();
+  Serial.printf("OLED I2C 0x3C result=%u\n", err3c);
+
+  Serial.println("Checking OLED I2C addr 0x3D...");
+  Wire.beginTransmission(OledI2cAddress3d);
+  const uint8_t err3d = Wire.endTransmission();
+  Serial.printf("OLED I2C 0x3D result=%u\n", err3d);
+
+  const bool found = err3c == 0 || err3d == 0;
+  if (!found) {
+    Serial.println("No OLED I2C device found at 0x3C or 0x3D");
   }
   Serial.println("I2C scan done");
-  return foundRequired;
+  return found;
 }
 
 bool OledDisplay::begin() {
@@ -80,28 +78,31 @@ bool OledDisplay::begin() {
   Serial.println("OLED init begin");
 
 #if OLED_VEXT >= 0
+  Serial.printf("OLED VEXT enable: pin=%d level=%d\n", OLED_VEXT, OLED_VEXT_ON_LEVEL);
   pinMode(OLED_VEXT, OUTPUT);
-  digitalWrite(OLED_VEXT, LOW);
-  delay(50);
+  digitalWrite(OLED_VEXT, OLED_VEXT_ON_LEVEL);
+  delay(300);
+  Serial.printf("OLED VEXT enabled, readback=%d\n", digitalRead(OLED_VEXT));
 #else
-  Serial.println("OLED VEXT skipped (OLED_VEXT < 0)");
+  Serial.println("OLED VEXT skipped: OLED_VEXT < 0");
 #endif
 
+  Serial.printf("I2C begin SDA=%d SCL=%d\n", OLED_SDA, OLED_SCL);
   Wire.begin(OLED_SDA, OLED_SCL);
   Wire.setClock(OledI2cClockHz);
   Wire.setTimeOut(OledI2cTimeoutMs);
 
-  const bool oledAddressFound = scanI2cBus(OLED_I2C_ADDRESS);
+  const bool oledAddressFound = checkOledI2cAddresses();
   if (!oledAddressFound) {
-    Serial.printf("OLED not found at 0x%02X\n", OLED_I2C_ADDRESS);
+    Serial.println("OLED not found at 0x3C or 0x3D");
     Serial.println("OLED FAIL");
     return false;
   }
 
 #if OLED_SCAN_ONLY
   Serial.println("OLED scan-only mode, display init skipped");
-  Serial.println("OLED FAIL");
-  return false;
+  Serial.println("OLED OK");
+  return true;
 #else
   initialized_ = display.begin();
   if (!initialized_) {
