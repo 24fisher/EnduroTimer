@@ -30,20 +30,24 @@ void FinishStationApp::begin() {
   Serial.printf("Chip: %s rev %u cores=%u efuseMac=%llX\n", ESP.getChipModel(), ESP.getChipRevision(), ESP.getChipCores(), ESP.getEfuseMac());
 
 #if ENABLE_OLED
-  if (display_.begin()) {
+  Serial.println("[BOOT] OLED init...");
+  oledReady_ = display_.begin();
+  Serial.println(oledReady_ ? "[BOOT] OLED OK" : "[BOOT] OLED FAIL");
+  if (oledReady_) {
     display_.showBootScreen("FINISH");
   }
 #else
-  Serial.println("OLED init skipped (ENABLE_OLED=0)");
+  Serial.println("[BOOT] OLED init skipped (ENABLE_OLED=0)");
+  oledReady_ = false;
 #endif
 
+  Serial.println("[BOOT] Finish button init...");
+  sensor_.begin();
+  Serial.println("[BOOT] Finish button OK");
   buzzer_.begin();
   beginRadio();
-  Serial.println("Button init...");
-  sensor_.begin();
-  Serial.println("Button OK");
   state_.begin();
-  Serial.printf("State: %s\n", state_.stateText().c_str());
+  Serial.println("[BOOT] State Idle");
 }
 
 void FinishStationApp::loop() {
@@ -62,6 +66,7 @@ void FinishStationApp::loop() {
       sendFinish();
     } else {
       Serial.println("Finish button ignored: no active run");
+      showNoRunUntilMs_ = now + 1200UL;
     }
   }
 
@@ -94,12 +99,14 @@ void FinishStationApp::loop() {
 
 void FinishStationApp::beginRadio() {
 #if ENABLE_LORA
+  Serial.println("[BOOT] LoRa init...");
   Serial.printf("LoRa init... %.0f MHz\n", LORA_FREQUENCY_MHZ);
   SPI.begin(9, 11, 10, LORA_NSS);
   const int initState = radio.begin(LORA_FREQUENCY_MHZ);
   radioReady_ = initState == RADIOLIB_ERR_NONE;
   if (!radioReady_) {
     Serial.printf("LoRa FAIL (%d)\n", initState);
+    Serial.println("[BOOT] LoRa FAIL");
     return;
   }
 
@@ -108,8 +115,9 @@ void FinishStationApp::beginRadio() {
   radio.setCodingRate(5);
   radio.setOutputPower(14);
   Serial.println("LoRa OK");
+  Serial.println("[BOOT] LoRa OK");
 #else
-  Serial.println("LoRa init skipped (ENABLE_LORA=0)");
+  Serial.println("[BOOT] LoRa init skipped (ENABLE_LORA=0)");
   radioReady_ = false;
 #endif
 }
@@ -198,10 +206,13 @@ void FinishStationApp::sendFinish() {
   message.runId = state_.runId();
   message.finishTimestampMs = state_.finishTimestampMs();
   message.source = "BUTTON_STUB";
+  finishAttempts_ += 1;
+  lastFinishSendMs_ = clock_.nowMs();
   if (sendRadio(message)) {
-    finishAttempts_ += 1;
-    lastFinishSendMs_ = clock_.nowMs();
     Serial.printf("[FinishStation] FINISH sent: run=%s attempt=%u/%u\n", state_.runId().c_str(),
+                  finishAttempts_, MaxFinishAttempts);
+  } else {
+    Serial.printf("[FinishStation] FINISH send failed: run=%s attempt=%u/%u\n", state_.runId().c_str(),
                   finishAttempts_, MaxFinishAttempts);
   }
 }
@@ -228,23 +239,42 @@ void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
 void FinishStationApp::updateDisplay() {
   const String runShort = state_.runId().length() > 0 ? state_.runId().substring(max(0, static_cast<int>(state_.runId().length()) - 6)) : "-";
 
+  if (showNoRunUntilMs_ > millis()) {
+    display_.showLines({"NO RUN", "Press start", "on StartStation"});
+    return;
+  }
+
   if (state_.state() == FinishRunState::Error) {
-    display_.showLines({"FINISH", String("LoRa: ") + (radioReady_ ? "OK" : "OFF"), "ACK TIMEOUT", "Run: " + runShort, "Sent: " + String(finishAttempts_) + "/5"});
+    display_.showLines({"ERROR", String("LoRa: ") + (radioReady_ ? "OK" : "OFF"), "ACK TIMEOUT", "Run: " + runShort, "Sent: " + String(finishAttempts_) + "/5"});
+    return;
+  }
+
+  if (state_.state() == FinishRunState::WaitFinish) {
+    display_.showLines({"WAIT FINISH", "Run: " + runShort, "Btn: finish"});
+    return;
+  }
+
+  if (state_.state() == FinishRunState::FinishSent) {
+    display_.showLines({"FINISH SENT", "Run: " + runShort, "Sent: " + String(finishAttempts_) + "/5"});
     return;
   }
 
   display_.showLines({
     "ENDURO TIMER",
     "FINISH",
-    state_.stateText(),
-    "RUN: " + runShort,
-    String("LORA: ") + (radioReady_ ? "OK" : "OFF"),
+    String("LoRa: ") + (radioReady_ ? "OK" : "OFF"),
+    "IDLE",
+    "HB: " + String(heartbeatCounter_),
   });
 }
 
 void FinishStationApp::logHeartbeat(uint32_t nowMs) {
   if (nowMs - lastHeartbeatMs_ < 1000UL) return;
 
-  Serial.printf("FINISH alive state=%s uptime=%lu\n", state_.stateText().c_str(), static_cast<unsigned long>(nowMs));
+  String heartbeatState = state_.stateText();
+  heartbeatState.toUpperCase();
+  Serial.printf("FINISH alive state=%s uptime=%lu heap=%lu minHeap=%lu\n", heartbeatState.c_str(),
+                static_cast<unsigned long>(nowMs), static_cast<unsigned long>(ESP.getFreeHeap()),
+                static_cast<unsigned long>(ESP.getMinFreeHeap()));
   lastHeartbeatMs_ = nowMs;
 }

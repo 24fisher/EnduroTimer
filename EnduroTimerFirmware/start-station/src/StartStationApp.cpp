@@ -32,17 +32,21 @@ void StartStationApp::begin() {
   Serial.printf("Chip: %s rev %u cores=%u efuseMac=%llX\n", ESP.getChipModel(), ESP.getChipRevision(), ESP.getChipCores(), ESP.getEfuseMac());
 
 #if ENABLE_OLED
-  if (display_.begin()) {
+  Serial.println("[BOOT] OLED init...");
+  oledReady_ = display_.begin();
+  Serial.println(oledReady_ ? "[BOOT] OLED OK" : "[BOOT] OLED FAIL");
+  if (oledReady_) {
     display_.showBootScreen("START");
   }
 #else
-  Serial.println("OLED init skipped (ENABLE_OLED=0)");
+  Serial.println("[BOOT] OLED init skipped (ENABLE_OLED=0)");
+  oledReady_ = false;
 #endif
 
-  buzzer_.begin();
   configureButton();
+  Serial.println("[BOOT] Button OK");
+  buzzer_.begin();
   state_.begin();
-  Serial.printf("State: %s\n", state_.stateText().c_str());
 }
 
 void StartStationApp::loop() {
@@ -74,7 +78,9 @@ void StartStationApp::loop() {
 
 bool StartStationApp::requestStartRun(String& error) {
   Serial.println("Start run requested");
-  return state_.startCountdown(error);
+  const bool ok = state_.startCountdown(error);
+  if (!ok) error = "Run already active";
+  return ok;
 }
 
 void StartStationApp::resetSystem() {
@@ -96,6 +102,10 @@ void StartStationApp::setWifiStatus(bool apStarted, const IPAddress& ip, const S
 #endif
 }
 
+void StartStationApp::setWebStatus(bool webStarted) {
+  webStarted_ = webStarted;
+}
+
 String StartStationApp::statusJson() const {
   JsonDocument doc;
   const RunRecord& current = state_.currentRun();
@@ -103,26 +113,28 @@ String StartStationApp::statusJson() const {
 
   doc["device"] = "StartStation";
   doc["state"] = state_.stateText();
+  doc["oledOk"] = oledReady_;
+  doc["wifiOk"] = wifiApStarted_;
+  doc["webOk"] = webStarted_;
+  doc["loraOk"] = radioReady_;
   doc["finishStationOnline"] = finishOnline();
   doc["finishState"] = finishState_;
-  if (radioReady_) {
+  if (radioReady_ && lastFinishSeenMs_ > 0) {
     doc["loraLastRssi"] = lastRssi_;
     doc["loraLastSnr"] = lastSnr_;
   } else {
     doc["loraLastRssi"] = nullptr;
     doc["loraLastSnr"] = nullptr;
   }
-  if (current.runId.length() > 0) {
-    doc["currentRunId"] = current.runId;
-  } else {
-    doc["currentRunId"] = nullptr;
-  }
+  doc["currentRunId"] = current.runId;
   doc["currentRiderName"] = current.riderName.length() > 0 ? current.riderName : "Test Rider";
   doc["countdownText"] = state_.countdownText(millis());
   doc["lastResultMs"] = last.resultMs > 0 ? last.resultMs : 0;
   doc["lastResultFormatted"] = last.resultFormatted;
-  doc["lastFinishSource"] = last.finishSource;
+  doc["lastFinishSource"] = last.finishSource.length() > 0 ? last.finishSource : String("");
   doc["uptimeMs"] = millis();
+  doc["heap"] = ESP.getFreeHeap();
+  doc["minHeap"] = ESP.getMinFreeHeap();
 
   String output;
   serializeJson(doc, output);
@@ -150,12 +162,14 @@ String StartStationApp::runsJson() const {
 
 void StartStationApp::beginRadio() {
 #if ENABLE_LORA
+  Serial.println("[BOOT] LoRa init...");
   Serial.printf("LoRa init... %.0f MHz\n", LORA_FREQUENCY_MHZ);
   SPI.begin(9, 11, 10, LORA_NSS);
   const int state = radio.begin(LORA_FREQUENCY_MHZ);
   radioReady_ = state == RADIOLIB_ERR_NONE;
   if (!radioReady_) {
     Serial.printf("LoRa FAIL (%d)\n", state);
+    Serial.println("[BOOT] LoRa FAIL");
     return;
   }
 
@@ -164,8 +178,9 @@ void StartStationApp::beginRadio() {
   radio.setCodingRate(5);
   radio.setOutputPower(14);
   Serial.println("LoRa OK");
+  Serial.println("[BOOT] LoRa OK");
 #else
-  Serial.println("LoRa init skipped (ENABLE_LORA=0)");
+  Serial.println("[BOOT] LoRa init skipped (ENABLE_LORA=0)");
   radioReady_ = false;
 #endif
 }
@@ -302,10 +317,10 @@ void StartStationApp::handleRadioMessage(const RadioMessage& message) {
     if (state_.completeRun(message.runId, message.finishTimestampMs, message.source, completed)) {
       Serial.printf("[StartStation] result calculated: %s\n", completed.resultFormatted.c_str());
       buzzer_.beep("FINISH");
+      sendFinishAck(message.runId);
     } else {
-      Serial.println("[StartStation] FINISH ignored: run/state mismatch");
+      Serial.println("[StartStation] FINISH ignored: unknown runId or state mismatch");
     }
-    sendFinishAck(message.runId);
   }
 }
 
@@ -329,13 +344,18 @@ void StartStationApp::updateDisplay() {
     return;
   }
 
+  if (state_.state() == StartRunState::Riding) {
+    display_.showLines({"RIDING", "Run: " + runShort, String("FIN: ") + (finishOnline() ? "OK" : "OFF"), String("LoRa: ") + (radioReady_ ? "OK" : "OFF")});
+    return;
+  }
+
   display_.showLines({
     "ENDURO TIMER",
     "START",
-    state_.stateText(),
-    "IP: " + (wifiApStarted_ ? wifiIp_.toString() : String("-")),
+    "AP: " + (wifiApStarted_ ? wifiIp_.toString() : String("WIFI FAIL")),
     String("FIN: ") + (finishOnline() ? "OK" : "OFF"),
-    "LAST: " + lastResult,
+    String("LoRa: ") + (radioReady_ ? "OK" : "OFF"),
+    "READY",
   });
 }
 
@@ -344,6 +364,8 @@ void StartStationApp::logHeartbeat(uint32_t nowMs) {
 
   String heartbeatState = state_.stateText();
   heartbeatState.toUpperCase();
-  Serial.printf("START alive state=%s uptime=%lu\n", heartbeatState.c_str(), static_cast<unsigned long>(nowMs));
+  Serial.printf("START alive state=%s uptime=%lu heap=%lu minHeap=%lu finishOnline=%s\n", heartbeatState.c_str(),
+                static_cast<unsigned long>(nowMs), static_cast<unsigned long>(ESP.getFreeHeap()),
+                static_cast<unsigned long>(ESP.getMinFreeHeap()), finishOnline() ? "true" : "false");
   lastHeartbeatMs_ = nowMs;
 }

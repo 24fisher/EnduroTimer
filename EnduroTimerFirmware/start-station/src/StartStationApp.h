@@ -23,6 +23,7 @@ public:
   bool requestStartRun(String& error);
   void resetSystem();
   void setWifiStatus(bool apStarted, const IPAddress& ip, const String& mac);
+  void setWebStatus(bool webStarted);
   String statusJson() const;
   String runsJson() const;
 
@@ -44,8 +45,10 @@ private:
   BuzzerStub buzzer_;
   StartState state_;
 
+  bool oledReady_ = false;
   bool radioReady_ = false;
   bool wifiApStarted_ = false;
+  bool webStarted_ = false;
   IPAddress wifiIp_;
   String wifiMac_ = "-";
   uint32_t lastDisplayMs_ = 0;

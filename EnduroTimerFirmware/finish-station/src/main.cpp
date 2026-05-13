@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <rom/rtc.h>
 
 #include "FinishStationApp.h"
 
@@ -33,6 +34,7 @@ void setup() {
   Serial.println("Build: " __DATE__ " " __TIME__);
   Serial.println("Serial OK");
   Serial.println("================================");
+  Serial.printf("[BOOT] Reset reason CPU0=%d CPU1=%d\n", rtc_get_reset_reason(0), rtc_get_reset_reason(1));
 
   app.begin();
 }

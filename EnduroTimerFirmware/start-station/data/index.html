@@ -19,14 +19,19 @@
 
     <section class="grid">
       <article class="card metric">
+        <span>StartStation status</span>
+        <strong id="serviceFlags">—</strong>
+        <small>OLED / Wi-Fi / Web / LoRa</small>
+      </article>
+      <article class="card metric">
         <span>Finish station</span>
         <strong id="finishOnline">—</strong>
         <small id="finishState">state: —</small>
       </article>
       <article class="card metric">
-        <span>LoRa</span>
+        <span>RSSI/SNR</span>
         <strong id="loraStats">—</strong>
-        <small>RSSI / SNR from last packet</small>
+        <small>from last FinishStation packet</small>
       </article>
       <article class="card metric">
         <span>Countdown</span>
@@ -45,8 +50,8 @@
         <h2>Test run</h2>
         <p>Rider: <strong id="riderName">Test Rider</strong></p>
         <p>Current run: <code id="runId">—</code></p>
-        <p class="muted">Start can be launched with the physical button on the upper Heltec or with this Web UI button.</p>
-        <p class="muted">Finish is simulated by pressing the physical button on the lower Heltec.</p>
+        <p class="muted">Старт: кнопка на верхнем Heltec или кнопка в вебке.</p>
+        <p class="muted">Финиш: кнопка на нижнем Heltec.</p>
       </div>
       <div class="buttons">
         <button id="startBtn">Start test run</button>

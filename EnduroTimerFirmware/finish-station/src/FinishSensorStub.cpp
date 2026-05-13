@@ -46,8 +46,8 @@ bool FinishSensorStub::update(uint32_t nowMs, uint32_t& finishTimestampMs) {
   pressConsumed_ = true;
 
   if (!armed_) {
-    Serial.println("Finish button ignored: no active run");
-    return false;
+    finishTimestampMs = 0;
+    return true;
   }
 
   finishTimestampMs = startTimestampMs_ + (nowMs - localArmedAtMs_);

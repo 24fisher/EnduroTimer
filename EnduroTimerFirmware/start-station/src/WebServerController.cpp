@@ -6,25 +6,46 @@
 
 #include "StartStationApp.h"
 
+namespace {
+const char FallbackIndex[] PROGMEM = R"HTML(
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>EnduroTimer StartStation</title></head>
+<body style="font-family:system-ui,sans-serif;background:#0d1117;color:#f0f6fc;padding:24px">
+  <h1>EnduroTimer StartStation</h1>
+  <p>LittleFS web files not found</p>
+  <p>Use: <code>pio run -e start_station -t uploadfs</code></p>
+</body>
+</html>
+)HTML";
+}
+
 WebServerController::WebServerController(StartStationApp& app) : app_(app), server_(80) {}
 
 bool WebServerController::begin() {
-  Serial.println("WiFi AP init...");
+  Serial.println("[BOOT] WiFi AP init...");
+  Serial.println("WiFi AP starting...");
   WiFi.mode(WIFI_AP);
   apStarted_ = WiFi.softAP("EnduroTimer", "endurotimer");
   if (apStarted_) {
-    Serial.printf("WiFi AP OK, IP=%s\n", WiFi.softAPIP().toString().c_str());
-    Serial.println("WiFi AP: SSID EnduroTimer");
+    Serial.println("WiFi AP OK");
+    Serial.println("SSID: EnduroTimer");
+    Serial.printf("IP: %s\n", WiFi.softAPIP().toString().c_str());
     Serial.printf("WiFi AP: MAC %s\n", WiFi.softAPmacAddress().c_str());
+    Serial.printf("[BOOT] WiFi AP OK ssid=EnduroTimer ip=%s\n", WiFi.softAPIP().toString().c_str());
   } else {
     Serial.println("WiFi AP FAIL");
+    Serial.println("[BOOT] WiFi AP FAIL");
   }
 
-  Serial.println("WebServer init...");
-  const bool fsMounted = LittleFS.begin(true);
-  if (!fsMounted) {
-    Serial.println("[StartStation] LittleFS mount failed");
-  }
+  Serial.println("[BOOT] LittleFS init...");
+  fsMounted_ = LittleFS.begin(true);
+  Serial.println(fsMounted_ ? "[BOOT] LittleFS OK" : "[BOOT] LittleFS FAIL");
+
+  Serial.println("[BOOT] WebServer init...");
+  server_.on("/", HTTP_GET, [this]() {
+    if (!serveStaticFile("/index.html")) sendFallbackIndex();
+  });
 
   server_.on("/api/status", HTTP_GET, [this]() { sendJson(200, app_.statusJson()); });
 
@@ -41,7 +62,7 @@ bool WebServerController::begin() {
   server_.on("/api/runs/start", HTTP_POST, [this]() {
     String error;
     if (!app_.requestStartRun(error)) {
-      sendError(409, error);
+      sendError(409, error.length() > 0 ? error : String("Run already active"));
       return;
     }
     JsonDocument doc;
@@ -49,13 +70,14 @@ bool WebServerController::begin() {
     doc["state"] = "Countdown";
     String output;
     serializeJson(doc, output);
-    sendJson(202, output);
+    sendJson(200, output);
   });
 
   server_.on("/api/system/reset", HTTP_POST, [this]() {
     app_.resetSystem();
     JsonDocument doc;
     doc["ok"] = true;
+    doc["state"] = "Ready";
     String output;
     serializeJson(doc, output);
     sendJson(200, output);
@@ -66,12 +88,17 @@ bool WebServerController::begin() {
   server_.onNotFound([this]() {
     String path = server_.uri();
     if (path == "/") path = "/index.html";
-    if (!serveStaticFile(path)) sendError(404, "Not found");
+    if (serveStaticFile(path)) return;
+    if (path == "/index.html") {
+      sendFallbackIndex();
+      return;
+    }
+    sendError(404, "Not found");
   });
 
   server_.begin();
-  webStarted_ = apStarted_ && fsMounted;
-  Serial.println(webStarted_ ? "WebServer OK" : "WebServer FAIL");
+  webStarted_ = apStarted_;
+  Serial.println(webStarted_ ? "[BOOT] WebServer OK" : "[BOOT] WebServer FAIL");
   return webStarted_;
 }
 
@@ -93,8 +120,12 @@ void WebServerController::sendError(int code, const String& message) {
   sendJson(code, output);
 }
 
+void WebServerController::sendFallbackIndex() {
+  server_.send_P(200, "text/html", FallbackIndex);
+}
+
 bool WebServerController::serveStaticFile(const String& path) {
-  if (!LittleFS.exists(path)) return false;
+  if (!fsMounted_ || !LittleFS.exists(path)) return false;
 
   String contentType = "text/plain";
   if (path.endsWith(".html")) contentType = "text/html";
