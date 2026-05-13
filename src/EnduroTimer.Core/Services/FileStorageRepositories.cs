@@ -61,7 +61,7 @@ public sealed class FileSystemSettingsRepository(DataDirectory data) : ISystemSe
         try
         {
             var settings = await JsonFile.ReadAsync(Path, new SystemSettings(), cancellationToken);
-            if (string.IsNullOrWhiteSpace(settings.TrailName)) settings.TrailName = RunRecord.DefaultTrailName;
+            settings.TrailName = string.IsNullOrWhiteSpace(settings.TrailName) ? null : settings.TrailName.Trim();
             settings.GroupStartIntervalSeconds = Math.Max(3, settings.GroupStartIntervalSeconds);
             return settings;
         }
@@ -73,13 +73,127 @@ public sealed class FileSystemSettingsRepository(DataDirectory data) : ISystemSe
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            settings.TrailName = string.IsNullOrWhiteSpace(settings.TrailName) ? RunRecord.DefaultTrailName : settings.TrailName.Trim();
+            settings.TrailName = string.IsNullOrWhiteSpace(settings.TrailName) ? null : settings.TrailName.Trim();
             settings.GroupStartIntervalSeconds = Math.Max(3, settings.GroupStartIntervalSeconds);
             await JsonFile.WriteAsync(Path, settings, cancellationToken);
             return settings;
         }
         finally { _gate.Release(); }
     }
+}
+
+
+public sealed class FileTrailRepository(DataDirectory data, IClockService clock) : ITrailRepository
+{
+    private readonly SemaphoreSlim _gate = new(1, 1);
+    private string Path => data.File("trails.json");
+
+    public async Task<IReadOnlyList<Trail>> ListAsync(bool includeInactive = true, CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var trails = await EnsureAnyLockedAsync(null, cancellationToken);
+            return trails.Where(t => includeInactive || t.IsActive).Select(Clone).ToList();
+        }
+        finally { _gate.Release(); }
+    }
+
+    public async Task<Trail?> GetAsync(Guid trailId, CancellationToken cancellationToken = default) =>
+        (await ListAsync(true, cancellationToken)).FirstOrDefault(t => t.TrailId == trailId);
+
+    public async Task<Trail> AddAsync(string displayName, CancellationToken cancellationToken = default)
+    {
+        Validate(displayName);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var trails = await EnsureAnyLockedAsync(null, cancellationToken);
+            EnsureUniqueActiveName(trails, displayName, null);
+            var trail = new Trail { DisplayName = displayName.Trim(), IsActive = true, CreatedAtMs = clock.GetUnixTimeMilliseconds() };
+            trails.Add(trail);
+            await WriteAllAsync(trails, cancellationToken);
+            return Clone(trail);
+        }
+        finally { _gate.Release(); }
+    }
+
+    public async Task<Trail> UpdateAsync(Guid trailId, string displayName, bool isActive, CancellationToken cancellationToken = default)
+    {
+        Validate(displayName);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var trails = await EnsureAnyLockedAsync(null, cancellationToken);
+            var trail = trails.FirstOrDefault(t => t.TrailId == trailId) ?? throw new KeyNotFoundException("Trail not found.");
+            if (isActive) EnsureUniqueActiveName(trails, displayName, trailId);
+            trail.DisplayName = displayName.Trim();
+            trail.IsActive = isActive;
+            await WriteAllAsync(trails, cancellationToken);
+            return Clone(trail);
+        }
+        finally { _gate.Release(); }
+    }
+
+    public async Task DeactivateAsync(Guid trailId, CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var trails = await EnsureAnyLockedAsync(null, cancellationToken);
+            var trail = trails.FirstOrDefault(t => t.TrailId == trailId) ?? throw new KeyNotFoundException("Trail not found.");
+            trail.IsActive = false;
+            if (trails.All(t => !t.IsActive)) trails.Add(DefaultTrail());
+            await WriteAllAsync(trails, cancellationToken);
+        }
+        finally { _gate.Release(); }
+    }
+
+    public async Task<Trail> EnsureDefaultAsync(string? legacyTrailName = null, CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var trails = await EnsureAnyLockedAsync(legacyTrailName, cancellationToken);
+            return Clone(trails.First(t => t.IsActive));
+        }
+        finally { _gate.Release(); }
+    }
+
+    private async Task<List<Trail>> EnsureAnyLockedAsync(string? legacyTrailName, CancellationToken ct)
+    {
+        var trails = await ReadAllAsync(ct);
+        if (trails.Count == 0)
+        {
+            trails.Add(DefaultTrail(legacyTrailName));
+            await WriteAllAsync(trails, ct);
+        }
+        if (trails.All(t => !t.IsActive))
+        {
+            trails.Add(DefaultTrail());
+            await WriteAllAsync(trails, ct);
+        }
+        return trails;
+    }
+
+    private Trail DefaultTrail(string? legacyTrailName = null) => new()
+    {
+        DisplayName = string.IsNullOrWhiteSpace(legacyTrailName) ? RunRecord.DefaultTrailName : legacyTrailName.Trim(),
+        IsActive = true,
+        CreatedAtMs = clock.GetUnixTimeMilliseconds()
+    };
+
+    private Task<List<Trail>> ReadAllAsync(CancellationToken ct) => JsonFile.ReadAsync(Path, new List<Trail>(), ct);
+    private Task WriteAllAsync(List<Trail> trails, CancellationToken ct) => JsonFile.WriteAsync(Path, trails, ct);
+    private static void Validate(string displayName) { if (string.IsNullOrWhiteSpace(displayName)) throw new ArgumentException("Display name is required"); }
+    private static void EnsureUniqueActiveName(IEnumerable<Trail> trails, string displayName, Guid? except)
+    {
+        if (trails.Any(t => t.IsActive && t.TrailId != except && string.Equals(t.DisplayName.Trim(), displayName.Trim(), StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new InvalidOperationException("Active trail with this display name already exists");
+        }
+    }
+    private static Trail Clone(Trail t) => new() { TrailId = t.TrailId, DisplayName = t.DisplayName, IsActive = t.IsActive, CreatedAtMs = t.CreatedAtMs };
 }
 
 public sealed class FileGroupQueueRepository(DataDirectory data) : IGroupQueueRepository
@@ -254,8 +368,9 @@ public sealed class FileRunRepository(DataDirectory data) : IRunRepository
         await System.IO.File.WriteAllBytesAsync(CsvPath, csv, ct);
     }
 
-    private static byte[] CsvBomWithHeader() => Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes("runId;riderId;riderName;trailName;operationMode;queuePosition;startTimestampMs;finishTimestampMs;resultMs;resultFormatted;status;isPersonalBest;createdAtMs\n")).ToArray();
-    private static string ToCsvLine(RunRecord r) => string.Join(';', new[] { r.RunId.ToString(), r.RiderId?.ToString() ?? string.Empty, Escape(r.RiderName), Escape(r.TrailName), r.OperationMode.ToString(), r.QueuePosition?.ToString(CultureInfo.InvariantCulture) ?? string.Empty, r.StartTimestampMs.ToString(CultureInfo.InvariantCulture), r.FinishTimestampMs?.ToString(CultureInfo.InvariantCulture) ?? string.Empty, r.ResultMs?.ToString(CultureInfo.InvariantCulture) ?? string.Empty, r.ResultFormatted, r.Status.ToString(), r.IsPersonalBest ? "true" : "false", r.CreatedAtMs.ToString(CultureInfo.InvariantCulture) }) + "\n";
+    private static byte[] CsvBomWithHeader() => Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes("runId;riderId;riderName;Trail ID;Trail Name;operationMode;queuePosition;startTimestampMs;finishTimestampMs;resultMs;resultFormatted;status;isPersonalBest;createdAtMs\n")).ToArray();
+    private static string ToCsvLine(RunRecord r) => string.Join(';', new[] { r.RunId.ToString(), r.RiderId?.ToString() ?? string.Empty, Escape(r.RiderName), r.TrailId?.ToString() ?? string.Empty, Escape(TrailNameOf(r)), r.OperationMode.ToString(), r.QueuePosition?.ToString(CultureInfo.InvariantCulture) ?? string.Empty, r.StartTimestampMs.ToString(CultureInfo.InvariantCulture), r.FinishTimestampMs?.ToString(CultureInfo.InvariantCulture) ?? string.Empty, r.ResultMs?.ToString(CultureInfo.InvariantCulture) ?? string.Empty, r.ResultFormatted, r.Status.ToString(), r.IsPersonalBest ? "true" : "false", r.CreatedAtMs.ToString(CultureInfo.InvariantCulture) }) + "\n";
+    private static string TrailNameOf(RunRecord r) => (!string.IsNullOrWhiteSpace(r.TrailNameSnapshot) && (r.TrailNameSnapshot != RunRecord.DefaultTrailName || string.IsNullOrWhiteSpace(r.TrailName) || r.TrailName == RunRecord.DefaultTrailName)) ? r.TrailNameSnapshot : (string.IsNullOrWhiteSpace(r.TrailName) ? RunRecord.DefaultTrailName : r.TrailName);
     private static string Escape(string? value) { var v = value ?? string.Empty; return v.Contains('"') || v.Contains('\n') || v.Contains('\r') || v.Contains(';') ? $"\"{v.Replace("\"", "\"\"")}\"" : v; }
-    private static RunRecord Clone(RunRecord r, bool personalBest) => new() { RunId = r.RunId, RiderId = r.RiderId, Rider = r.Rider, OperationMode = r.OperationMode, QueuePosition = r.QueuePosition, SequenceNumber = r.SequenceNumber, TrailName = string.IsNullOrWhiteSpace(r.TrailName) ? RunRecord.DefaultTrailName : r.TrailName, StartTimestampMs = r.StartTimestampMs, FinishTimestampMs = r.FinishTimestampMs, ResultMs = r.ResultMs, Status = r.Status, IsPersonalBest = personalBest, CreatedAtMs = r.CreatedAtMs };
+    private static RunRecord Clone(RunRecord r, bool personalBest) => new() { RunId = r.RunId, RiderId = r.RiderId, Rider = r.Rider, OperationMode = r.OperationMode, QueuePosition = r.QueuePosition, SequenceNumber = r.SequenceNumber, TrailId = r.TrailId, TrailNameSnapshot = TrailNameOf(r), TrailName = TrailNameOf(r), StartTimestampMs = r.StartTimestampMs, FinishTimestampMs = r.FinishTimestampMs, ResultMs = r.ResultMs, Status = r.Status, IsPersonalBest = personalBest, CreatedAtMs = r.CreatedAtMs };
 }

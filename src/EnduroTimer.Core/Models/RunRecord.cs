@@ -12,6 +12,8 @@ public sealed class RunRecord
     public SystemOperationMode OperationMode { get; init; } = SystemOperationMode.ManualEncoderSelection;
     public int? QueuePosition { get; init; }
     public int SequenceNumber { get; set; }
+    public Guid? TrailId { get; init; }
+    public string TrailNameSnapshot { get; init; } = DefaultTrailName;
     public string TrailName { get; init; } = DefaultTrailName;
     public long StartTimestampMs { get; set; }
     public long? FinishTimestampMs { get; set; }

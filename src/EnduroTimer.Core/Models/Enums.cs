@@ -46,3 +46,12 @@ public enum SystemOperationMode
     ManualEncoderSelection,
     GroupQueue
 }
+
+public enum GroupSessionState
+{
+    Idle,
+    Starting,
+    AllStarted,
+    Completed,
+    Stopped
+}

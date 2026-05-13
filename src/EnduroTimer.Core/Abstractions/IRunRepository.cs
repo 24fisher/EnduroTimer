@@ -23,3 +23,13 @@ public interface IGroupQueueRepository
     Task<EnduroTimer.Core.Models.PersistedGroupQueue> GetAsync(CancellationToken cancellationToken = default);
     Task SaveAsync(EnduroTimer.Core.Models.PersistedGroupQueue queue, CancellationToken cancellationToken = default);
 }
+
+public interface ITrailRepository
+{
+    Task<IReadOnlyList<EnduroTimer.Core.Models.Trail>> ListAsync(bool includeInactive = true, CancellationToken cancellationToken = default);
+    Task<EnduroTimer.Core.Models.Trail?> GetAsync(Guid trailId, CancellationToken cancellationToken = default);
+    Task<EnduroTimer.Core.Models.Trail> AddAsync(string displayName, CancellationToken cancellationToken = default);
+    Task<EnduroTimer.Core.Models.Trail> UpdateAsync(Guid trailId, string displayName, bool isActive, CancellationToken cancellationToken = default);
+    Task DeactivateAsync(Guid trailId, CancellationToken cancellationToken = default);
+    Task<EnduroTimer.Core.Models.Trail> EnsureDefaultAsync(string? legacyTrailName = null, CancellationToken cancellationToken = default);
+}
