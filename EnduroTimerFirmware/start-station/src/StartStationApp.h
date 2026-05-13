@@ -4,6 +4,7 @@
 #include <IPAddress.h>
 #include <RadioLib.h>
 
+#include "ButtonDebouncer.h"
 #include "BuzzerStub.h"
 #include "OledDisplay.h"
 #include "RadioMessage.h"
@@ -37,6 +38,8 @@ private:
   void sendFinishAck(const String& runId);
   void handleRadioMessage(const RadioMessage& message);
   bool finishOnline() const;
+  uint32_t finishLastSeenAgoMs() const;
+  void updateCountdownDisplay(uint32_t nowMs);
   void updateDisplay();
   void logHeartbeat(uint32_t nowMs);
 
@@ -53,13 +56,13 @@ private:
   String wifiMac_ = "-";
   uint32_t lastDisplayMs_ = 0;
   uint32_t lastFinishSeenMs_ = 0;
+  uint32_t finishLastStatusMs_ = 0;
+  uint32_t finishHeartbeatCount_ = 0;
   String finishState_ = "UNKNOWN";
   float lastRssi_ = 0.0F;
   float lastSnr_ = 0.0F;
-  int buttonStableState_ = HIGH;
-  int buttonLastReading_ = HIGH;
-  uint32_t buttonLastChangeMs_ = 0;
-  bool buttonPressConsumed_ = false;
+  ButtonDebouncer startButton_;
+  String lastCountdownText_;
   uint32_t lastLedMs_ = 0;
   uint32_t lastHeartbeatMs_ = 0;
   bool ledOn_ = false;

@@ -32,7 +32,7 @@ void StartState::setError() {
 bool StartState::updateCountdown(uint32_t nowMs, RunRecord& runToStart) {
   if (state_ != StartRunState::Countdown) return false;
 
-  if (nowMs - countdownStartedMs_ >= 4000UL) {
+  if (nowMs - countdownStartedMs_ >= 3700UL) {
     currentRun_.startTimestampMs = nowMs;
     currentRun_.status = "Riding";
     state_ = StartRunState::Riding;
@@ -63,7 +63,7 @@ bool StartState::completeRun(const String& runId, uint32_t finishTimestampMs, co
 }
 
 void StartState::tickAutoReady(uint32_t nowMs) {
-  if (state_ == StartRunState::Finished && nowMs - finishedAtMs_ >= 3000UL) {
+  if (state_ == StartRunState::Finished && nowMs - finishedAtMs_ >= 5000UL) {
     currentRun_ = RunRecord{};
     state_ = StartRunState::Ready;
   }

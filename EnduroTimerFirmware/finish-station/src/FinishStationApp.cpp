@@ -14,7 +14,7 @@ static constexpr int LORA_DIO1 = 14;
 static constexpr int LORA_RST = 12;
 static constexpr int LORA_BUSY = 13;
 static constexpr uint8_t MaxFinishAttempts = 5;
-static constexpr uint32_t StatusIntervalMs = 2000UL;
+static constexpr uint32_t StatusIntervalMs = 1000UL;
 static constexpr uint32_t DisplayRefreshMs = 200UL;
 RTC_DATA_ATTR static uint32_t finishBootCounter = 0;
 #if ENABLE_LORA
@@ -28,6 +28,7 @@ void FinishStationApp::begin() {
   Serial.println("Board/role: Heltec WiFi LoRa 32 V3 / FinishStation");
   Serial.printf("Boot counter: %lu\n", static_cast<unsigned long>(finishBootCounter));
   Serial.printf("Chip: %s rev %u cores=%u efuseMac=%llX\n", ESP.getChipModel(), ESP.getChipRevision(), ESP.getChipCores(), ESP.getEfuseMac());
+  Serial.println("Power save: disabled");
 
 #if ENABLE_OLED
   Serial.println("[BOOT] OLED init...");
@@ -64,9 +65,18 @@ void FinishStationApp::loop() {
       finishAttempts_ = 0;
       lastFinishSendMs_ = 0;
       sendFinish();
-    } else {
-      Serial.println("Finish button ignored: no active run");
+#if ENABLE_OLED
+      if (!display_.testPatternOnly()) {
+        display_.showLines({"FINISH SENT", "Run: " + state_.runId(), "Sent: " + String(finishAttempts_) + "/5"});
+      }
+#endif
+    } else if (state_.state() == FinishRunState::Idle) {
+      Serial.println("Finish ignored: state=Idle");
+      Serial.println("button ignored: no active run");
+      Serial.println("button ignored: state=Idle");
       showNoRunUntilMs_ = now + 1200UL;
+    } else {
+      Serial.printf("button ignored: state=%s\n", state_.stateText().c_str());
     }
   }
 
@@ -192,6 +202,8 @@ void FinishStationApp::sendStatus() {
   message.beamClear = true;
   message.buttonReady = true;
   message.timestampMs = clock_.nowMs();
+  message.uptimeMs = message.timestampMs;
+  message.heartbeat = heartbeatCounter_ + 1;
   if (state_.runId().length() > 0) message.runId = state_.runId();
   if (sendRadio(message)) {
     heartbeatCounter_ += 1;
@@ -233,11 +245,22 @@ void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
     sensor_.reset();
     state_.ackFinish();
     finishAttempts_ = 0;
+    showAckOkUntilMs_ = millis() + 1500UL;
+#if ENABLE_OLED
+    if (!display_.testPatternOnly()) {
+      display_.showLines({"FINISH ACK", "IDLE"});
+    }
+#endif
   }
 }
 
 void FinishStationApp::updateDisplay() {
   const String runShort = state_.runId().length() > 0 ? state_.runId().substring(max(0, static_cast<int>(state_.runId().length()) - 6)) : "-";
+
+  if (showAckOkUntilMs_ > millis()) {
+    display_.showLines({"FINISH ACK", "IDLE"});
+    return;
+  }
 
   if (showNoRunUntilMs_ > millis()) {
     display_.showLines({"NO RUN", "Press start", "on StartStation"});
