@@ -10,6 +10,7 @@ public:
   explicit WebServerController(StartStationApp& app);
   void begin();
   void loop();
+  bool apStarted() const { return apStarted_; }
 
 private:
   void sendJson(int code, const String& body);
@@ -18,4 +19,5 @@ private:
 
   StartStationApp& app_;
   WebServer server_;
+  bool apStarted_ = false;
 };

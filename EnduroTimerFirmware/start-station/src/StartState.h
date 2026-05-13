@@ -30,6 +30,7 @@ public:
   void begin();
   bool startCountdown(String& error);
   void resetActiveRun();
+  void setError();
   bool updateCountdown(uint32_t nowMs, RunRecord& runToStart);
   bool completeRun(const String& runId, uint32_t finishTimestampMs, const String& source, RunRecord& completedRun);
   void tickAutoReady(uint32_t nowMs);

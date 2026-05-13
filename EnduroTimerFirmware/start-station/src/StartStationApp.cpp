@@ -3,6 +3,7 @@
 #include <ArduinoJson.h>
 #include <SPI.h>
 #include <WiFi.h>
+#include <esp_system.h>
 
 #include "RadioProtocol.h"
 
@@ -14,39 +15,59 @@ static constexpr int LORA_NSS = 8;
 static constexpr int LORA_DIO1 = 14;
 static constexpr int LORA_RST = 12;
 static constexpr int LORA_BUSY = 13;
+static constexpr uint32_t FinishOfflineTimeoutMs = 6000UL;
+static constexpr uint32_t DisplayRefreshMs = 200UL;
+static constexpr uint32_t ButtonDebounceMs = 70UL;
+RTC_DATA_ATTR static uint32_t startBootCounter = 0;
 static SX1262 radio = new Module(LORA_NSS, LORA_DIO1, LORA_RST, LORA_BUSY);
 
 void StartStationApp::begin() {
   Serial.begin(115200);
   delay(300);
-  Serial.println("[StartStation] boot");
+  startBootCounter += 1;
+
+  Serial.println();
+  Serial.println("START STATION BOOT");
+  Serial.println("Firmware: EnduroTimer StartStation");
+  Serial.printf("Build: %s %s\n", __DATE__, __TIME__);
+  Serial.println("Serial: OK");
+  Serial.println("Board/role: Heltec WiFi LoRa 32 V3 / StartStation");
+  Serial.printf("Boot counter: %lu\n", static_cast<unsigned long>(startBootCounter));
+  Serial.printf("Chip: %s rev %u cores=%u efuseMac=%llX\n", ESP.getChipModel(), ESP.getChipRevision(), ESP.getChipCores(), ESP.getEfuseMac());
 
   display_.begin();
-  display_.showBoot("START");
+  display_.showBoot("START STATION");
+  delay(1200);
+
   buzzer_.begin();
   beginRadio();
+  configureButton();
   state_.begin();
+  Serial.printf("State: %s\n", state_.stateText().c_str());
 }
 
 void StartStationApp::loop() {
+  const uint32_t now = clock_.nowMs();
   pollRadio();
+  updateButton(now);
+  updateLed(now);
 
   RunRecord runToStart;
-  if (state_.updateCountdown(clock_.nowMs(), runToStart)) {
+  if (state_.updateCountdown(now, runToStart)) {
     buzzer_.beep("GO");
     sendRunStart(runToStart);
   }
 
-  state_.tickAutoReady(clock_.nowMs());
+  state_.tickAutoReady(now);
 
-  if (clock_.nowMs() - lastDisplayMs_ >= 500UL) {
+  if (now - lastDisplayMs_ >= DisplayRefreshMs) {
     updateDisplay();
-    lastDisplayMs_ = clock_.nowMs();
+    lastDisplayMs_ = now;
   }
 }
 
 bool StartStationApp::requestStartRun(String& error) {
-  Serial.println("[StartStation] start requested");
+  Serial.println("Start run requested");
   return state_.startCountdown(error);
 }
 
@@ -55,15 +76,25 @@ void StartStationApp::resetSystem() {
   state_.resetActiveRun();
 }
 
+void StartStationApp::setWifiStatus(bool apStarted, const IPAddress& ip, const String& mac) {
+  wifiApStarted_ = apStarted;
+  wifiIp_ = ip;
+  wifiMac_ = mac;
+  if (!wifiApStarted_) {
+    state_.setError();
+    Serial.println("WiFi AP failed.");
+  }
+  updateDisplay();
+}
+
 String StartStationApp::statusJson() const {
   JsonDocument doc;
-  const bool finishOnline = lastFinishSeenMs_ > 0 && millis() - lastFinishSeenMs_ <= 10000UL;
   const RunRecord& current = state_.currentRun();
   const RunRecord& last = state_.lastRun();
 
   doc["device"] = "StartStation";
   doc["state"] = state_.stateText();
-  doc["finishStationOnline"] = finishOnline;
+  doc["finishStationOnline"] = finishOnline();
   doc["finishState"] = finishState_;
   if (radioReady_) {
     doc["loraLastRssi"] = lastRssi_;
@@ -109,12 +140,12 @@ String StartStationApp::runsJson() const {
 }
 
 void StartStationApp::beginRadio() {
-  Serial.println("[StartStation] initializing LoRa SX1262");
+  Serial.printf("LoRa: init %.0f MHz...\n", LORA_FREQUENCY_MHZ);
   SPI.begin(9, 11, 10, LORA_NSS);
   const int state = radio.begin(LORA_FREQUENCY_MHZ);
   radioReady_ = state == RADIOLIB_ERR_NONE;
   if (!radioReady_) {
-    Serial.printf("[StartStation] LoRa init failed: %d\n", state);
+    Serial.printf("LoRa: init failed (%d)\n", state);
     return;
   }
 
@@ -122,7 +153,59 @@ void StartStationApp::beginRadio() {
   radio.setSpreadingFactor(7);
   radio.setCodingRate(5);
   radio.setOutputPower(14);
-  Serial.println("[StartStation] LoRa initialized");
+  Serial.println("LoRa: OK");
+}
+
+void StartStationApp::configureButton() {
+  pinMode(START_BUTTON_PIN, INPUT_PULLUP);
+  buttonStableState_ = digitalRead(START_BUTTON_PIN);
+  buttonLastReading_ = buttonStableState_;
+  buttonLastChangeMs_ = millis();
+  Serial.printf("Button: configured START_BUTTON_PIN=%d INPUT_PULLUP\n", START_BUTTON_PIN);
+}
+
+void StartStationApp::updateButton(uint32_t nowMs) {
+  const int reading = digitalRead(START_BUTTON_PIN);
+  if (reading != buttonLastReading_) {
+    buttonLastReading_ = reading;
+    buttonLastChangeMs_ = nowMs;
+  }
+
+  if (nowMs - buttonLastChangeMs_ < ButtonDebounceMs || reading == buttonStableState_) return;
+
+  buttonStableState_ = reading;
+  if (buttonStableState_ == LOW && !buttonPressConsumed_) {
+    buttonPressConsumed_ = true;
+    Serial.println("START BUTTON pressed");
+    Serial.println("Start run requested from physical button");
+    String error;
+    if (!requestStartRun(error)) {
+      Serial.printf("[StartStation] physical start ignored: %s\n", error.c_str());
+    }
+  } else if (buttonStableState_ == HIGH) {
+    buttonPressConsumed_ = false;
+  }
+}
+
+void StartStationApp::updateLed(uint32_t nowMs) {
+#ifdef LED_BUILTIN
+  static bool configured = false;
+  if (!configured) {
+    pinMode(LED_BUILTIN, OUTPUT);
+    configured = true;
+  }
+  uint32_t interval = 1000UL;
+  if (state_.state() == StartRunState::Boot) interval = 120UL;
+  if (state_.state() == StartRunState::Countdown || state_.state() == StartRunState::Riding) interval = 180UL;
+  if (state_.state() == StartRunState::Error) interval = 100UL;
+  if (nowMs - lastLedMs_ >= interval) {
+    ledOn_ = !ledOn_;
+    digitalWrite(LED_BUILTIN, ledOn_ ? HIGH : LOW);
+    lastLedMs_ = nowMs;
+  }
+#else
+  (void)nowMs;
+#endif
 }
 
 void StartStationApp::pollRadio() {
@@ -181,11 +264,11 @@ void StartStationApp::sendFinishAck(const String& runId) {
 }
 
 void StartStationApp::handleRadioMessage(const RadioMessage& message) {
-  if (message.type == RadioMessageType::Status || message.type == RadioMessageType::Pong) {
+  if (message.type == RadioMessageType::Status) {
     lastFinishSeenMs_ = millis();
     if (message.state.length() > 0) finishState_ = message.state;
-    Serial.printf("[StartStation] STATUS/PONG received: state=%s rssi=%.1f snr=%.1f\n",
-                  finishState_.c_str(), lastRssi_, lastSnr_);
+    Serial.printf("[StartStation] STATUS received: state=%s run=%s rssi=%.1f snr=%.1f\n",
+                  finishState_.c_str(), message.runId.c_str(), lastRssi_, lastSnr_);
     return;
   }
 
@@ -196,24 +279,39 @@ void StartStationApp::handleRadioMessage(const RadioMessage& message) {
     if (state_.completeRun(message.runId, message.finishTimestampMs, message.source, completed)) {
       Serial.printf("[StartStation] result calculated: %s\n", completed.resultFormatted.c_str());
       buzzer_.beep("FINISH");
+    } else {
+      Serial.println("[StartStation] FINISH ignored: run/state mismatch");
     }
     sendFinishAck(message.runId);
   }
 }
 
+bool StartStationApp::finishOnline() const {
+  return lastFinishSeenMs_ > 0 && millis() - lastFinishSeenMs_ <= FinishOfflineTimeoutMs;
+}
+
 void StartStationApp::updateDisplay() {
-  const bool finishOnline = lastFinishSeenMs_ > 0 && millis() - lastFinishSeenMs_ <= 10000UL;
   const RunRecord& current = state_.currentRun();
   const RunRecord& last = state_.lastRun();
   const String runShort = current.runId.length() > 0 ? current.runId.substring(max(0, static_cast<int>(current.runId.length()) - 6)) : "-";
   const String lastResult = last.resultFormatted.length() > 0 ? last.resultFormatted : "-";
 
+  if (state_.state() == StartRunState::Countdown) {
+    display_.showCountdown(state_.countdownText(millis()));
+    return;
+  }
+
+  if (state_.state() == StartRunState::Finished) {
+    display_.showLines({"FINISHED", lastResult, "Run: " + runShort, "Finish: " + last.finishSource});
+    return;
+  }
+
   display_.showLines({
     "START",
-    "AP " + WiFi.softAPIP().toString(),
-    String("FIN ") + (finishOnline ? "OK" : "OFF") + " LoRa " + (radioReady_ ? "OK" : "ERR"),
+    wifiApStarted_ ? "AP: EnduroTimer" : "WIFI FAIL",
+    "IP: " + (wifiApStarted_ ? wifiIp_.toString() : String("-")),
+    String("LoRa: ") + (radioReady_ ? "OK" : "OFF"),
+    String("Finish: ") + (finishOnline() ? "OK" : "OFF"),
     "State: " + state_.stateText(),
-    state_.state() == StartRunState::Countdown ? "COUNT " + state_.countdownText(millis()) : "Run: " + runShort,
-    "Last: " + lastResult,
   });
 }

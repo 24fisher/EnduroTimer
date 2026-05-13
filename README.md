@@ -18,15 +18,16 @@ The firmware project provides two separate PlatformIO environments:
   - LittleFS Web UI at `http://192.168.4.1`;
   - JSON API for status, start, reset, and in-memory runs;
   - OLED status display;
-  - LoRa `RUN_START` sender and `FINISH` receiver.
+  - physical button and Web UI run start;
+  - LoRa `RUN_START` sender, `STATUS` heartbeat receiver, and `FINISH` receiver.
 - `finish_station` — lower/finish station firmware:
   - LoRa-only operation;
   - OLED service display;
-  - `STATUS` heartbeat every 3 seconds;
-  - simulated finish sensor 20 seconds after `RUN_START`;
+  - `STATUS` heartbeat every 2 seconds;
+  - physical button finish simulation after `RUN_START`;
   - repeated `FINISH` until `FINISH_ACK`.
 
-The first hardware smoke test requires only two bare Heltec WiFi LoRa 32 V3 boards. The E3JK finish sensor, buzzers, encoder, RFID, and RTC are intentionally stubbed or left for later iterations.
+The first hardware smoke test requires only two bare Heltec WiFi LoRa 32 V3 boards. The E3JK finish sensor, buzzers, encoder, RFID, and RTC are intentionally stubbed or left for later iterations. See the firmware README for the two-board physical-button smoke test.
 
 ## Quick commands
 

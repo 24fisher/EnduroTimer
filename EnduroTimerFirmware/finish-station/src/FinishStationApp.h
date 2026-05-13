@@ -17,6 +17,7 @@ public:
 
 private:
   void beginRadio();
+  void updateLed(uint32_t nowMs);
   void pollRadio();
   bool sendRadio(const RadioMessage& message);
   void sendStatus();
@@ -34,6 +35,9 @@ private:
   uint32_t lastStatusMs_ = 0;
   uint32_t lastDisplayMs_ = 0;
   uint32_t lastFinishSendMs_ = 0;
+  uint32_t heartbeatCounter_ = 0;
+  uint32_t lastLedMs_ = 0;
   uint8_t finishAttempts_ = 0;
+  bool ledOn_ = false;
   String lastPacket_ = "-";
 };

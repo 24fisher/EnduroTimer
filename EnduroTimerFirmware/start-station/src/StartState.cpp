@@ -5,8 +5,8 @@ void StartState::begin() {
 }
 
 bool StartState::startCountdown(String& error) {
-  if (state_ == StartRunState::Countdown || state_ == StartRunState::Riding) {
-    error = "Run is already active";
+  if (state_ != StartRunState::Ready) {
+    error = "Run can start only from Ready state";
     return false;
   }
 
@@ -23,6 +23,10 @@ void StartState::resetActiveRun() {
   currentRun_ = RunRecord{};
   countdownStartedMs_ = 0;
   state_ = StartRunState::Ready;
+}
+
+void StartState::setError() {
+  state_ = StartRunState::Error;
 }
 
 bool StartState::updateCountdown(uint32_t nowMs, RunRecord& runToStart) {
@@ -59,7 +63,7 @@ bool StartState::completeRun(const String& runId, uint32_t finishTimestampMs, co
 }
 
 void StartState::tickAutoReady(uint32_t nowMs) {
-  if (state_ == StartRunState::Finished && nowMs - finishedAtMs_ >= 5000UL) {
+  if (state_ == StartRunState::Finished && nowMs - finishedAtMs_ >= 3000UL) {
     currentRun_ = RunRecord{};
     state_ = StartRunState::Ready;
   }

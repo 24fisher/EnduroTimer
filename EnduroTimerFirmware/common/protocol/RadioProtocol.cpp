@@ -45,7 +45,9 @@ bool RadioProtocol::serialize(const RadioMessage& message, String& output) {
   if (message.finishTimestampMs > 0) doc["finishTimestampMs"] = message.finishTimestampMs;
 
   if (message.type == RadioMessageType::Status) {
+    if (message.runId.length() > 0) doc["activeRunId"] = message.runId;
     doc["beamClear"] = message.beamClear;
+    doc["buttonReady"] = message.buttonReady;
     if (message.hasBatteryVoltage) {
       doc["batteryVoltage"] = message.batteryVoltage;
     } else {
@@ -70,10 +72,12 @@ bool RadioProtocol::deserialize(const String& input, RadioMessage& output, Strin
   output.messageId = doc["messageId"] | "";
   output.stationId = doc["stationId"] | "";
   output.runId = doc["runId"] | "";
+  if (output.runId.length() == 0) output.runId = doc["activeRunId"] | "";
   output.riderName = doc["riderName"] | "";
   output.state = doc["state"] | "";
   output.source = doc["source"] | "";
   output.beamClear = doc["beamClear"] | true;
+  output.buttonReady = doc["buttonReady"] | false;
   output.timestampMs = doc["timestampMs"] | 0;
   output.startTimestampMs = doc["startTimestampMs"] | 0;
   output.finishTimestampMs = doc["finishTimestampMs"] | 0;
