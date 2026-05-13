@@ -9,6 +9,16 @@ public sealed class StationDiagnostics
     public long LastSeenUnixMs { get; set; }
 }
 
+public sealed class ActiveRunStatus
+{
+    public Guid RunId { get; init; }
+    public Guid? RiderId { get; init; }
+    public string RiderName { get; init; } = string.Empty;
+    public long StartedAtMs { get; init; }
+    public string ElapsedFormatted { get; init; } = string.Empty;
+    public int SequenceNumber { get; init; }
+}
+
 public sealed class SystemStatus
 {
     public UpperStationState UpperState { get; init; }
@@ -37,7 +47,19 @@ public sealed class SystemStatus
     public string? SelectedRiderName { get; init; }
     public Guid? NextRiderId { get; init; }
     public string? NextRiderName { get; init; }
+    public Guid? CurrentStartingRunId { get; init; }
+    public Guid? CountdownRunId => CurrentStartingRunId;
+    public Guid? CurrentStartingRiderId { get; init; }
+    public string? CurrentStartingRiderName { get; init; }
+    public Guid? NextQueuedRiderId { get; init; }
+    public string? NextQueuedRiderName { get; init; }
+    public Guid? ExpectedFinisherRunId { get; init; }
+    public string? ExpectedFinisherRiderName { get; init; }
+    public int ActiveRunsCount { get; init; }
+    public IReadOnlyList<ActiveRunStatus> ActiveRuns { get; init; } = Array.Empty<ActiveRunStatus>();
     public string LedDisplayText { get; init; } = string.Empty;
+    public bool QueueAutoStartEnabled { get; init; }
+    public int GroupStartIntervalSeconds { get; init; }
     public int GroupQueuePosition { get; init; }
     public int GroupQueueLength { get; init; }
     public Guid? CurrentRunId => ActiveRun?.RunId;
