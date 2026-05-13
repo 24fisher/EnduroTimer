@@ -19,7 +19,6 @@ public sealed class GroupQueueState
 {
     public IReadOnlyList<GroupQueueEntry> GroupQueue { get; init; } = Array.Empty<GroupQueueEntry>();
     public int GroupQueuePosition { get; init; }
-    public bool LoopGroupQueue { get; init; } = true;
     public Guid? NextRiderId { get; init; }
     public string? NextRiderName { get; init; }
 }

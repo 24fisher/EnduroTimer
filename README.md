@@ -47,7 +47,7 @@ Runtime data is stored under `src/EnduroTimer.Web/data/` by default:
 ```text
 data/settings.json      Current system settings, including trailName and groupStartIntervalSeconds
 data/riders.json        Registered riders
-data/group_queue.json   Group queue rider IDs, position, and loop flag
+data/group_queue.json   Group queue rider IDs and current position
 data/runs.jsonl         Main append-style run journal, one JSON record per line
 data/runs.csv           Human-readable run log with UTF-8 BOM and semicolon delimiter
 ```
@@ -56,19 +56,19 @@ The core logic depends on repository interfaces rather than concrete files, but 
 
 ## Web UI blocks
 
-The single `index.html` page contains these ESP32-style blocks:
+The single `index.html` page is now localized to Russian and contains these ESP32-style blocks:
 
-- System status
-- LED display preview
-- Settings / trail name / group start interval
-- Rider selection
-- Encoder simulation
-- RFID simulation
-- Group queue
-- Start controls
-- Active runs
-- Recent runs
-- Rider statistics
+- System status / `Статус системы`
+- LED display preview / `LED-дисплей`
+- Settings / trail name / group start interval / `Настройки`
+- Rider selection / `Выбор райдера`
+- Encoder simulation / `Эмуляция энкодера`
+- RFID simulation / `Эмуляция RFID`
+- Group queue / `Очередь группы`
+- Start controls / `Старт`
+- Active runs / `Текущий заезд`
+- Recent runs / `Результаты`
+- Rider statistics / `Статистика райдеров`
 - Export CSV/Backup
 
 No React, Vue, Angular, Bootstrap, external fonts, or binary assets are used.
@@ -95,8 +95,10 @@ Finish station states:
 
 Operation modes:
 
-- `ManualEncoderSelection`
-- `GroupQueue`
+- `ManualEncoderSelection` (`Выбор райдера` in the UI)
+- `GroupQueue` (`Очередь группы` in the UI)
+
+The active mode is visible in the status/LED preview area and the matching mode button is highlighted with an `active` style.
 
 ## Time synchronization
 
@@ -149,39 +151,41 @@ RFID is simulated only:
 { "tagId": "E2000017221101441890ABCD" }
 ```
 
-A known active tag selects the rider and updates the LED preview. An unknown tag shows `UNKNOWN TAG` and blocks start.
+A known active tag selects the rider and updates the LED preview. In `ManualEncoderSelection`, a ready selected rider is shown as `{riderName} on course`; countdown shows `3 Rider`, `2 Rider`, `1 Rider`, `GO Rider`. If no rider is selected, the LED preview asks the operator to select a rider. An unknown tag shows `UNKNOWN TAG` and blocks start.
 
 ## Group queue continuous start mode
 
-`GroupQueue` mode runs a continuous start session instead of a single isolated run. The key trail assumption is **no overtaking**: riders are expected to finish in the same order they started.
+`GroupQueue` mode runs a one-pass continuous start session instead of a single isolated run. The key trail assumption is **no overtaking**: riders are expected to finish in the same order they started.
 
-When `POST /api/runs/start` is called in `GroupQueue`, it starts the queue auto-start session:
+When `POST /api/runs/start` or `POST /api/group-queue/start-session` is called in `GroupQueue`, it starts the queue auto-start session from the beginning of the saved queue:
 
+- `groupQueuePosition` is reset to `0`;
 - the current queue rider becomes `NOW`;
 - the following queue rider becomes `NEXT`;
 - the first rider receives an immediate `3`, `2`, `1`, `GO` countdown;
 - after `GO`, the run is marked `Riding`, assigned an increasing `sequenceNumber`, and appended to the in-memory FIFO `activeRuns` list;
 - the queue position advances immediately and the next rider preparation begins without waiting for the previous rider to finish;
-- the last three seconds before each subsequent start show `3 Rider`, `2 Rider`, `1 Rider`, then `GO Rider`.
+- the last three seconds before each subsequent start show `3 Rider`, `2 Rider`, `1 Rider`, then `GO Rider`;
+- after the last queued rider starts, automatic starts stop, `queueAutoStartEnabled` becomes `false`, and the LED preview shows that the queue is ready/finished while active riders can still finish by FIFO.
 
 `groupStartIntervalSeconds` controls spacing between starts and is clamped to a minimum of 3 seconds. The default is 10 seconds and it is stored in `data/settings.json`:
 
 ```json
 {
-  "trailName": "Default trail",
+  "trailName": "Трасса по умолчанию",
   "groupStartIntervalSeconds": 10
 }
 ```
 
 The LED/Web UI meanings are:
 
-- `NOW` = who is starting now;
-- `NEXT` = who is preparing next;
-- `Expected finisher` = the first active FIFO run and therefore the rider expected at the finish next.
+- `NOW` / `СЕЙЧАС` = who is starting now;
+- `NEXT` / `ДАЛЬШЕ` = who is preparing next;
+- `Expected finisher` / `Ожидаемый финиш` = the first active FIFO run and therefore the rider expected at the finish next.
 
 Finish logic in `GroupQueue` is FIFO. Each finish sensor trigger completes the earliest active `Riding` run by `sequenceNumber` / start timestamp. The finish API does not require a `runId` in this mode. Manual DNF still targets a specific `runId`, removes that run from `activeRuns`, and preserves the order of the remaining riders.
 
-Stopping a group session only stops future starts. It does not finish or DNF riders already on course; they remain available for FIFO finish simulation or manual DNF. Active queue sessions are held in memory and are not intended to be restored after an application restart in this prototype.
+A group session is one pass through the queue. To run the same train again after riders return to the top, press `Запустить очередь` / `Start group session` again; the next session starts from the first rider. Stopping a group session only stops future starts. It does not finish or DNF riders already on course; they remain available for FIFO finish simulation or manual DNF. Active queue sessions are held in memory and are not intended to be restored after an application restart in this prototype.
 
 Endpoints:
 
@@ -200,8 +204,7 @@ Stored queue shape:
 ```json
 {
   "riderIds": ["...", "..."],
-  "position": 0,
-  "loop": true
+  "position": 0
 }
 ```
 
@@ -210,7 +213,7 @@ Stored queue shape:
 `POST /api/runs/start` does not use a manually typed rider name as the main scenario. The rider is selected by the active mode:
 
 - `ManualEncoderSelection` starts one run for `selectedRiderId` and blocks another start while that run is counting down or riding.
-- `GroupQueue` starts the queue auto-start session; a running session returns a conflict instead of starting another session.
+- `GroupQueue` starts a one-pass queue auto-start session from the first queued rider; a running session returns a conflict instead of starting another session.
 
 Common start blockers:
 
@@ -219,7 +222,7 @@ Common start blockers:
 - finish beam blocked;
 - countdown/riding already active;
 - no selected rider;
-- empty or finished group queue.
+- empty group queue.
 
 Countdown runs in the background and the endpoint returns quickly. The UI observes `3`, `2`, `1`, and `GO` through `/api/status` polling.
 
@@ -229,18 +232,18 @@ Finish is emulated with:
 
 In `ManualEncoderSelection`, the simulated finish completes the single active run and duplicate finish triggers inside five seconds are ignored by the finish station simulation.
 
-In `GroupQueue`, the same button is global: it completes the next expected FIFO finisher from `activeRuns`, calculates `resultMs` / `resultFormatted`, saves the finished run to `runs.jsonl` / `runs.csv`, and briefly shows `FIN Rider 00:00.000` before returning the LED preview to the current starter.
+In `GroupQueue`, the same button is global: it completes the next expected FIFO finisher from `activeRuns`, calculates `resultMs` / `resultFormatted`, saves the finished run (including `trailName`) to `runs.jsonl` / `runs.csv`, and briefly shows `FIN Rider 00:00.000` before returning the LED preview to the current starter or queue-ready message.
 
 ## Settings
 
-Trail name and `groupStartIntervalSeconds` are stored in `data/settings.json` and are read at run start / group session start.
+Trail name and `groupStartIntervalSeconds` are stored in `data/settings.json` and are read at run start / group session start. The UI shows the saved current trail separately from the editable input and saves trail changes explicitly with `Сохранить трассу`.
 
 Endpoints:
 
 - `GET /api/settings`
 - `POST /api/settings`
 
-An empty trail name falls back to `Default trail`. `groupStartIntervalSeconds` defaults to 10 and is clamped to at least 3.
+An empty trail name falls back to `Трасса по умолчанию`. `groupStartIntervalSeconds` defaults to 10 and is clamped to at least 3.
 
 ## Statistics and export
 
@@ -254,7 +257,7 @@ Endpoints:
 - `GET /api/export/statistics.csv`
 - `GET /api/export/backup.json`
 
-CSV exports use UTF-8 BOM and semicolon delimiter for easier Excel opening in Russian locales.
+Run records include `trailName`; recent/active run tables show it, run CSV exports include the `trailName` column, and `backup.json` includes the same run field. CSV exports use UTF-8 BOM and semicolon delimiter for easier Excel opening in Russian locales.
 
 `backup.json` contains:
 

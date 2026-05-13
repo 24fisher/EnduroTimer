@@ -132,7 +132,7 @@ public sealed class TimerController : ControllerBase
     [HttpGet("group-queue")]
     public async Task<ActionResult<GroupQueueState>> GetQueue(CancellationToken cancellationToken) => Ok(await _system.GetGroupQueueAsync(cancellationToken));
     [HttpPost("group-queue")]
-    public async Task<ActionResult<GroupQueueState>> SetQueue([FromBody] GroupQueueRequest request, CancellationToken cancellationToken) { try { return Ok(await _system.SetGroupQueueAsync(request.RiderIds, request.LoopGroupQueue ?? request.Loop, cancellationToken)); } catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); } }
+    public async Task<ActionResult<GroupQueueState>> SetQueue([FromBody] GroupQueueRequest request, CancellationToken cancellationToken) { try { return Ok(await _system.SetGroupQueueAsync(request.RiderIds, cancellationToken)); } catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); } }
     [HttpPost("group-queue/next")]
     public async Task<ActionResult<GroupQueueState>> QueueNext(CancellationToken cancellationToken) => Ok(await _system.MoveGroupQueueNextAsync(cancellationToken));
     [HttpPost("group-queue/reset")]
@@ -225,7 +225,7 @@ public sealed class TimerController : ControllerBase
 public sealed record StartRunRequest(string? TrailName = null, string? TrackName = null);
 public sealed record RiderRequest(string DisplayName, string? RfidTagId = null, bool? IsActive = true);
 public sealed record ModeRequest(SystemOperationMode OperationMode);
-public sealed record GroupQueueRequest(IReadOnlyList<Guid> RiderIds, bool Loop = true, bool? LoopGroupQueue = null);
+public sealed record GroupQueueRequest(IReadOnlyList<Guid> RiderIds);
 public sealed record QueueIndexRequest(int Index);
 public sealed record RfidSimulateRequest(string TagId);
 public sealed record TimeOffsetRequest(long RtcOffsetMs);
