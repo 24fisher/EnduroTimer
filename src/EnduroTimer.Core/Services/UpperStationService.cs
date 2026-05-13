@@ -87,7 +87,7 @@ public sealed class UpperStationService : IStartButtonService
 
     public event Func<RunRecord, CancellationToken, Task>? RunFinished;
 
-    public async Task<RunRecord> StartRunAsync(string rider, string? trailName = null, Guid? riderId = null, SystemOperationMode operationMode = SystemOperationMode.ManualEncoderSelection, int? queuePosition = null, CancellationToken cancellationToken = default)
+    public async Task<RunRecord> StartRunAsync(string rider, string? trailName = null, Guid? riderId = null, SystemOperationMode operationMode = SystemOperationMode.ManualEncoderSelection, int? queuePosition = null, Guid? trailId = null, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(rider))
         {
@@ -113,6 +113,8 @@ public sealed class UpperStationService : IStartButtonService
                 Rider = rider.Trim(),
                 OperationMode = operationMode,
                 QueuePosition = queuePosition,
+                TrailId = trailId,
+                TrailNameSnapshot = string.IsNullOrWhiteSpace(trailName) ? RunRecord.DefaultTrailName : trailName.Trim(),
                 TrailName = string.IsNullOrWhiteSpace(trailName) ? RunRecord.DefaultTrailName : trailName.Trim(),
                 Status = RunStatus.Pending,
                 CreatedAtMs = _clock.GetUnixTimeMilliseconds()
@@ -178,7 +180,7 @@ public sealed class UpperStationService : IStartButtonService
                 DefaultStationId,
                 run.RunId,
                 run.StartTimestampMs,
-                new JsonObject { ["rider"] = run.Rider, ["riderId"] = run.RiderId?.ToString(), ["trailName"] = run.TrailName }), cancellationToken);
+                new JsonObject { ["rider"] = run.Rider, ["riderId"] = run.RiderId?.ToString(), ["trailId"] = run.TrailId?.ToString(), ["trailName"] = run.TrailNameSnapshot }), cancellationToken);
 
             if (GoDisplayDelayMs > 0)
             {

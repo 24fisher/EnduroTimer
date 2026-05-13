@@ -20,6 +20,7 @@ builder.Services.AddSingleton<IClockService>(_ => new SystemClockService());
 builder.Services.AddSingleton<IRadioTransport, InMemoryRadioTransport>();
 builder.Services.AddSingleton<IRunRepository, FileRunRepository>();
 builder.Services.AddSingleton<IRegisteredRiderRepository, FileRegisteredRiderRepository>();
+builder.Services.AddSingleton<ITrailRepository, FileTrailRepository>();
 builder.Services.AddSingleton<ISystemSettingsRepository, FileSystemSettingsRepository>();
 builder.Services.AddSingleton<IGroupQueueRepository, FileGroupQueueRepository>();
 builder.Services.AddSingleton<ILedDisplayService, SimulatedLedDisplayService>();

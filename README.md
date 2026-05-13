@@ -45,7 +45,8 @@ The prototype is kept close to the intended Heltec ESP32-S3 implementation:
 Runtime data is stored under `src/EnduroTimer.Web/data/` by default:
 
 ```text
-data/settings.json      Current system settings, including trailName and groupStartIntervalSeconds
+data/settings.json      Current system settings, including selectedTrailId and groupStartIntervalSeconds
+data/trails.json        Registered trails / stages
 data/riders.json        Registered riders
 data/group_queue.json   Group queue rider IDs and current position
 data/runs.jsonl         Main append-style run journal, one JSON record per line
@@ -60,7 +61,7 @@ The single `index.html` page is now localized to Russian and contains these ESP3
 
 - System status / `Статус системы`
 - LED display preview / `LED-дисплей`
-- Settings / trail name / group start interval / `Настройки`
+- Trails / selected trail / group start interval / `Трассы`
 - Rider selection / `Выбор райдера`
 - Encoder simulation / `Эмуляция энкодера`
 - RFID simulation / `Эмуляция RFID`
@@ -98,7 +99,7 @@ Operation modes:
 - `ManualEncoderSelection` (`Выбор райдера` in the UI)
 - `GroupQueue` (`Очередь группы` in the UI)
 
-The active mode is visible in the status/LED preview area and the matching mode button is highlighted with an `active` style.
+The active mode is visible in the status/LED preview area and the matching mode button is highlighted with an `active` style. Switching modes flashes `РЕЖИМ: ВЫБОР` or `РЕЖИМ: ОЧЕРЕДЬ` on the LED preview before the normal mode-specific text resumes.
 
 ## Time synchronization
 
@@ -151,7 +152,7 @@ RFID is simulated only:
 { "tagId": "E2000017221101441890ABCD" }
 ```
 
-A known active tag selects the rider and updates the LED preview. In `ManualEncoderSelection`, a ready selected rider is shown as `{riderName} on course`; countdown shows `3 Rider`, `2 Rider`, `1 Rider`, `GO Rider`. If no rider is selected, the LED preview asks the operator to select a rider. An unknown tag shows `UNKNOWN TAG` and blocks start.
+A known active tag selects the rider and updates the LED preview. In `ManualEncoderSelection`, the LED preview shows the pre-start selection as `ВЫБОР: Rider`; it does **not** show `{riderName} on course` until the run has actually reached `GO` and switched to `Riding`. Countdown shows `3 Rider`, `2 Rider`, `1 Rider`, `GO Rider`. If no rider is selected, the LED preview asks the operator to select a rider; if there are no active riders it shows `НЕТ РАЙДЕРОВ`. An unknown tag still blocks start.
 
 ## Group queue continuous start mode
 
@@ -166,13 +167,13 @@ When `POST /api/runs/start` or `POST /api/group-queue/start-session` is called i
 - after `GO`, the run is marked `Riding`, assigned an increasing `sequenceNumber`, and appended to the in-memory FIFO `activeRuns` list;
 - the queue position advances immediately and the next rider preparation begins without waiting for the previous rider to finish;
 - the last three seconds before each subsequent start show `3 Rider`, `2 Rider`, `1 Rider`, then `GO Rider`;
-- after the last queued rider starts, automatic starts stop, `queueAutoStartEnabled` becomes `false`, and the LED preview shows that the queue is ready/finished while active riders can still finish by FIFO.
+- after the last queued rider starts, automatic starts stop, `queueAutoStartEnabled` becomes `false`; while riders are still on course the LED preview shows `ЖДЁМ ФИНИШ: Rider` or `ВСЕ СТАРТОВАЛИ`, and after all active runs are finished/DNF it shows `ОЧЕРЕДЬ ГОТОВА`.
 
-`groupStartIntervalSeconds` controls spacing between starts and is clamped to a minimum of 3 seconds. The default is 10 seconds and it is stored in `data/settings.json`:
+`groupStartIntervalSeconds` controls spacing between starts and is clamped to a minimum of 3 seconds. The default is 10 seconds and it is stored in `data/settings.json` next to the selected registered trail ID:
 
 ```json
 {
-  "trailName": "Трасса по умолчанию",
+  "selectedTrailId": "00000000-0000-0000-0000-000000000000",
   "groupStartIntervalSeconds": 10
 }
 ```
@@ -232,18 +233,25 @@ Finish is emulated with:
 
 In `ManualEncoderSelection`, the simulated finish completes the single active run and duplicate finish triggers inside five seconds are ignored by the finish station simulation.
 
-In `GroupQueue`, the same button is global: it completes the next expected FIFO finisher from `activeRuns`, calculates `resultMs` / `resultFormatted`, saves the finished run (including `trailName`) to `runs.jsonl` / `runs.csv`, and briefly shows `FIN Rider 00:00.000` before returning the LED preview to the current starter or queue-ready message.
+In `GroupQueue`, the same button is global: it completes the next expected FIFO finisher from `activeRuns`, calculates `resultMs` / `resultFormatted`, saves the finished run (including `trailId` and the trail-name snapshot) to `runs.jsonl` / `runs.csv`, and briefly shows `FIN Rider 00:00.000` before returning the LED preview to the current starter, all-started, or queue-ready message.
 
 ## Settings
 
-Trail name and `groupStartIntervalSeconds` are stored in `data/settings.json` and are read at run start / group session start. The UI shows the saved current trail separately from the editable input and saves trail changes explicitly with `Сохранить трассу`.
+Trails are registered entities stored in `data/trails.json`, similar to registered riders. `data/settings.json` stores only the selected trail ID (`selectedTrailId`) and `groupStartIntervalSeconds`; legacy `trailName` is read for compatibility and migrated into `trails.json` on startup. If there are no trails, the app creates an active default trail named `Трасса по умолчанию`.
 
-Endpoints:
+Trail endpoints:
 
-- `GET /api/settings`
-- `POST /api/settings`
+- `GET /api/trails`
+- `POST /api/trails`
+- `PUT /api/trails/{id}`
+- `POST /api/trails/{id}/deactivate`
 
-An empty trail name falls back to `Трасса по умолчанию`. `groupStartIntervalSeconds` defaults to 10 and is clamped to at least 3.
+Settings endpoints:
+
+- `GET /api/settings` returns `selectedTrailId`, `selectedTrailName`, and `groupStartIntervalSeconds`.
+- `POST /api/settings` accepts `selectedTrailId` and `groupStartIntervalSeconds`.
+
+The Web UI uses a `Трасса` dropdown that lists only active trails. Adding two active trails with the same display name is rejected. If the selected trail is deactivated, the first active trail is selected automatically.
 
 ## Statistics and export
 
@@ -257,13 +265,14 @@ Endpoints:
 - `GET /api/export/statistics.csv`
 - `GET /api/export/backup.json`
 
-Run records include `trailName`; recent/active run tables show it, run CSV exports include the `trailName` column, and `backup.json` includes the same run field. CSV exports use UTF-8 BOM and semicolon delimiter for easier Excel opening in Russian locales.
+Run records include `trailId`, `trailNameSnapshot`, and the compatibility `trailName` snapshot. Recent/active run tables show the snapshot so old results keep the original trail name after a trail is renamed or deactivated. Run CSV exports include `trailId` and `trailName`, and `backup.json` includes `trails` in addition to settings, riders, runs, and group queue data. CSV exports use UTF-8 BOM and semicolon delimiter for easier Excel opening in Russian locales.
 
 `backup.json` contains:
 
 ```json
 {
   "settings": {},
+  "trails": [],
   "riders": [],
   "runs": [],
   "groupQueue": {}

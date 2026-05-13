@@ -30,3 +30,12 @@ public sealed class RfidReadResult
     public string? RiderName { get; init; }
     public long ReadAtMs { get; init; }
 }
+
+
+public sealed class Trail
+{
+    public Guid TrailId { get; init; } = Guid.NewGuid();
+    public string DisplayName { get; set; } = RunRecord.DefaultTrailName;
+    public bool IsActive { get; set; } = true;
+    public long CreatedAtMs { get; init; }
+}

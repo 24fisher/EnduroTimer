@@ -17,8 +17,10 @@ public sealed class ActiveRunStatus
     public long StartedAtMs { get; init; }
     public string ElapsedFormatted { get; init; } = string.Empty;
     public int SequenceNumber { get; init; }
+    public Guid? TrailId { get; init; }
     public string TrailName { get; init; } = RunRecord.DefaultTrailName;
 }
+
 
 public sealed class SystemStatus
 {
@@ -56,6 +58,12 @@ public sealed class SystemStatus
     public string? NextQueuedRiderName { get; init; }
     public Guid? ExpectedFinisherRunId { get; init; }
     public string? ExpectedFinisherRiderName { get; init; }
+    public bool GroupQueueCompleted { get; init; }
+    public bool AllQueuedRidersStarted { get; init; }
+    public GroupSessionState GroupSessionState { get; init; } = GroupSessionState.Idle;
+    public string OperationModeDisplayName { get; init; } = string.Empty;
+    public Guid? SelectedTrailId { get; init; }
+    public string SelectedTrailName { get; init; } = RunRecord.DefaultTrailName;
     public int ActiveRunsCount { get; init; }
     public IReadOnlyList<ActiveRunStatus> ActiveRuns { get; init; } = Array.Empty<ActiveRunStatus>();
     public string LedDisplayText { get; init; } = string.Empty;

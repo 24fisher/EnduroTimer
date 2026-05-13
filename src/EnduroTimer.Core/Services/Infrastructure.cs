@@ -111,7 +111,9 @@ public sealed class InMemoryRunRepository : IRunRepository
         RunId = run.RunId,
         RiderId = run.RiderId,
         Rider = run.Rider,
-        TrailName = string.IsNullOrWhiteSpace(run.TrailName) ? RunRecord.DefaultTrailName : run.TrailName,
+        TrailId = run.TrailId,
+        TrailNameSnapshot = (!string.IsNullOrWhiteSpace(run.TrailNameSnapshot) && (run.TrailNameSnapshot != RunRecord.DefaultTrailName || string.IsNullOrWhiteSpace(run.TrailName) || run.TrailName == RunRecord.DefaultTrailName)) ? run.TrailNameSnapshot : (string.IsNullOrWhiteSpace(run.TrailName) ? RunRecord.DefaultTrailName : run.TrailName),
+        TrailName = (!string.IsNullOrWhiteSpace(run.TrailNameSnapshot) && (run.TrailNameSnapshot != RunRecord.DefaultTrailName || string.IsNullOrWhiteSpace(run.TrailName) || run.TrailName == RunRecord.DefaultTrailName)) ? run.TrailNameSnapshot : (string.IsNullOrWhiteSpace(run.TrailName) ? RunRecord.DefaultTrailName : run.TrailName),
         StartTimestampMs = run.StartTimestampMs,
         FinishTimestampMs = run.FinishTimestampMs,
         ResultMs = run.ResultMs,
@@ -120,6 +122,44 @@ public sealed class InMemoryRunRepository : IRunRepository
         QueuePosition = run.QueuePosition,
         IsPersonalBest = isPersonalBest
     };
+}
+
+
+public sealed class InMemoryTrailRepository(IClockService clock) : ITrailRepository
+{
+    private readonly List<Trail> _trails = new();
+    private readonly object _gate = new();
+    public Task<IReadOnlyList<Trail>> ListAsync(bool includeInactive = true, CancellationToken cancellationToken = default)
+    {
+        lock (_gate) { EnsureAny(null); return Task.FromResult<IReadOnlyList<Trail>>(_trails.Where(t => includeInactive || t.IsActive).Select(Clone).ToList()); }
+    }
+    public Task<Trail?> GetAsync(Guid trailId, CancellationToken cancellationToken = default)
+    {
+        lock (_gate) { EnsureAny(null); return Task.FromResult(_trails.FirstOrDefault(t => t.TrailId == trailId) is { } t ? Clone(t) : null); }
+    }
+    public Task<Trail> AddAsync(string displayName, CancellationToken cancellationToken = default)
+    {
+        Validate(displayName);
+        lock (_gate) { EnsureAny(null); EnsureUnique(displayName, null); var t = new Trail { DisplayName = displayName.Trim(), CreatedAtMs = clock.GetUnixTimeMilliseconds(), IsActive = true }; _trails.Add(t); return Task.FromResult(Clone(t)); }
+    }
+    public Task<Trail> UpdateAsync(Guid trailId, string displayName, bool isActive, CancellationToken cancellationToken = default)
+    {
+        Validate(displayName);
+        lock (_gate) { EnsureAny(null); var t = _trails.FirstOrDefault(x => x.TrailId == trailId) ?? throw new KeyNotFoundException("Trail not found."); if (isActive) EnsureUnique(displayName, trailId); t.DisplayName = displayName.Trim(); t.IsActive = isActive; if (_trails.All(x => !x.IsActive)) _trails.Add(DefaultTrail(null)); return Task.FromResult(Clone(t)); }
+    }
+    public Task DeactivateAsync(Guid trailId, CancellationToken cancellationToken = default)
+    {
+        lock (_gate) { EnsureAny(null); (_trails.FirstOrDefault(x => x.TrailId == trailId) ?? throw new KeyNotFoundException("Trail not found.")).IsActive = false; if (_trails.All(x => !x.IsActive)) _trails.Add(DefaultTrail(null)); return Task.CompletedTask; }
+    }
+    public Task<Trail> EnsureDefaultAsync(string? legacyTrailName = null, CancellationToken cancellationToken = default)
+    {
+        lock (_gate) { EnsureAny(legacyTrailName); return Task.FromResult(Clone(_trails.First(t => t.IsActive))); }
+    }
+    private void EnsureAny(string? legacyTrailName) { if (_trails.Count == 0) _trails.Add(DefaultTrail(legacyTrailName)); if (_trails.All(t => !t.IsActive)) _trails.Add(DefaultTrail(null)); }
+    private Trail DefaultTrail(string? name) => new() { DisplayName = string.IsNullOrWhiteSpace(name) ? RunRecord.DefaultTrailName : name.Trim(), IsActive = true, CreatedAtMs = clock.GetUnixTimeMilliseconds() };
+    private void EnsureUnique(string displayName, Guid? except) { if (_trails.Any(t => t.IsActive && t.TrailId != except && string.Equals(t.DisplayName, displayName.Trim(), StringComparison.OrdinalIgnoreCase))) throw new InvalidOperationException("Active trail with this display name already exists"); }
+    private static void Validate(string displayName) { if (string.IsNullOrWhiteSpace(displayName)) throw new ArgumentException("Display name is required"); }
+    private static Trail Clone(Trail t) => new() { TrailId = t.TrailId, DisplayName = t.DisplayName, IsActive = t.IsActive, CreatedAtMs = t.CreatedAtMs };
 }
 
 public sealed class SimulatedLedDisplayService : ILedDisplayService

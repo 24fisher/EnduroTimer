@@ -19,8 +19,9 @@ public sealed class TimerController : ControllerBase
     private readonly IRegisteredRiderRepository _riders;
     private readonly IRfidReaderService _rfid;
     private readonly ISystemSettingsRepository _settings;
+    private readonly ITrailRepository _trails;
 
-    public TimerController(EnduroTimerSystem system, UpperStationService upper, IFinishSensorService finishSensor, IRunRepository runs, IRegisteredRiderRepository riders, IRfidReaderService rfid, ISystemSettingsRepository settings)
+    public TimerController(EnduroTimerSystem system, UpperStationService upper, IFinishSensorService finishSensor, IRunRepository runs, IRegisteredRiderRepository riders, IRfidReaderService rfid, ISystemSettingsRepository settings, ITrailRepository trails)
     {
         _system = system;
         _upper = upper;
@@ -29,16 +30,64 @@ public sealed class TimerController : ControllerBase
         _riders = riders;
         _rfid = rfid;
         _settings = settings;
+        _trails = trails;
     }
 
     [HttpGet("status")]
     public async Task<ActionResult<SystemStatus>> GetStatus(CancellationToken cancellationToken) => Ok(await _system.GetStatusAsync(cancellationToken));
 
     [HttpGet("settings")]
-    public async Task<ActionResult<SystemSettings>> GetSettings(CancellationToken cancellationToken) => Ok(await _settings.GetAsync(cancellationToken));
+    public async Task<ActionResult<SystemSettingsDto>> GetSettings(CancellationToken cancellationToken) => Ok(await BuildSettingsDtoAsync(cancellationToken));
 
     [HttpPost("settings")]
-    public async Task<ActionResult<SystemSettings>> SaveSettings([FromBody] SystemSettings request, CancellationToken cancellationToken) => Ok(await _settings.SaveAsync(request, cancellationToken));
+    public async Task<ActionResult<SystemSettingsDto>> SaveSettings([FromBody] SystemSettings request, CancellationToken cancellationToken)
+    {
+        var settings = await _settings.GetAsync(cancellationToken);
+        settings.GroupStartIntervalSeconds = request.GroupStartIntervalSeconds;
+        if (request.SelectedTrailId is { } trailId)
+        {
+            var trail = await _trails.GetAsync(trailId, cancellationToken);
+            if (trail is null || !trail.IsActive) return BadRequest(new { error = "Selected trail must be active" });
+            settings.SelectedTrailId = trailId;
+            settings.TrailName = null;
+        }
+        await _settings.SaveAsync(settings, cancellationToken);
+        return Ok(await BuildSettingsDtoAsync(cancellationToken));
+    }
+
+    [HttpGet("trails")]
+    public async Task<ActionResult<IReadOnlyList<Trail>>> GetTrails(CancellationToken cancellationToken)
+    {
+        var settings = await _settings.GetAsync(cancellationToken);
+        await _trails.EnsureDefaultAsync(settings.TrailName, cancellationToken);
+        return Ok(await _trails.ListAsync(true, cancellationToken));
+    }
+
+    [HttpPost("trails")]
+    public async Task<ActionResult<Trail>> AddTrail([FromBody] TrailRequest request, CancellationToken cancellationToken)
+    { try { return Ok(await _trails.AddAsync(request.DisplayName, cancellationToken)); } catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); } catch (InvalidOperationException ex) { return Conflict(new { error = ex.Message }); } }
+
+    [HttpPut("trails/{id:guid}")]
+    public async Task<ActionResult<Trail>> UpdateTrail(Guid id, [FromBody] TrailRequest request, CancellationToken cancellationToken)
+    { try { return Ok(await _trails.UpdateAsync(id, request.DisplayName, request.IsActive ?? true, cancellationToken)); } catch (KeyNotFoundException) { return NotFound(); } catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); } catch (InvalidOperationException ex) { return Conflict(new { error = ex.Message }); } }
+
+    [HttpPost("trails/{id:guid}/deactivate")]
+    public async Task<IActionResult> DeactivateTrail(Guid id, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _trails.DeactivateAsync(id, cancellationToken);
+            var settings = await _settings.GetAsync(cancellationToken);
+            if (settings.SelectedTrailId == id)
+            {
+                settings.SelectedTrailId = (await _trails.ListAsync(false, cancellationToken)).FirstOrDefault()?.TrailId;
+                settings.TrailName = null;
+                await _settings.SaveAsync(settings, cancellationToken);
+            }
+            return NoContent();
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+    }
 
     [HttpPost("time/sync")]
     public async Task<ActionResult<SystemStatus>> SyncTime(CancellationToken cancellationToken)
@@ -57,7 +106,7 @@ public sealed class TimerController : ControllerBase
     [HttpPost("runs/start")]
     public async Task<ActionResult<RunRecord>> StartRun([FromBody] StartRunRequest? request, CancellationToken cancellationToken)
     {
-        try { return Ok(await _system.StartRunAsync(null, request?.TrailName ?? request?.TrackName, cancellationToken)); }
+        try { return Ok(await _system.StartRunAsync(null, null, cancellationToken)); }
         catch (InvalidOperationException ex) { return Conflict(new { error = ex.Message }); }
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
     }
@@ -144,7 +193,7 @@ public sealed class TimerController : ControllerBase
     [HttpPost("group-queue/remove")]
     public async Task<ActionResult<GroupQueueState>> QueueRemove([FromBody] QueueIndexRequest request, CancellationToken cancellationToken) => Ok(await _system.RemoveGroupQueueAtAsync(request.Index, cancellationToken));
     [HttpPost("group-queue/start-session")]
-    public async Task<ActionResult<SystemStatus>> StartQueueSession([FromBody] StartRunRequest? request, CancellationToken cancellationToken) { try { await _system.StartGroupQueueSessionAsync(request?.TrailName ?? request?.TrackName, cancellationToken); return Ok(await _system.GetStatusAsync(cancellationToken)); } catch (InvalidOperationException ex) { return Conflict(new { error = ex.Message }); } }
+    public async Task<ActionResult<SystemStatus>> StartQueueSession([FromBody] StartRunRequest? request, CancellationToken cancellationToken) { try { await _system.StartGroupQueueSessionAsync(null, cancellationToken); return Ok(await _system.GetStatusAsync(cancellationToken)); } catch (InvalidOperationException ex) { return Conflict(new { error = ex.Message }); } }
     [HttpPost("group-queue/stop-session")]
     public async Task<ActionResult<SystemStatus>> StopQueueSession(CancellationToken cancellationToken) { await _system.StopGroupQueueSessionAsync(cancellationToken); return Ok(await _system.GetStatusAsync(cancellationToken)); }
 
@@ -174,7 +223,7 @@ public sealed class TimerController : ControllerBase
     [HttpGet("export/backup.json")]
     public async Task<IActionResult> ExportBackup(CancellationToken cancellationToken)
     {
-        var backup = new { settings = await _settings.GetAsync(cancellationToken), riders = await _riders.ListAsync(true, cancellationToken), runs = await _runs.ListAsync(int.MaxValue, cancellationToken), groupQueue = await _system.GetGroupQueueAsync(cancellationToken) };
+        var backup = new { settings = await BuildSettingsDtoAsync(cancellationToken), trails = await _trails.ListAsync(true, cancellationToken), riders = await _riders.ListAsync(true, cancellationToken), runs = await _runs.ListAsync(int.MaxValue, cancellationToken), groupQueue = await _system.GetGroupQueueAsync(cancellationToken) };
         return File(JsonSerializer.SerializeToUtf8Bytes(backup, BackupJsonOptions()), "application/json; charset=utf-8", "enduro-backup.json");
     }
 
@@ -211,18 +260,35 @@ public sealed class TimerController : ControllerBase
         var last = ordered.FirstOrDefault();
         var lastFinished = ordered.FirstOrDefault(run => run.Status == RunStatus.Finished && run.ResultMs is not null);
         var average = finished.Count == 0 ? null : (long?)Math.Round(finished.Average(run => run.ResultMs!.Value));
-        return new RiderStatisticsDto(riderId, riderName, group.Count, finished.Count, group.Count(run => run.Status == RunStatus.Dnf), best?.ResultMs, best is null ? null : TimeFormatter.FormatResult(best.ResultMs), average, average is null ? null : TimeFormatter.FormatResult(average), lastFinished?.ResultMs, lastFinished is null ? null : TimeFormatter.FormatResult(lastFinished.ResultMs), last?.StartTimestampMs, best?.TrailName ?? string.Empty);
+        return new RiderStatisticsDto(riderId, riderName, group.Count, finished.Count, group.Count(run => run.Status == RunStatus.Dnf), best?.ResultMs, best is null ? null : TimeFormatter.FormatResult(best.ResultMs), average, average is null ? null : TimeFormatter.FormatResult(average), lastFinished?.ResultMs, lastFinished is null ? null : TimeFormatter.FormatResult(lastFinished.ResultMs), last?.StartTimestampMs, TrailNameOf(best) ?? string.Empty);
     }
 
+    private async Task<SystemSettingsDto> BuildSettingsDtoAsync(CancellationToken cancellationToken)
+    {
+        var settings = await _settings.GetAsync(cancellationToken);
+        var defaultTrail = await _trails.EnsureDefaultAsync(settings.TrailName, cancellationToken);
+        var selected = settings.SelectedTrailId is { } id ? await _trails.GetAsync(id, cancellationToken) : null;
+        if (selected is null || !selected.IsActive) selected = (await _trails.ListAsync(false, cancellationToken)).FirstOrDefault() ?? defaultTrail;
+        if (settings.SelectedTrailId != selected.TrailId || !string.IsNullOrWhiteSpace(settings.TrailName))
+        {
+            settings.SelectedTrailId = selected.TrailId;
+            settings.TrailName = null;
+            await _settings.SaveAsync(settings, cancellationToken);
+        }
+        return new SystemSettingsDto { SelectedTrailId = selected.TrailId, SelectedTrailName = selected.DisplayName, GroupStartIntervalSeconds = Math.Max(3, settings.GroupStartIntervalSeconds) };
+    }
+
+    private static string TrailNameOf(RunRecord? run) => run is null ? string.Empty : ((!string.IsNullOrWhiteSpace(run.TrailNameSnapshot) && (run.TrailNameSnapshot != RunRecord.DefaultTrailName || string.IsNullOrWhiteSpace(run.TrailName) || run.TrailName == RunRecord.DefaultTrailName)) ? run.TrailNameSnapshot : (string.IsNullOrWhiteSpace(run.TrailName) ? RunRecord.DefaultTrailName : run.TrailName));
     private static IActionResult CsvFile(string fileName, string csv) => new FileContentResult(Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(csv)).ToArray(), "text/csv; charset=utf-8") { FileDownloadName = fileName };
-    private static string BuildRunsCsv(IEnumerable<RunRecord> runs) => Csv(new[] { "runId", "riderId", "riderName", "trailName", "operationMode", "queuePosition", "sequenceNumber", "startTimestampMs", "finishTimestampMs", "resultMs", "resultFormatted", "status", "isPersonalBest", "createdAtMs" }, runs.OrderByDescending(r => r.StartTimestampMs).Select(r => new[] { r.RunId.ToString(), r.RiderId?.ToString() ?? string.Empty, r.RiderName, r.TrailName, r.OperationMode.ToString(), r.QueuePosition?.ToString() ?? string.Empty, r.SequenceNumber.ToString(), r.StartTimestampMs.ToString(), r.FinishTimestampMs?.ToString() ?? string.Empty, r.ResultMs?.ToString() ?? string.Empty, r.ResultFormatted, r.Status.ToString(), r.IsPersonalBest.ToString(), r.CreatedAtMs.ToString() }));
+    private static string BuildRunsCsv(IEnumerable<RunRecord> runs) => Csv(new[] { "runId", "riderId", "riderName", "Trail ID", "Trail Name", "operationMode", "queuePosition", "sequenceNumber", "startTimestampMs", "finishTimestampMs", "resultMs", "resultFormatted", "status", "isPersonalBest", "createdAtMs" }, runs.OrderByDescending(r => r.StartTimestampMs).Select(r => new[] { r.RunId.ToString(), r.RiderId?.ToString() ?? string.Empty, r.RiderName, r.TrailId?.ToString() ?? string.Empty, TrailNameOf(r), r.OperationMode.ToString(), r.QueuePosition?.ToString() ?? string.Empty, r.SequenceNumber.ToString(), r.StartTimestampMs.ToString(), r.FinishTimestampMs?.ToString() ?? string.Empty, r.ResultMs?.ToString() ?? string.Empty, r.ResultFormatted, r.Status.ToString(), r.IsPersonalBest.ToString(), r.CreatedAtMs.ToString() }));
     private static string BuildRidersCsv(IEnumerable<RegisteredRider> riders) => Csv(new[] { "riderId", "displayName", "rfidTagId", "isActive", "createdAtMs" }, riders.Select(r => new[] { r.RiderId.ToString(), r.DisplayName, r.RfidTagId ?? string.Empty, r.IsActive.ToString(), r.CreatedAtMs.ToString() }));
     private static string BuildStatisticsCsv(IEnumerable<RiderStatisticsDto> stats) => Csv(new[] { "riderId", "riderName", "totalRuns", "finishedRuns", "dnfRuns", "bestResultMs", "bestResultFormatted", "averageResultMs", "averageResultFormatted", "lastResultMs", "lastResultFormatted", "bestTrailName" }, stats.Select(s => new[] { s.RiderId?.ToString() ?? string.Empty, s.RiderName, s.TotalRuns.ToString(), s.FinishedRuns.ToString(), s.DnfRuns.ToString(), s.BestResultMs?.ToString() ?? string.Empty, s.BestResultFormatted ?? string.Empty, s.AverageResultMs?.ToString() ?? string.Empty, s.AverageResultFormatted ?? string.Empty, s.LastResultMs?.ToString() ?? string.Empty, s.LastResultFormatted ?? string.Empty, s.BestTrailName }));
     private static string Csv(string[] header, IEnumerable<string[]> rows) => string.Join('\n', new[] { string.Join(';', header.Select(Escape)) }.Concat(rows.Select(row => string.Join(';', row.Select(Escape))))) + "\n";
     private static string Escape(string? value) { var v = value ?? string.Empty; return v.Contains('"') || v.Contains('\n') || v.Contains('\r') || v.Contains(';') ? $"\"{v.Replace("\"", "\"\"")}\"" : v; }
 }
 
-public sealed record StartRunRequest(string? TrailName = null, string? TrackName = null);
+public sealed record StartRunRequest(Guid? TrailId = null, string? TrailName = null, string? TrackName = null);
+public sealed record TrailRequest(string DisplayName, bool? IsActive = true);
 public sealed record RiderRequest(string DisplayName, string? RfidTagId = null, bool? IsActive = true);
 public sealed record ModeRequest(SystemOperationMode OperationMode);
 public sealed record GroupQueueRequest(IReadOnlyList<Guid> RiderIds);
