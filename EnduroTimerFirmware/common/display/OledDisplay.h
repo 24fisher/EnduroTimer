@@ -13,4 +13,6 @@ public:
 
 private:
   bool initialized_ = false;
+  uint8_t address_ = 0;
+  int vextLevel_ = 0;
 };

@@ -3,6 +3,9 @@
 #include <U8g2lib.h>
 #include <Wire.h>
 
+// Heltec WiFi LoRa 32 V3 built-in OLED usually uses SDA GPIO17, SCL GPIO18,
+// RST GPIO21, address 0x3C. VextCtrl is often GPIO36 and usually active LOW,
+// but revisions/clones may differ.
 #ifndef OLED_SDA
 #ifdef SDA_OLED
 #define OLED_SDA SDA_OLED
@@ -33,79 +36,174 @@
 #elif defined(Vext)
 #define OLED_VEXT Vext
 #else
-#define OLED_VEXT -1
+#define OLED_VEXT 36
 #endif
 #endif
 
 #ifndef OLED_SCAN_ONLY
-#define OLED_SCAN_ONLY 0
+#define OLED_SCAN_ONLY 1
 #endif
 
 #ifndef OLED_VEXT_ON_LEVEL
 #define OLED_VEXT_ON_LEVEL 0
 #endif
 
+#ifndef OLED_FULL_I2C_SCAN
+#define OLED_FULL_I2C_SCAN 0
+#endif
+
+#ifndef OLED_TRY_BOTH_VEXT_LEVELS
+#define OLED_TRY_BOTH_VEXT_LEVELS 0
+#endif
+
 static constexpr uint32_t OledI2cClockHz = 100000UL;
 static constexpr uint16_t OledI2cTimeoutMs = 50;
-static constexpr uint8_t OledI2cAddress3c = 0x3C;
-static constexpr uint8_t OledI2cAddress3d = 0x3D;
+static const uint8_t OLED_ADDR_CANDIDATES[] = {
+  0x3C,
+  0x3D
+};
 static U8G2_SSD1306_128X64_NONAME_F_HW_I2C display(U8G2_R0, OLED_RST, OLED_SCL, OLED_SDA);
 
-static bool checkOledI2cAddresses() {
-  Serial.println("I2C scan start");
-
-  Serial.println("Checking OLED I2C addr 0x3C...");
-  Wire.beginTransmission(OledI2cAddress3c);
-  const uint8_t err3c = Wire.endTransmission();
-  Serial.printf("OLED I2C 0x3C result=%u\n", err3c);
-
-  Serial.println("Checking OLED I2C addr 0x3D...");
-  Wire.beginTransmission(OledI2cAddress3d);
-  const uint8_t err3d = Wire.endTransmission();
-  Serial.printf("OLED I2C 0x3D result=%u\n", err3d);
-
-  const bool found = err3c == 0 || err3d == 0;
-  if (!found) {
-    Serial.println("No OLED I2C device found at 0x3C or 0x3D");
-  }
-  Serial.println("I2C scan done");
-  return found;
-}
-
-bool OledDisplay::begin() {
-  initialized_ = false;
-  Serial.printf("OLED init... SDA=%d SCL=%d RST=%d VEXT=%d SCAN_ONLY=%d\n", OLED_SDA, OLED_SCL, OLED_RST, OLED_VEXT, OLED_SCAN_ONLY);
-  Serial.println("OLED init begin");
-
+static void enableOledVext(int level) {
 #if OLED_VEXT >= 0
-  Serial.printf("OLED VEXT enable: pin=%d level=%d\n", OLED_VEXT, OLED_VEXT_ON_LEVEL);
+  Serial.printf("OLED VEXT enable: pin=%d level=%d\n", OLED_VEXT, level);
   pinMode(OLED_VEXT, OUTPUT);
-  digitalWrite(OLED_VEXT, OLED_VEXT_ON_LEVEL);
+  digitalWrite(OLED_VEXT, level);
   delay(300);
   Serial.printf("OLED VEXT enabled, readback=%d\n", digitalRead(OLED_VEXT));
 #else
+  (void)level;
   Serial.println("OLED VEXT skipped: OLED_VEXT < 0");
 #endif
+}
 
+static void resetOled() {
+#if OLED_RST >= 0
+  Serial.printf("OLED reset: pin=%d\n", OLED_RST);
+  pinMode(OLED_RST, OUTPUT);
+  digitalWrite(OLED_RST, LOW);
+  delay(50);
+  digitalWrite(OLED_RST, HIGH);
+  delay(150);
+  Serial.printf("OLED reset done, readback=%d\n", digitalRead(OLED_RST));
+#else
+  Serial.println("OLED reset skipped: OLED_RST < 0");
+#endif
+}
+
+static void beginOledWire() {
   Serial.printf("I2C begin SDA=%d SCL=%d\n", OLED_SDA, OLED_SCL);
   Wire.begin(OLED_SDA, OLED_SCL);
   Wire.setClock(OledI2cClockHz);
   Wire.setTimeOut(OledI2cTimeoutMs);
+}
 
-  const bool oledAddressFound = checkOledI2cAddresses();
+static void runFullI2cScan() {
+#if OLED_FULL_I2C_SCAN
+  Serial.println("Full I2C scan start: 0x08..0x77");
+  Wire.setTimeOut(OledI2cTimeoutMs);
+  bool anyFound = false;
+  for (uint8_t address = 0x08; address <= 0x77; ++address) {
+    Wire.beginTransmission(address);
+    const uint8_t result = Wire.endTransmission();
+    if (result == 0) {
+      anyFound = true;
+      Serial.printf("I2C device found at 0x%02X\n", address);
+    }
+    delay(1);
+  }
+  if (!anyFound) {
+    Serial.println("No I2C devices found");
+  }
+  Serial.println("Full I2C scan done");
+#endif
+}
+
+static bool checkOledI2cAddresses(uint8_t& foundAddress) {
+  Serial.println("I2C OLED candidate scan start");
+
+  bool found = false;
+  for (uint8_t i = 0; i < sizeof(OLED_ADDR_CANDIDATES); ++i) {
+    const uint8_t address = OLED_ADDR_CANDIDATES[i];
+    Serial.printf("Checking OLED I2C addr 0x%02X...\n", address);
+    Wire.beginTransmission(address);
+    const uint8_t result = Wire.endTransmission();
+    Serial.printf("OLED I2C 0x%02X result=%u\n", address, result);
+    if (result == 0 && !found) {
+      foundAddress = address;
+      found = true;
+    }
+  }
+
+  if (found) {
+    Serial.printf("OLED found at 0x%02X\n", foundAddress);
+  } else {
+    Serial.println("No OLED I2C device found at 0x3C or 0x3D");
+  }
+  Serial.println("I2C OLED candidate scan done");
+  return found;
+}
+
+static bool runOledProbeForVextLevel(int level, uint8_t& foundAddress) {
+  Serial.printf("OLED VEXT test level=%d\n", level);
+  enableOledVext(level);
+  resetOled();
+  beginOledWire();
+
+  const bool oledAddressFound = checkOledI2cAddresses(foundAddress);
+  runFullI2cScan();
+  return oledAddressFound;
+}
+
+bool OledDisplay::begin() {
+  initialized_ = false;
+  address_ = 0;
+  vextLevel_ = OLED_VEXT_ON_LEVEL;
+  Serial.printf(
+      "OLED init... SDA=%d SCL=%d RST=%d VEXT=%d VEXT_ON_LEVEL=%d SCAN_ONLY=%d FULL_I2C_SCAN=%d TRY_BOTH_VEXT_LEVELS=%d\n",
+      OLED_SDA,
+      OLED_SCL,
+      OLED_RST,
+      OLED_VEXT,
+      OLED_VEXT_ON_LEVEL,
+      OLED_SCAN_ONLY,
+      OLED_FULL_I2C_SCAN,
+      OLED_TRY_BOTH_VEXT_LEVELS);
+  Serial.println("OLED init begin");
+
+  uint8_t foundAddress = 0;
+  bool oledAddressFound = runOledProbeForVextLevel(OLED_VEXT_ON_LEVEL, foundAddress);
+
+#if OLED_TRY_BOTH_VEXT_LEVELS && OLED_VEXT >= 0
+  if (!oledAddressFound) {
+    const int alternateLevel = OLED_VEXT_ON_LEVEL ? 0 : 1;
+    oledAddressFound = runOledProbeForVextLevel(alternateLevel, foundAddress);
+    if (oledAddressFound) {
+      vextLevel_ = alternateLevel;
+      Serial.printf("OLED works with VEXT level=%d\n", alternateLevel);
+    }
+  } else {
+    Serial.printf("OLED works with VEXT level=%d\n", OLED_VEXT_ON_LEVEL);
+  }
+#endif
+
   if (!oledAddressFound) {
     Serial.println("OLED not found at 0x3C or 0x3D");
     Serial.println("OLED FAIL");
     return false;
   }
 
+  address_ = foundAddress;
+
 #if OLED_SCAN_ONLY
   Serial.println("OLED scan-only mode, display init skipped");
   Serial.println("OLED OK");
   return true;
 #else
+  display.setI2CAddress(address_ << 1);
   initialized_ = display.begin();
   if (!initialized_) {
+    Serial.println("Serial OLED display init failed");
     Serial.println("OLED FAIL");
     return false;
   }
