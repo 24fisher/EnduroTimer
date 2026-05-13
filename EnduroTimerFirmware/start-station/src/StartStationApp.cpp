@@ -19,7 +19,9 @@ static constexpr uint32_t FinishOfflineTimeoutMs = 6000UL;
 static constexpr uint32_t DisplayRefreshMs = 200UL;
 static constexpr uint32_t ButtonDebounceMs = 70UL;
 RTC_DATA_ATTR static uint32_t startBootCounter = 0;
+#if ENABLE_LORA
 static SX1262 radio = new Module(LORA_NSS, LORA_DIO1, LORA_RST, LORA_BUSY);
+#endif
 
 void StartStationApp::begin() {
   startBootCounter += 1;
@@ -29,13 +31,16 @@ void StartStationApp::begin() {
   Serial.printf("Boot counter: %lu\n", static_cast<unsigned long>(startBootCounter));
   Serial.printf("Chip: %s rev %u cores=%u efuseMac=%llX\n", ESP.getChipModel(), ESP.getChipRevision(), ESP.getChipCores(), ESP.getEfuseMac());
 
+#if ENABLE_OLED
   if (display_.begin()) {
     display_.showBoot("START STATION");
     delay(1200);
   }
+#else
+  Serial.println("OLED init skipped (ENABLE_OLED=0)");
+#endif
 
   buzzer_.begin();
-  beginRadio();
   configureButton();
   state_.begin();
   Serial.printf("State: %s\n", state_.stateText().c_str());
@@ -43,7 +48,9 @@ void StartStationApp::begin() {
 
 void StartStationApp::loop() {
   const uint32_t now = clock_.nowMs();
+#if ENABLE_LORA
   pollRadio();
+#endif
   updateButton(now);
   updateLed(now);
 
@@ -55,10 +62,12 @@ void StartStationApp::loop() {
 
   state_.tickAutoReady(now);
 
+#if ENABLE_OLED
   if (now - lastDisplayMs_ >= DisplayRefreshMs) {
     updateDisplay();
     lastDisplayMs_ = now;
   }
+#endif
 
   logHeartbeat(now);
 }
@@ -78,10 +87,11 @@ void StartStationApp::setWifiStatus(bool apStarted, const IPAddress& ip, const S
   wifiIp_ = ip;
   wifiMac_ = mac;
   if (!wifiApStarted_) {
-    state_.setError();
     Serial.println("WiFi AP failed.");
   }
+#if ENABLE_OLED
   updateDisplay();
+#endif
 }
 
 String StartStationApp::statusJson() const {
@@ -137,6 +147,7 @@ String StartStationApp::runsJson() const {
 }
 
 void StartStationApp::beginRadio() {
+#if ENABLE_LORA
   Serial.printf("LoRa init... %.0f MHz\n", LORA_FREQUENCY_MHZ);
   SPI.begin(9, 11, 10, LORA_NSS);
   const int state = radio.begin(LORA_FREQUENCY_MHZ);
@@ -151,6 +162,10 @@ void StartStationApp::beginRadio() {
   radio.setCodingRate(5);
   radio.setOutputPower(14);
   Serial.println("LoRa OK");
+#else
+  Serial.println("LoRa init skipped (ENABLE_LORA=0)");
+  radioReady_ = false;
+#endif
 }
 
 void StartStationApp::configureButton() {
@@ -206,6 +221,7 @@ void StartStationApp::updateLed(uint32_t nowMs) {
 }
 
 void StartStationApp::pollRadio() {
+#if ENABLE_LORA
   if (!radioReady_) return;
 
   String payload;
@@ -221,9 +237,13 @@ void StartStationApp::pollRadio() {
     }
     handleRadioMessage(message);
   }
+#else
+  (void)this;
+#endif
 }
 
 bool StartStationApp::sendRadio(const RadioMessage& message) {
+#if ENABLE_LORA
   if (!radioReady_) return false;
 
   String payload;
@@ -234,6 +254,10 @@ bool StartStationApp::sendRadio(const RadioMessage& message) {
     return false;
   }
   return true;
+#else
+  (void)message;
+  return false;
+#endif
 }
 
 void StartStationApp::sendRunStart(const RunRecord& run) {

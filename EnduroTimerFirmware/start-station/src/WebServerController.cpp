@@ -13,9 +13,8 @@ bool WebServerController::begin() {
   WiFi.mode(WIFI_AP);
   apStarted_ = WiFi.softAP("EnduroTimer", "endurotimer");
   if (apStarted_) {
-    Serial.println("WiFi AP OK");
+    Serial.printf("WiFi AP OK, IP=%s\n", WiFi.softAPIP().toString().c_str());
     Serial.println("WiFi AP: SSID EnduroTimer");
-    Serial.printf("WiFi AP: IP %s\n", WiFi.softAPIP().toString().c_str());
     Serial.printf("WiFi AP: MAC %s\n", WiFi.softAPmacAddress().c_str());
   } else {
     Serial.println("WiFi AP FAIL");

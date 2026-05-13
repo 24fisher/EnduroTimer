@@ -1,30 +1,99 @@
 #include <Arduino.h>
 
 #include "StartStationApp.h"
-#include "WebServerController.h"
 
+#if ENABLE_WIFI && ENABLE_WEB
+#include "WebServerController.h"
+#endif
+
+#if ENABLE_WIFI
 #include <WiFi.h>
+#endif
 
 StartStationApp app;
+#if ENABLE_WIFI && ENABLE_WEB
 WebServerController web(app);
+#endif
+
+#if ENABLE_WIFI
+static bool beginWifiApOnly() {
+  Serial.println("WiFi AP init...");
+  WiFi.mode(WIFI_AP);
+  const bool apStarted = WiFi.softAP("EnduroTimer", "endurotimer");
+  if (apStarted) {
+    Serial.printf("WiFi AP OK, IP=%s\n", WiFi.softAPIP().toString().c_str());
+    Serial.println("WiFi AP: SSID EnduroTimer");
+    Serial.printf("WiFi AP: MAC %s\n", WiFi.softAPmacAddress().c_str());
+  } else {
+    Serial.println("WiFi AP FAIL");
+  }
+  return apStarted;
+}
+#endif
+
+static void blinkDiagnosticLed(uint32_t nowMs) {
+#ifdef LED_BUILTIN
+  static bool configured = false;
+  static bool ledOn = false;
+  static uint32_t lastBlinkMs = 0;
+  if (!configured) {
+    pinMode(LED_BUILTIN, OUTPUT);
+    configured = true;
+  }
+  if (nowMs - lastBlinkMs >= 1000UL) {
+    ledOn = !ledOn;
+    digitalWrite(LED_BUILTIN, ledOn ? HIGH : LOW);
+    lastBlinkMs = nowMs;
+  }
+#else
+  (void)nowMs;
+#endif
+}
 
 void setup() {
   Serial.begin(115200);
-  delay(1000);
+  delay(1500);
+
   Serial.println();
   Serial.println("================================");
-  Serial.println("ENDURO TIMER START STATION BOOT");
+  Serial.println("ENDURO TIMER START STATION APP ENTRY");
   Serial.println("Build: " __DATE__ " " __TIME__);
   Serial.println("Serial OK");
   Serial.println("================================");
 
   app.begin();
+
+#if ENABLE_WIFI && ENABLE_WEB
   web.begin();
   app.setWifiStatus(web.apStarted(), WiFi.softAPIP(), WiFi.softAPmacAddress());
+#elif ENABLE_WIFI
+  const bool apStarted = beginWifiApOnly();
+  app.setWifiStatus(apStarted, WiFi.softAPIP(), WiFi.softAPmacAddress());
+#else
+  Serial.println("WiFi AP init skipped (ENABLE_WIFI=0)");
+#endif
+
+#if ENABLE_LORA
+  app.beginRadio();
+#else
+  Serial.println("LoRa init skipped (ENABLE_LORA=0)");
+#endif
 }
 
 void loop() {
+  static uint32_t lastLog = 0;
+  const uint32_t now = millis();
+  blinkDiagnosticLed(now);
+
+  if (now - lastLog > 1000UL) {
+    lastLog = now;
+    Serial.print("APP alive ms=");
+    Serial.println(now);
+  }
+
   app.loop();
+#if ENABLE_WIFI && ENABLE_WEB
   web.loop();
+#endif
   delay(2);
 }
