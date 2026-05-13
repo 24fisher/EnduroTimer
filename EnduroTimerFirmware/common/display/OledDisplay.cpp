@@ -19,7 +19,7 @@
 static U8G2_SSD1306_128X64_NONAME_F_HW_I2C display(U8G2_R0, OLED_RST, OLED_SCL, OLED_SDA);
 
 bool OledDisplay::begin() {
-  Serial.printf("OLED: init... SDA=%d SCL=%d RST=%d VEXT=%d\n", OLED_SDA, OLED_SCL, OLED_RST, VEXT_PIN);
+  Serial.printf("OLED init... SDA=%d SCL=%d RST=%d VEXT=%d\n", OLED_SDA, OLED_SCL, OLED_RST, VEXT_PIN);
 
   pinMode(VEXT_PIN, OUTPUT);
   digitalWrite(VEXT_PIN, LOW);
@@ -28,7 +28,7 @@ bool OledDisplay::begin() {
   Wire.begin(OLED_SDA, OLED_SCL);
   initialized_ = display.begin();
   if (!initialized_) {
-    Serial.println("OLED: init failed");
+    Serial.println("OLED FAIL");
     return false;
   }
 
@@ -37,7 +37,7 @@ bool OledDisplay::begin() {
   display.drawStr(0, 12, "ENDURO TIMER");
   display.drawStr(0, 28, "OLED OK");
   display.sendBuffer();
-  Serial.println("OLED: OK");
+  Serial.println("OLED OK");
   return true;
 }
 

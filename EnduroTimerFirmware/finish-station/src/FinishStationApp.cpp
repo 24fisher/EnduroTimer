@@ -20,26 +20,23 @@ RTC_DATA_ATTR static uint32_t finishBootCounter = 0;
 static SX1262 radio = new Module(LORA_NSS, LORA_DIO1, LORA_RST, LORA_BUSY);
 
 void FinishStationApp::begin() {
-  Serial.begin(115200);
-  delay(300);
   finishBootCounter += 1;
 
-  Serial.println();
-  Serial.println("FINISH STATION BOOT");
   Serial.println("Firmware: EnduroTimer FinishStation");
-  Serial.printf("Build: %s %s\n", __DATE__, __TIME__);
-  Serial.println("Serial: OK");
   Serial.println("Board/role: Heltec WiFi LoRa 32 V3 / FinishStation");
   Serial.printf("Boot counter: %lu\n", static_cast<unsigned long>(finishBootCounter));
   Serial.printf("Chip: %s rev %u cores=%u efuseMac=%llX\n", ESP.getChipModel(), ESP.getChipRevision(), ESP.getChipCores(), ESP.getEfuseMac());
 
-  display_.begin();
-  display_.showBoot("FINISH STATION");
-  delay(1200);
+  if (display_.begin()) {
+    display_.showBoot("FINISH STATION");
+    delay(1200);
+  }
 
   buzzer_.begin();
   beginRadio();
+  Serial.println("Button init...");
   sensor_.begin();
+  Serial.println("Button OK");
   state_.begin();
   Serial.printf("State: %s\n", state_.stateText().c_str());
 }
@@ -81,15 +78,17 @@ void FinishStationApp::loop() {
     updateDisplay();
     lastDisplayMs_ = now;
   }
+
+  logHeartbeat(now);
 }
 
 void FinishStationApp::beginRadio() {
-  Serial.printf("LoRa: init %.0f MHz...\n", LORA_FREQUENCY_MHZ);
+  Serial.printf("LoRa init... %.0f MHz\n", LORA_FREQUENCY_MHZ);
   SPI.begin(9, 11, 10, LORA_NSS);
   const int initState = radio.begin(LORA_FREQUENCY_MHZ);
   radioReady_ = initState == RADIOLIB_ERR_NONE;
   if (!radioReady_) {
-    Serial.printf("LoRa: init failed (%d)\n", initState);
+    Serial.printf("LoRa FAIL (%d)\n", initState);
     return;
   }
 
@@ -97,7 +96,7 @@ void FinishStationApp::beginRadio() {
   radio.setSpreadingFactor(7);
   radio.setCodingRate(5);
   radio.setOutputPower(14);
-  Serial.println("LoRa: OK");
+  Serial.println("LoRa OK");
 }
 
 void FinishStationApp::updateLed(uint32_t nowMs) {
@@ -218,4 +217,11 @@ void FinishStationApp::updateDisplay() {
     state_.state() == FinishRunState::WaitFinish ? "Btn: finish" : "Btn: finish sim",
     "Sent: " + String(finishAttempts_) + "/5 H:" + String(heartbeatCounter_),
   });
+}
+
+void FinishStationApp::logHeartbeat(uint32_t nowMs) {
+  if (nowMs - lastHeartbeatMs_ < 1000UL) return;
+
+  Serial.printf("FINISH alive state=%s uptime=%lu\n", state_.stateText().c_str(), static_cast<unsigned long>(nowMs));
+  lastHeartbeatMs_ = nowMs;
 }

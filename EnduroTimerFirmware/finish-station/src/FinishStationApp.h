@@ -24,6 +24,7 @@ private:
   void sendFinish();
   void handleRadioMessage(const RadioMessage& message);
   void updateDisplay();
+  void logHeartbeat(uint32_t nowMs);
 
   ClockService clock_;
   OledDisplay display_;
@@ -37,6 +38,7 @@ private:
   uint32_t lastFinishSendMs_ = 0;
   uint32_t heartbeatCounter_ = 0;
   uint32_t lastLedMs_ = 0;
+  uint32_t lastHeartbeatMs_ = 0;
   uint8_t finishAttempts_ = 0;
   bool ledOn_ = false;
   String lastPacket_ = "-";
