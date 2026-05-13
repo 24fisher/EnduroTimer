@@ -39,15 +39,19 @@ EnduroTimerFirmware/
 
 The firmware uses Arduino framework for ESP32, RadioLib for SX1262, LittleFS for the StartStation Web UI, and U8g2 for the OLED.
 
-Default built-in OLED pins are configured for Heltec WiFi LoRa 32 V3 and can be overridden from `platformio.ini` build flags:
+Default built-in OLED pins are configured for Heltec WiFi LoRa 32 V3 and can be overridden from `platformio.ini` build flags. Heltec WiFi LoRa 32 V3 built-in OLED usually uses SDA GPIO17, SCL GPIO18, RST GPIO21, address 0x3C. VextCtrl is often GPIO36 and usually active LOW, but revisions/clones may differ.
 
-- `OLED_SDA = 17`
-- `OLED_SCL = 18`
-- `OLED_RST = 21`
-- `OLED_VEXT = 36` in the current diagnostic configuration. Set it to `-1` only when the VEXT control pin is unknown and firmware must not touch VEXT.
-- `OLED_VEXT_ON_LEVEL = 0` by default, matching the Heltec active-low VEXT enable line.
-- `OLED_SCAN_ONLY = 1` in the current diagnostic configuration; this performs an I2C-only OLED smoke test that skips display initialization and drawing.
-- OLED probing checks only I2C addresses `0x3C` and `0x3D`.
+| Setting | Default Heltec WiFi LoRa 32 V3 value | Notes |
+| --- | --- | --- |
+| `OLED_SDA` | `17` | I2C SDA for the built-in OLED. |
+| `OLED_SCL` | `18` | I2C SCL for the built-in OLED. |
+| `OLED_RST` | `21` | Set to `-1` to skip the OLED reset pulse during diagnostics. |
+| `OLED_VEXT` | `36` | Set to `-1` only when firmware must not touch a VEXT control pin. |
+| `OLED_VEXT_ON_LEVEL` | `0` | Usually active LOW on Heltec V3. |
+| `OLED_SCAN_ONLY` | `1` | Diagnostic mode: probe I2C only, skip `display.init()`/drawing. |
+| `OLED_FULL_I2C_SCAN` | `0` | Optional full scan of I2C addresses `0x08..0x77`. |
+| `OLED_TRY_BOTH_VEXT_LEVELS` | `0` | Optional diagnostic retry with the opposite VEXT level. |
+| OLED address | `0x3C` | The firmware also probes `0x3D`. |
 
 When the selected ESP32 board package provides Heltec-style pin definitions such as `SDA_OLED`, `SCL_OLED`, `RST_OLED`, or `Vext`, the OLED helper uses those as fallback defaults before falling back to the values above. If `OLED_VEXT >= 0`, the firmware logs the VEXT pin and level, enables that GPIO before OLED probing, waits for the rail to settle, and logs a readback value. Keep `OLED_VEXT=-1` if the VEXT control pin is unknown.
 
@@ -173,6 +177,8 @@ The default PlatformIO build flags intentionally keep the Heltec startup path mi
 -D OLED_VEXT=36
 -D OLED_VEXT_ON_LEVEL=0
 -D OLED_SCAN_ONLY=1
+-D OLED_FULL_I2C_SCAN=0
+-D OLED_TRY_BOTH_VEXT_LEVELS=0
 -D ARDUINO_USB_CDC_ON_BOOT=0
 -D ARDUINO_USB_MODE=0
 ```
@@ -197,17 +203,41 @@ After the OLED scan-only serial heartbeat is confirmed, disable `OLED_SCAN_ONLY`
 - Confirm that `WiFi.softAP` returned `true` in the Serial log.
 - Check USB power and try another cable or port.
 
-### OLED is blank or boot stops at OLED init
+### Heltec V3 OLED diagnostics
+
+The built-in OLED is usually at I2C address `0x3C` on GPIO17/GPIO18. Vext is usually GPIO36 and most often active LOW, but board revisions and clones may differ. If ROM/application logs are visible in Serial but the OLED remains blank:
+
+1. Enable `ENABLE_OLED=1`.
+2. Enable `OLED_SCAN_ONLY=1` so the firmware performs only OLED/I2C diagnostics, does not initialize U8g2, and does not draw to the display.
+3. Enable `OLED_TRY_BOTH_VEXT_LEVELS=1` to try both the configured `OLED_VEXT_ON_LEVEL` and the opposite level.
+4. Enable `OLED_FULL_I2C_SCAN=1` to supplement the quick `0x3C`/`0x3D` OLED probe with a bounded scan of `0x08..0x77`.
+5. Watch Serial result codes and keep the one-second `APP alive ms=...` heartbeat running while changing one build flag at a time.
+
+Diagnostic flags can be changed without code edits:
+
+| Scenario | Build flag change |
+| --- | --- |
+| Default Heltec V3 diagnostic pinout | `OLED_SDA=17`, `OLED_SCL=18`, `OLED_RST=21`, `OLED_VEXT=36`, `OLED_VEXT_ON_LEVEL=0`, OLED address `0x3C` |
+| Try both VEXT power levels | `OLED_TRY_BOTH_VEXT_LEVELS=1` |
+| Run a bounded full bus scan | `OLED_FULL_I2C_SCAN=1` |
+| Skip the reset pulse | `OLED_RST=-1` |
+| Verify board selection | Use PlatformIO board `heltec_wifi_lora_32_V3` |
+| Suspect hardware mismatch | Check whether the board is a different revision or clone. |
+
+Serial result codes from `Wire.endTransmission()` are the key signal:
+
+- `result=0` means an I2C device acknowledged the address.
+- `result=2` means NACK on the address.
+- `result=5` means timeout or another bus-level error.
+
+The quick OLED probe always checks `0x3C` and `0x3D` first and logs each candidate, for example `Checking OLED I2C addr 0x3C...` followed by `OLED I2C 0x3C result=...`. When `OLED_FULL_I2C_SCAN=1`, the full scan runs after the quick probe and logs `I2C device found at 0xXX` or `No I2C devices found`; it does not replace the quick OLED probe. When `OLED_TRY_BOTH_VEXT_LEVELS=1`, each VEXT level performs VEXT enable, reset, `Wire.begin(...)`, quick OLED probing, and optional full scan.
+
+If no OLED is found, try `OLED_TRY_BOTH_VEXT_LEVELS=1`, then `OLED_FULL_I2C_SCAN=1`, then `OLED_RST=-1`. Also verify that the firmware is built for `heltec_wifi_lora_32_V3` and that the board is not a different revision or clone.
 
 - If the Serial log stops after `OLED init...`, first build with `ENABLE_OLED=0` and confirm the one-second `APP alive ms=...` heartbeat continues.
-- Next build with `ENABLE_OLED=1` and `OLED_SCAN_ONLY=1`; this runs only `Wire.begin(...)` plus an I2C scan and does not call `display.begin()` or draw to the OLED.
-- Every OLED boot attempt logs either `OLED VEXT enable: pin=... level=...` or `OLED VEXT skipped: OLED_VEXT < 0` immediately after `OLED init begin`.
-- A healthy built-in display should normally return `OLED I2C 0x3C result=0` or `OLED I2C 0x3D result=0` between `I2C scan start` and `I2C scan done`.
-- If the scan prints `No OLED I2C device found at 0x3C or 0x3D`, verify `OLED_SDA`, `OLED_SCL`, `OLED_RST`, `OLED_VEXT`, and `OLED_VEXT_ON_LEVEL` for the exact Heltec WiFi LoRa 32 V3 board revision.
-- Keep `OLED_VEXT=-1` unless you are sure which GPIO controls VEXT on your board; do not call `pinMode` on an unknown VEXT pin.
-- If your board requires VEXT power control, set `OLED_VEXT` and `OLED_VEXT_ON_LEVEL` explicitly in `platformio.ini` and retest with `OLED_SCAN_ONLY=1` before enabling full OLED initialization.
+- With `OLED_SCAN_ONLY=1`, the firmware returns `OLED OK` only when `0x3C` or `0x3D` responds; otherwise it returns `OLED FAIL`. In both cases it skips display initialization/drawing and the main loop heartbeat continues.
+- With `OLED_SCAN_ONLY=0`, the firmware first finds the OLED address from the candidates, then initializes U8g2 at the found address. If display initialization fails, Serial prints `Serial OLED display init failed`, the firmware returns `OLED FAIL`, and the main loop continues.
 - Confirm that U8g2 is installed by PlatformIO.
-- The firmware returns `OLED FAIL` and continues to Wi-Fi, LoRa, state initialization, and heartbeat logging when OLED probing fails. In scan-only mode, it returns `OLED OK` only when `0x3C` or `0x3D` responds and still skips display drawing.
 
 ### LoRa is offline
 
