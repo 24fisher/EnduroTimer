@@ -33,8 +33,7 @@ void StartStationApp::begin() {
 
 #if ENABLE_OLED
   if (display_.begin()) {
-    display_.showBoot("START STATION");
-    delay(1200);
+    display_.showBootScreen("START");
   }
 #else
   Serial.println("OLED init skipped (ENABLE_OLED=0)");
@@ -328,12 +327,12 @@ void StartStationApp::updateDisplay() {
   }
 
   display_.showLines({
+    "ENDURO TIMER",
     "START",
-    wifiApStarted_ ? "AP: EnduroTimer" : "WIFI FAIL",
+    state_.stateText(),
     "IP: " + (wifiApStarted_ ? wifiIp_.toString() : String("-")),
-    String("LoRa: ") + (radioReady_ ? "OK" : "OFF"),
-    String("Finish: ") + (finishOnline() ? "OK" : "OFF"),
-    "State: " + state_.stateText(),
+    String("FIN: ") + (finishOnline() ? "OK" : "OFF"),
+    "LAST: " + lastResult,
   });
 }
 
