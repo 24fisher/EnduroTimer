@@ -82,7 +82,8 @@ void FinishStationApp::loop() {
   }
 
 #if ENABLE_OLED
-  if (now - lastDisplayMs_ >= DisplayRefreshMs) {
+  display_.update();
+  if (!display_.testPatternOnly() && now - lastDisplayMs_ >= DisplayRefreshMs) {
     updateDisplay();
     lastDisplayMs_ = now;
   }

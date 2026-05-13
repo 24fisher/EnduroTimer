@@ -8,7 +8,9 @@ public:
   bool begin();
   bool available() const { return initialized_; }
   bool isAvailable() const { return available(); }
+  bool testPatternOnly() const;
 
+  void update();
   void showLines(const std::vector<String>& lines);
   void showBoot(const String& role);
   void showBootScreen(const String& role);

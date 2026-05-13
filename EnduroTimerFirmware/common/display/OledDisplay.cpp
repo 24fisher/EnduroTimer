@@ -58,12 +58,46 @@
 #define OLED_DRAW_TEST_ONLY 0
 #endif
 
+#ifndef OLED_TEST_PATTERN_ONLY
+#define OLED_TEST_PATTERN_ONLY 0
+#endif
+
+#ifndef OLED_INVERT_TEST
+#define OLED_INVERT_TEST 0
+#endif
+
+#define SSD1306_NONAME 1
+#define SSD1306_VCOMH0 2
+#define SH1106 3
+#define SSD1306_64_NONAME 4
+
+#ifndef OLED_DRIVER_TYPE
+#define OLED_DRIVER_TYPE SSD1306_NONAME
+#endif
+
 static constexpr uint32_t OledI2cClockHz = 100000UL;
 static constexpr uint16_t OledI2cTimeoutMs = 50;
 static const uint8_t OledAddressCandidates[] = {0x3C, 0x3D};
 
-using OledDisplayDriver = U8G2_SSD1306_128X64_NONAME_F_HW_I2C;
+#if OLED_DRIVER_TYPE == SSD1306_VCOMH0
+using OledDisplayDriver = U8G2_SSD1306_128X64_VCOMH0_F_SW_I2C;
+static const char* OledDriverTypeName = "SSD1306_VCOMH0";
+#elif OLED_DRIVER_TYPE == SH1106
+using OledDisplayDriver = U8G2_SH1106_128X64_NONAME_F_SW_I2C;
+static const char* OledDriverTypeName = "SH1106";
+#elif OLED_DRIVER_TYPE == SSD1306_64_NONAME
+// U8g2 has no separate 128x64 constructor named SSD1306_64_NONAME in the
+// supported matrix, so keep the 128x64 NONAME constructor and expose the build
+// flag as a diagnostic alias.
+using OledDisplayDriver = U8G2_SSD1306_128X64_NONAME_F_SW_I2C;
+static const char* OledDriverTypeName = "SSD1306_64_NONAME";
+#else
+using OledDisplayDriver = U8G2_SSD1306_128X64_NONAME_F_SW_I2C;
+static const char* OledDriverTypeName = "SSD1306_NONAME";
+#endif
+
 static std::unique_ptr<OledDisplayDriver> u8g2;
+static uint32_t lastInvertTestMs = 0;
 
 static void enableOledVext() {
   Serial.println("OLED VEXT enable...");
@@ -119,7 +153,9 @@ static bool findOledAddress(uint8_t& foundAddress) {
 
 static bool createU8g2(uint8_t address) {
   Serial.println("U8g2 create begin");
-  u8g2.reset(new OledDisplayDriver(U8G2_R0, OLED_RST, OLED_SCL, OLED_SDA));
+  Serial.printf("OLED driver type: %s\n", OledDriverTypeName);
+  // U8g2 SW I2C argument order is rotation, clock, data, reset.
+  u8g2.reset(new OledDisplayDriver(U8G2_R0, OLED_SCL, OLED_SDA, OLED_RST));
   Serial.println("U8g2 create returned");
 
   if (u8g2 == nullptr) {
@@ -128,32 +164,49 @@ static bool createU8g2(uint8_t address) {
   }
 
   u8g2->setI2CAddress(address << 1);
+  Serial.printf("U8g2 I2C address set to 0x%02X\n", address << 1);
   return true;
 }
 
-static void drawSplash(const char* role) {
-  Serial.println("U8g2 splash draw begin");
+static void prepareVisibleOled() {
+  Serial.println("U8g2 setPowerSave 0");
+  u8g2->setPowerSave(0);
+  Serial.println("U8g2 setContrast 255");
+  u8g2->setContrast(255);
+}
+
+static void drawTestPattern() {
+  prepareVisibleOled();
+  Serial.println("U8g2 render test begin");
   u8g2->clearBuffer();
-  u8g2->setFont(u8g2_font_6x10_tf);
-  u8g2->drawStr(0, 10, "ENDURO TIMER");
-  u8g2->drawStr(0, 24, role);
-  u8g2->drawStr(0, 38, "OLED OK");
+  u8g2->drawFrame(0, 0, 128, 64);
+  u8g2->drawBox(0, 0, 20, 20);
+  u8g2->setFont(u8g2_font_6x12_tf);
+  u8g2->drawStr(24, 12, "ENDURO");
+  u8g2->drawStr(24, 28, "START");
+  u8g2->drawStr(24, 44, "OLED TEST");
+  u8g2->drawLine(0, 63, 127, 0);
+  u8g2->drawLine(0, 32, 127, 32);
+  u8g2->drawLine(64, 0, 64, 63);
+  Serial.println("U8g2 sendBuffer begin");
   u8g2->sendBuffer();
-  Serial.println("U8g2 splash draw returned");
+  Serial.println("U8g2 sendBuffer returned");
+  Serial.println("OLED test pattern displayed");
 }
 
 bool OledDisplay::begin() {
   initialized_ = false;
   address_ = 0;
+  lastInvertTestMs = 0;
 
 #if !ENABLE_OLED
   Serial.println("OLED init skipped (ENABLE_OLED=0)");
   return false;
 #else
   Serial.println("OLED init begin");
-  Serial.printf("OLED config SDA=%d SCL=%d RST=%d VEXT=%d VEXT_ON_LEVEL=%d SCAN_ONLY=%d DRAW_TEST_ONLY=%d\n",
+  Serial.printf("OLED config SDA=%d SCL=%d RST=%d VEXT=%d VEXT_ON_LEVEL=%d SCAN_ONLY=%d DRAW_TEST_ONLY=%d TEST_PATTERN_ONLY=%d INVERT_TEST=%d\n",
                 OLED_SDA, OLED_SCL, OLED_RST, OLED_VEXT, OLED_VEXT_ON_LEVEL, OLED_SCAN_ONLY,
-                OLED_DRAW_TEST_ONLY);
+                OLED_DRAW_TEST_ONLY, OLED_TEST_PATTERN_ONLY, OLED_INVERT_TEST);
 
   enableOledVext();
   resetOled();
@@ -188,13 +241,7 @@ bool OledDisplay::begin() {
     return false;
   }
 
-#ifdef START_STATION
-  drawSplash("START");
-#elif defined(FINISH_STATION)
-  drawSplash("FINISH");
-#else
-  drawSplash("STATION");
-#endif
+  drawTestPattern();
   Serial.println("OLED OK");
   return true;
 #endif
@@ -202,15 +249,37 @@ bool OledDisplay::begin() {
 #endif
 }
 
-void OledDisplay::showLines(const std::vector<String>& lines) {
+void OledDisplay::update() {
   if (!initialized_ || u8g2 == nullptr) return;
+
+#if OLED_INVERT_TEST
+  const uint32_t now = millis();
+  if (now - lastInvertTestMs >= 1000UL) {
+    Serial.println("OLED invert/display power test tick");
+    prepareVisibleOled();
+    lastInvertTestMs = now;
+  }
+#endif
+}
+
+bool OledDisplay::testPatternOnly() const {
+#if OLED_TEST_PATTERN_ONLY
+  return true;
+#else
+  return false;
+#endif
+}
+
+void OledDisplay::showLines(const std::vector<String>& lines) {
+  if (!initialized_ || u8g2 == nullptr || testPatternOnly()) return;
 
   u8g2->clearBuffer();
   u8g2->setFont(u8g2_font_6x10_tf);
 
   int y = 10;
   for (const String& line : lines) {
-    u8g2->drawStr(0, y, line.c_str());
+    const String visibleLine = line.length() > 0 ? line : String("-");
+    u8g2->drawStr(0, y, visibleLine.c_str());
     y += 10;
     if (y > 64) break;
   }
@@ -223,15 +292,22 @@ void OledDisplay::showBoot(const String& role) {
 }
 
 void OledDisplay::showBootScreen(const String& role) {
-  showLines({"ENDURO TIMER", role, "READY"});
+  if (testPatternOnly()) return;
+  showLines({"ENDURO TIMER", role.length() > 0 ? role : String("START"), "READY", "UP: " + String(millis() / 1000UL) + "s"});
 }
 
 void OledDisplay::showStatus(const String& line1, const String& line2, const String& line3, const String& line4) {
-  showLines({line1, line2, line3, line4});
+  if (testPatternOnly()) return;
+
+  const String visibleLine1 = line1.length() > 0 ? line1 : String("START");
+  const String visibleLine2 = line2.length() > 0 ? line2 : String("READY");
+  const String visibleLine3 = line3.length() > 0 ? line3 : String("UP: ") + String(millis() / 1000UL) + "s";
+  const String visibleLine4 = line4.length() > 0 ? line4 : String("OLED OK");
+  showLines({visibleLine1, visibleLine2, visibleLine3, visibleLine4});
 }
 
 void OledDisplay::showCountdown(const String& text) {
-  if (!initialized_ || u8g2 == nullptr) return;
+  if (!initialized_ || u8g2 == nullptr || testPatternOnly()) return;
 
   u8g2->clearBuffer();
   u8g2->setFont(u8g2_font_logisoso46_tf);
@@ -243,5 +319,6 @@ void OledDisplay::showCountdown(const String& text) {
 }
 
 void OledDisplay::showResult(const String& result, const String& detail) {
-  showLines({"RESULT", result, detail});
+  if (testPatternOnly()) return;
+  showLines({"RESULT", result.length() > 0 ? result : String("-"), detail.length() > 0 ? detail : String("-")});
 }
