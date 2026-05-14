@@ -30,7 +30,7 @@ void StartStationApp::begin() {
   startBootCounter += 1;
 
   Serial.println("Firmware: EnduroTimer StartStation");
-  Serial.println("Version: " FIRMWARE_VERSION);
+  Serial.println("Version: v" FIRMWARE_VERSION);
   Serial.println("Build: " __DATE__ " " __TIME__);
   Serial.println("Board/role: Heltec WiFi LoRa 32 V3 / StartStation");
   bootId_ = makeBootId("start");
@@ -71,19 +71,36 @@ void StartStationApp::loop() {
   RunRecord runToStart;
   updateCountdownDisplay(now);
   if (state_.updateCountdown(now, runToStart)) {
+    Serial.println("COUNTDOWN GO");
     buzzer_.beep("GO");
+    pendingRunStartAck_ = true;
+    runStartAckReceived_ = false;
+    runStartAckTimedOut_ = false;
+    runStartAckAttempts_ = 0;
+    lastRunStartAckMs_ = 0;
     sendRunStart(runToStart);
     lastPriorityTxMs_ = now;
   }
 
-  if (discoveryActive() && now - lastDiscoverySentMs_ >= LINK_DISCOVERY_INTERVAL_MS && (lastPriorityTxMs_ == 0 || now > lastPriorityTxMs_)) {
-    sendHello(now);
-    lastDiscoverySentMs_ = now;
+  retryRunStartAck(now);
+
+  const bool priorityPending = priorityTxPending();
+  if (discoveryActive() && now - lastDiscoverySentMs_ >= LINK_DISCOVERY_INTERVAL_MS) {
+    if (priorityPending) {
+      Serial.println("TX deferred HELLO because priority message pending");
+    } else {
+      sendHello(now);
+      lastDiscoverySentMs_ = now;
+    }
   }
 
-  if (now - lastStatusSendMs_ >= StatusIntervalMs && (lastPriorityTxMs_ == 0 || now > lastPriorityTxMs_)) {
-    sendStatus(now);
-    lastStatusSendMs_ = now;
+  if (now - lastStatusSendMs_ >= StatusIntervalMs) {
+    if (priorityPending) {
+      Serial.println("TX deferred STATUS because priority message pending");
+    } else {
+      sendStatus(now);
+      lastStatusSendMs_ = now;
+    }
   }
 
   state_.tickAutoReady(now);
@@ -115,6 +132,11 @@ bool StartStationApp::requestStartRun(String& error) {
 
 void StartStationApp::resetSystem() {
   Serial.println("[StartStation] system reset requested");
+  pendingRunStartAck_ = false;
+  runStartAckReceived_ = false;
+  runStartAckTimedOut_ = false;
+  runStartAckAttempts_ = 0;
+  lastRunStartSendMs_ = 0;
   state_.resetActiveRun();
 }
 
@@ -172,6 +194,10 @@ String StartStationApp::statusJson() const {
   doc["finishRiderName"] = finishRiderName_;
   doc["finishElapsedMs"] = finishElapsedMs_;
   doc["startHeartbeatCount"] = startHeartbeatCount_;
+  doc["pendingRunStartAck"] = pendingRunStartAck_;
+  doc["runStartAckAttempts"] = runStartAckAttempts_;
+  doc["runStartAckReceived"] = runStartAckReceived_;
+  doc["lastRunStartAckAgoMs"] = lastRunStartAckMs_ > 0 ? static_cast<uint32_t>(millis() - lastRunStartAckMs_) : UINT32_MAX;
   if (lastStatusSentOkMs_ > 0) doc["lastStartStatusSentAgoMs"] = static_cast<uint32_t>(millis() - lastStatusSentOkMs_); else doc["lastStartStatusSentAgoMs"] = nullptr;
   const String displayedFinishState = finishLinkActive ? finishState_ : String("Unknown");
   doc["finishState"] = displayedFinishState;
@@ -407,12 +433,14 @@ bool StartStationApp::sendRadio(const RadioMessage& message, int* resultCode) {
 
 void StartStationApp::restoreRadioReceiveMode() {
 #if ENABLE_LORA
-  // This firmware uses polling receive(), so the next pollRadio() call explicitly
-  // re-enters RX after the short blocking transmit.
+  yield();
+  delay(1);
 #endif
 }
 
 void StartStationApp::sendRunStart(const RunRecord& run) {
+  if (runStartAckAttempts_ >= 10) return;
+  runStartAckAttempts_ += 1;
   RadioMessage message;
   message.type = RadioMessageType::RunStart;
   message.stationId = "start";
@@ -424,15 +452,42 @@ void StartStationApp::sendRunStart(const RunRecord& run) {
   message.version = FIRMWARE_VERSION;
   message.bootId = bootId_;
 
+  lastRunStartSendMs_ = clock_.nowMs();
   Serial.printf("RUN_START TX runId=%s rider=%s\n", run.runId.c_str(), run.riderName.c_str());
+  Serial.printf("RUN_START TX attempt=%u runId=%s\n", runStartAckAttempts_, run.runId.c_str());
+  Serial.printf("TX priority RUN_START attempt=%u\n", runStartAckAttempts_);
   int resultCode = 0;
   if (sendRadio(message, &resultCode)) {
     lastPriorityTxMs_ = clock_.nowMs();
+    lastRunStartSendMs_ = lastPriorityTxMs_;
     Serial.printf("RUN_START sent OK runId=%s start=%lu\n", run.runId.c_str(),
                   static_cast<unsigned long>(run.startTimestampMs));
   } else {
     Serial.printf("RUN_START failed code=%d runId=%s\n", resultCode, run.runId.c_str());
   }
+}
+
+void StartStationApp::retryRunStartAck(uint32_t nowMs) {
+  if (!pendingRunStartAck_) return;
+  if (runStartAckAttempts_ >= 10) {
+    pendingRunStartAck_ = false;
+    runStartAckTimedOut_ = true;
+    Serial.printf("RUN_START ACK TIMEOUT attempts=%u\n", runStartAckAttempts_);
+#if ENABLE_OLED
+    if (!display_.testPatternOnly()) {
+      display_.showLines({startShortHeader(), "FINISH DID NOT", "ACK START"});
+    }
+#endif
+    return;
+  }
+  if (lastRunStartSendMs_ > 0 && nowMs - lastRunStartSendMs_ < 500UL) return;
+  sendRunStart(state_.currentRun());
+}
+
+bool StartStationApp::priorityTxPending() const {
+  const uint32_t nowMs = millis();
+  const bool priorityTxRecently = lastPriorityTxMs_ > 0 && nowMs - lastPriorityTxMs_ < 2UL;
+  return pendingRunStartAck_ || priorityTxRecently;
 }
 
 void StartStationApp::sendFinishAck(const String& runId) {
@@ -503,7 +558,8 @@ void StartStationApp::sendHelloAck(uint32_t nowMs) {
 }
 
 bool StartStationApp::discoveryActive() const {
-  return !isLinkActive(finishLink_);
+  const bool activeRun = state_.state() == StartRunState::Countdown || state_.state() == StartRunState::Riding || state_.state() == StartRunState::Finished;
+  return !activeRun && !pendingRunStartAck_ && !isLinkActive(finishLink_);
 }
 
 void StartStationApp::updateFinishLink(const RadioMessage& message, int packetRssi, float packetSnr) {
@@ -548,13 +604,37 @@ void StartStationApp::handleRadioMessage(const RadioMessage& message) {
   if (message.type == RadioMessageType::Hello && message.stationId == "finish") {
     lastHelloReceivedMs_ = millis();
     if (message.version.length() > 0) finishFirmwareVersion_ = message.version;
-    sendHelloAck(millis());
+    if (priorityTxPending()) {
+      Serial.println("TX deferred HELLO_ACK because priority message pending");
+    } else {
+      sendHelloAck(millis());
+    }
     return;
   }
 
   if (message.type == RadioMessageType::HelloAck && message.stationId == "finish") {
     lastHelloReceivedMs_ = millis();
     if (message.version.length() > 0) finishFirmwareVersion_ = message.version;
+    return;
+  }
+
+  if (message.type == RadioMessageType::RunStartAck && message.stationId == "finish") {
+    Serial.printf("RUN_START_ACK RX runId=%s\n", message.runId.c_str());
+    if (message.runId == state_.currentRun().runId && pendingRunStartAck_) {
+      pendingRunStartAck_ = false;
+      runStartAckReceived_ = true;
+      runStartAckTimedOut_ = false;
+      lastRunStartAckMs_ = millis();
+      if (message.state.length() > 0) finishState_ = message.state;
+      if (message.version.length() > 0) finishFirmwareVersion_ = message.version;
+      Serial.printf("RUN_START_ACK received runId=%s\n", message.runId.c_str());
+      Serial.println("RUN_START ACK OK");
+#if ENABLE_OLED
+      if (!display_.testPatternOnly()) {
+        display_.showLines({startShortHeader(), "FIN READY", "FIN ACK"});
+      }
+#endif
+    }
     return;
   }
 

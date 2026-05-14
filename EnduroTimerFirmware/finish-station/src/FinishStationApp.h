@@ -27,7 +27,9 @@ private:
   void sendStatus(uint32_t nowMs);
   void sendHello(uint32_t nowMs);
   void sendHelloAck(uint32_t nowMs);
+  void sendRunStartAck(const String& runId);
   bool discoveryActive() const;
+  bool priorityTxPending(uint32_t nowMs) const;
   void acceptFinishButton(uint32_t nowMs);
   void handleFinishButton(uint32_t nowMs);
   void sendFinish();
@@ -54,6 +56,7 @@ private:
   uint32_t lastStatusSentOkMs_ = 0;
   uint32_t lastAnyPacketMs_ = 0;
   uint32_t lastDisplayMs_ = 0;
+  uint32_t lastPriorityTxMs_ = 0;
   uint32_t lastFinishSendMs_ = 0;
   uint32_t heartbeatCounter_ = 0;
   uint32_t startHeartbeatCount_ = 0;
@@ -62,6 +65,7 @@ private:
   uint8_t finishAttempts_ = 0;
   uint8_t manualResendCount_ = 0;
   String lastPacket_ = "-";
+  String lastRunStartAckRunId_;
   String lastLoRaRaw_ = "-";
   int lastRssi_ = 0;
   float lastSnr_ = 0.0F;

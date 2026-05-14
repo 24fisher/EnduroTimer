@@ -13,6 +13,7 @@ String RadioProtocol::typeToString(RadioMessageType type) {
     case RadioMessageType::Ping: return "PING";
     case RadioMessageType::Pong: return "PONG";
     case RadioMessageType::RunStart: return "RUN_START";
+    case RadioMessageType::RunStartAck: return "RUN_START_ACK";
     case RadioMessageType::Finish: return "FINISH";
     case RadioMessageType::FinishAck: return "FINISH_ACK";
     case RadioMessageType::Status: return "STATUS";
@@ -27,6 +28,7 @@ RadioMessageType RadioProtocol::typeFromString(const String& type) {
   if (type == "PING") return RadioMessageType::Ping;
   if (type == "PONG") return RadioMessageType::Pong;
   if (type == "RUN_START") return RadioMessageType::RunStart;
+  if (type == "RUN_START_ACK") return RadioMessageType::RunStartAck;
   if (type == "FINISH") return RadioMessageType::Finish;
   if (type == "FINISH_ACK") return RadioMessageType::FinishAck;
   if (type == "STATUS") return RadioMessageType::Status;
