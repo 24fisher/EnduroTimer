@@ -4,6 +4,7 @@
 #include <LittleFS.h>
 #include <SPI.h>
 #include <WiFi.h>
+#include <time.h>
 #include <esp_system.h>
 
 #include "RadioProtocol.h"
@@ -56,6 +57,7 @@ void StartStationApp::begin() {
   configureButton();
   Serial.println("[BOOT] Button OK");
   buzzer_.begin();
+  battery_.begin();
   led_.begin();
   state_.begin();
   loadStorage();
@@ -73,7 +75,8 @@ void StartStationApp::loop() {
   RunRecord runToStart;
   updateCountdownDisplay(now);
   if (state_.updateCountdown(now, runToStart)) {
-    Serial.println("COUNTDOWN GO");
+    Serial.printf("COUNTDOWN GO at ms=%lu\n", static_cast<unsigned long>(now));
+    Serial.printf("RUN GO timestamp startTimestampMs=%lu\n", static_cast<unsigned long>(runToStart.startTimestampMs));
     buzzer_.beep("GO");
     pendingRunStartAck_ = true;
     runStartAckReceived_ = false;
@@ -120,11 +123,16 @@ void StartStationApp::loop() {
 }
 
 bool StartStationApp::requestStartRun(String& error) {
+  Serial.printf("START BUTTON pressed at ms=%lu\n", static_cast<unsigned long>(millis()));
   Serial.println("Start run requested");
   RiderRecord rider = selectRider();
   TrailRecord trail = selectTrail();
-  const bool ok = state_.startCountdown(rider.id, rider.displayName, trail.id, trail.displayName, error);
+  runSequenceCounter_ += 1;
+  const uint64_t startedAtEpoch = wallClockSynced_ ? currentEpochMs() : 0;
+  const String startedAtText = wallClockSynced_ ? formatEpochLocal(startedAtEpoch) : String("TIME NOT SYNCED");
+  const bool ok = state_.startCountdown(runSequenceCounter_, startedAtText, startedAtEpoch, rider.id, rider.displayName, trail.id, trail.displayName, error);
   if (!ok) {
+    if (runSequenceCounter_ > 0) runSequenceCounter_ -= 1;
     error = "Run already active";
     return false;
   }
@@ -168,6 +176,10 @@ String StartStationApp::statusJson() const {
 
   doc["device"] = "StartStation";
   doc["firmwareVersion"] = FIRMWARE_VERSION;
+  doc["wallClockSynced"] = wallClockSynced_;
+  doc["currentTimeText"] = currentTimeText();
+  doc["lastTimeSyncText"] = lastTimeSyncText_;
+  doc["timeSource"] = timeSource_;
   doc["bootId"] = bootId_;
   doc["buildDate"] = __DATE__;
   doc["buildTime"] = __TIME__;
@@ -176,6 +188,19 @@ String StartStationApp::statusJson() const {
   doc["wifiOk"] = wifiApStarted_;
   doc["webOk"] = webStarted_;
   doc["loraOk"] = radioReady_;
+  const BatteryStatus startBattery = battery_.read();
+  doc["batteryAvailable"] = startBattery.available;
+  doc["batteryVoltage"] = startBattery.available ? startBattery.voltage : 0.0F;
+  doc["batteryPercent"] = startBattery.percent;
+  doc["startBatteryAvailable"] = startBattery.available;
+  doc["startBatteryVoltage"] = startBattery.available ? startBattery.voltage : 0.0F;
+  doc["startBatteryPercent"] = startBattery.percent;
+  doc["finishBatteryAvailable"] = finishBatteryAvailable_;
+  doc["finishBatteryVoltage"] = finishBatteryVoltage_;
+  doc["finishBatteryPercent"] = finishBatteryPercent_;
+  doc["finishLocalRunStartReceivedMillis"] = finishLocalRunStartReceivedMillis_;
+  doc["finishLocalElapsedMs"] = finishLocalElapsedMs_;
+  doc["finishRemoteStartTimestampMs"] = finishRemoteStartTimestampMs_;
   const bool finishLinkActive = finishOnline();
   const uint32_t finishAgeMs = finishLastSeenAgoMs();
   doc["finishLinkActive"] = finishLinkActive;
@@ -246,6 +271,9 @@ String StartStationApp::statusJson() const {
   doc["currentRiderName"] = current.riderName.length() > 0 ? current.riderName : selectedRider.displayName;
   doc["currentTrailName"] = current.trailName.length() > 0 ? current.trailName : selectedTrail.displayName;
   uint32_t elapsedMs = (state_.state() == StartRunState::Riding && current.startTimestampMs > 0) ? millis() - current.startTimestampMs : 0;
+  doc["countdownStartedMs"] = state_.countdownStartedMs();
+  doc["goTimestampMs"] = state_.goTimestampMs();
+  doc["startTimestampMs"] = current.startTimestampMs;
   doc["currentRunElapsedMs"] = elapsedMs;
   doc["currentRunElapsedFormatted"] = elapsedMs > 0 ? formatDurationMs(elapsedMs).substring(0, 5) : String("00:00");
   doc["ridingAnimationFrame"] = ridingAnimationFrame();
@@ -260,6 +288,8 @@ String StartStationApp::statusJson() const {
   doc["lastFinishAckRunId"] = lastFinishAckRunId_;
   doc["finishAckSendCount"] = finishAckSendCount_;
   doc["lastFinishSource"] = last.finishSource.length() > 0 ? last.finishSource : String("");
+  doc["lastTimingSource"] = last.timingSource;
+  doc["lastTimingNote"] = last.timingNote;
   doc["uptimeMs"] = millis();
   doc["heap"] = ESP.getFreeHeap();
   doc["minHeap"] = ESP.getMinFreeHeap();
@@ -274,7 +304,11 @@ String StartStationApp::runsJson() const {
   JsonArray array = doc.to<JsonArray>();
   for (const RunRecord& run : state_.runs()) {
     JsonObject item = array.add<JsonObject>();
+    item["runNumber"] = run.runNumber;
     item["runId"] = run.runId;
+    item["startedAtEpochMs"] = run.startedAtEpochMs;
+    item["startedAtText"] = run.startedAtText;
+    item["runStartedAtText"] = run.startedAtText;
     item["riderId"] = run.riderId;
     item["riderName"] = run.riderName;
     item["trailId"] = run.trailId;
@@ -286,6 +320,8 @@ String StartStationApp::runsJson() const {
     item["status"] = run.status;
     item["finishSource"] = run.finishSource;
     item["source"] = run.finishSource;
+    item["timingSource"] = run.timingSource;
+    item["timingNote"] = run.timingNote;
   }
 
   Serial.printf("GET /api/runs count=%u\n", static_cast<unsigned>(state_.runs().size()));
@@ -329,9 +365,10 @@ void StartStationApp::configureButton() {
 }
 
 void StartStationApp::updateButton(uint32_t nowMs) {
-  if (!startButton_.update(nowMs)) return;
+  startButton_.update(nowMs);
+  if (!startButton_.wasShortPressed()) return;
 
-  Serial.println("START button short press");
+  Serial.println("START button short press event");
   if (state_.state() != StartRunState::Ready) {
     Serial.printf("button ignored: state=%s\n", state_.stateText().c_str());
     return;
@@ -463,7 +500,7 @@ void StartStationApp::sendRunStart(const RunRecord& run) {
   message.bootId = bootId_;
 
   lastRunStartSendMs_ = clock_.nowMs();
-  Serial.printf("RUN_START TX runId=%s rider=%s\n", run.runId.c_str(), run.riderName.c_str());
+  Serial.printf("RUN_START TX runId=%s startTimestampMs=%lu rider=%s\n", run.runId.c_str(), static_cast<unsigned long>(run.startTimestampMs), run.riderName.c_str());
   Serial.printf("RUN_START TX attempt=%u runId=%s\n", runStartAckAttempts_, run.runId.c_str());
   Serial.printf("TX priority RUN_START attempt=%u\n", runStartAckAttempts_);
   int resultCode = 0;
@@ -638,6 +675,12 @@ void StartStationApp::handleRadioMessage(const RadioMessage& message) {
     if (message.runId.length() > 0) finishActiveRunId_ = message.runId;
     if (message.riderName.length() > 0) finishRiderName_ = message.riderName;
     finishElapsedMs_ = message.elapsedMs;
+    finishBatteryAvailable_ = message.hasBatteryVoltage;
+    finishBatteryVoltage_ = message.batteryVoltage;
+    finishBatteryPercent_ = message.batteryPercent;
+    finishLocalRunStartReceivedMillis_ = message.localRunStartReceivedMillis;
+    finishLocalElapsedMs_ = message.finishLocalElapsedMs;
+    finishRemoteStartTimestampMs_ = message.remoteStartTimestampMs;
     finishReportedStartLinkActive_ = message.startLinkActive && message.startLastSeenAgoMs <= LINK_TIMEOUT_MS;
     finishReportedStartPacketCount_ = message.startPacketCount;
     if (message.hasStartRssi && message.hasStartSnr && finishReportedStartLinkActive_) {
@@ -690,8 +733,10 @@ void StartStationApp::handleRadioMessage(const RadioMessage& message) {
 
   if (message.type == RadioMessageType::Finish && message.stationId == "finish") {
     Serial.printf("FINISH RX raw=%s\n", lastLoRaRaw_.c_str());
-    Serial.printf("FINISH RX runId=%s finishTimestampMs=%lu\n", message.runId.c_str(),
-                  static_cast<unsigned long>(message.finishTimestampMs));
+    Serial.printf("FINISH RX finishTimestampMs=%lu startTimestampMs=%lu resultCandidate=%ld\n",
+                  static_cast<unsigned long>(message.finishTimestampMs),
+                  static_cast<unsigned long>(state_.currentRun().startTimestampMs),
+                  static_cast<long>(message.finishTimestampMs) - static_cast<long>(state_.currentRun().startTimestampMs));
     Serial.printf("FINISH parsed runId=%s source=%s\n", message.runId.c_str(), message.source.c_str());
     RunRecord completed;
     if (state_.completeRun(message.runId, message.finishTimestampMs, message.source, completed)) {
@@ -749,7 +794,9 @@ void StartStationApp::updateDisplay() {
   const RunRecord& last = state_.lastRun();
   const String runShort = current.runId.length() > 0 ? current.runId.substring(max(0, static_cast<int>(current.runId.length()) - 6)) : "-";
   const String lastResult = last.resultFormatted.length() > 0 ? last.resultFormatted : "-";
-  const String fin = finishOnline() ? String("FIN:") + String(finishLink_.lastRssi) + "dBm" : String("FIN:NO SIG");
+  const BatteryStatus battery = battery_.read();
+  const String bat = batteryText(battery);
+  const String fin = finishOnline() ? String("FIN:") + String(finishLink_.lastRssi) + "dBm" : String("FIN:NO SIGNAL");
   const String linkDebug = finishLink_.lastPacketType.length() > 0 ? String("PKT:") + finishLink_.lastPacketType : String("HB:") + String(finishHeartbeatCount_);
   const String discoveryLine = discoveryActive() ? String("DISCOVERY...") : linkDebug;
 
@@ -759,7 +806,7 @@ void StartStationApp::updateDisplay() {
   }
 
   if (state_.state() == StartRunState::Finished) {
-    display_.showLines({startHeader(), "FINISHED", lastResult, "Rider: " + toDisplayText(last.riderName, 10), "Trail: " + toDisplayText(last.trailName, 10)});
+    display_.showLines({startHeader(), "FINISHED", lastResult, bat});
     return;
   }
 
@@ -767,7 +814,7 @@ void StartStationApp::updateDisplay() {
     String anim = String("RIDING ");
     for (uint8_t i = 0; i < ridingAnimationFrame(); ++i) anim += " ";
     anim += ">";
-    display_.showLines({startHeader(), anim, "Time: " + formatDurationMs(millis() - current.startTimestampMs).substring(0, 5), fin, linkDebug});
+    display_.showLines({startHeader(), anim, formatDurationMs(millis() - current.startTimestampMs).substring(0, 5), fin, bat});
     return;
   }
 
@@ -781,9 +828,9 @@ void StartStationApp::updateDisplay() {
   display_.showLines({
     startHeader(),
     fin,
-    "Rider: " + toDisplayText(rider.displayName, 16),
-    "Trail: " + toDisplayText(trail.displayName, 16),
-    "Last: " + (last.resultFormatted.length() > 0 ? last.resultFormatted : String("-")),
+    bat,
+    wallClockSynced_ ? String("TIME OK") : String("NO TIME"),
+    "Last:" + (last.resultFormatted.length() > 0 ? last.resultFormatted : String("-")),
   });
 }
 
@@ -813,9 +860,9 @@ void StartStationApp::logHeartbeat(uint32_t nowMs) {
 
   String heartbeatState = state_.stateText();
   heartbeatState.toUpperCase();
-  Serial.printf("START alive state=%s uptime=%lu heap=%lu minHeap=%lu finishOnline=%s\n", heartbeatState.c_str(),
+  Serial.printf("START alive state=%s uptime=%lu heap=%lu minHeap=%lu finishOnline=%s buttonRaw=%d buttonPressed=%s\n", heartbeatState.c_str(),
                 static_cast<unsigned long>(nowMs), static_cast<unsigned long>(ESP.getFreeHeap()),
-                static_cast<unsigned long>(ESP.getMinFreeHeap()), finishOnline() ? "true" : "false");
+                static_cast<unsigned long>(ESP.getMinFreeHeap()), finishOnline() ? "true" : "false", startButton_.raw(), startButton_.isPressed() ? "true" : "false");
   Serial.printf("START LINK DEBUG:\n  startHbSent=%lu\n  finishActive=%d\n  finishAge=%lu\n  finishRssi=%d\n  finishLastType=%s\n  finishHbReceived=%lu\n",
                 static_cast<unsigned long>(startHeartbeatCount_), finishOnline() ? 1 : 0,
                 static_cast<unsigned long>(finishLastSeenAgoMs()), finishLink_.lastRssi,
@@ -1122,9 +1169,11 @@ bool StartStationApp::appendRunCsv(const RunRecord& run) const {
   }
   if (!exists || file.size() == 0) {
     file.write(0xEF); file.write(0xBB); file.write(0xBF);
-    file.println("RunId;Rider;Trail;StartMs;FinishMs;ResultMs;Result;Status;Source");
+    file.println("RunNumber;RunId;RunTime;Rider;Trail;StartMs;FinishMs;ResultMs;Result;Status;Source;TimingSource");
   }
+  file.print(run.runNumber); file.print(';');
   file.print(escapeCsv(run.runId)); file.print(';');
+  file.print(escapeCsv(run.startedAtText.length() > 0 ? run.startedAtText : String("TIME NOT SYNCED"))); file.print(';');
   file.print(escapeCsv(run.riderName)); file.print(';');
   file.print(escapeCsv(run.trailName)); file.print(';');
   file.print(run.startTimestampMs); file.print(';');
@@ -1132,16 +1181,59 @@ bool StartStationApp::appendRunCsv(const RunRecord& run) const {
   file.print(run.resultMs); file.print(';');
   file.print(run.resultFormatted); file.print(';');
   file.print(run.status); file.print(';');
-  file.println(run.finishSource);
+  file.print(run.finishSource); file.print(';');
+  file.println(run.timingSource);
   file.close();
   Serial.println("runs.csv append OK");
   return true;
 }
 
 String StartStationApp::runsCsv() const {
-  if (!LittleFS.exists("/runs.csv")) return String("\xEF\xBB\xBFRunId;Rider;Trail;StartMs;FinishMs;ResultMs;Result;Status;Source\n");
+  if (!LittleFS.exists("/runs.csv")) return String("\xEF\xBB\xBFRunNumber;RunId;RunTime;Rider;Trail;StartMs;FinishMs;ResultMs;Result;Status;Source;TimingSource\n");
   File file = LittleFS.open("/runs.csv", "r");
   String content = file.readString();
   file.close();
   return content;
+}
+
+bool StartStationApp::syncBrowserTime(uint64_t epochMs, int timezoneOffsetMinutes, const String& isoLocal, String& error) {
+  if (epochMs == 0) {
+    error = "epochMs is required";
+    return false;
+  }
+  wallClockSynced_ = true;
+  wallClockEpochMsAtSync_ = epochMs;
+  localMillisAtSync_ = millis();
+  timezoneOffsetMinutes_ = timezoneOffsetMinutes;
+  lastTimeSyncText_ = isoLocal.length() > 0 ? isoLocal : formatEpochLocal(epochMs);
+  timeSource_ = "BROWSER";
+  Serial.printf("TIME SYNC received epochMs=%llu timezoneOffsetMinutes=%d isoLocal=%s\n", static_cast<unsigned long long>(epochMs), timezoneOffsetMinutes_, lastTimeSyncText_.c_str());
+  Serial.println("wallClockSynced=true");
+  Serial.printf("currentTimeText=%s\n", currentTimeText().c_str());
+  return true;
+}
+
+uint64_t StartStationApp::currentEpochMs() const {
+  if (!wallClockSynced_) return 0;
+  return wallClockEpochMsAtSync_ + static_cast<uint32_t>(millis() - localMillisAtSync_);
+}
+
+String StartStationApp::currentTimeText() const {
+  if (!wallClockSynced_) return "TIME NOT SYNCED";
+  return formatEpochLocal(currentEpochMs());
+}
+
+String StartStationApp::formatEpochLocal(uint64_t epochMs) const {
+  const int64_t localSeconds = static_cast<int64_t>(epochMs / 1000ULL) - (static_cast<int64_t>(timezoneOffsetMinutes_) * 60LL);
+  time_t raw = static_cast<time_t>(localSeconds);
+  struct tm tmValue;
+  gmtime_r(&raw, &tmValue);
+  char buffer[24];
+  snprintf(buffer, sizeof(buffer), "%04d-%02d-%02d %02d:%02d:%02d", tmValue.tm_year + 1900, tmValue.tm_mon + 1, tmValue.tm_mday, tmValue.tm_hour, tmValue.tm_min, tmValue.tm_sec);
+  return String(buffer);
+}
+
+String StartStationApp::batteryText(const BatteryStatus& status) const {
+  if (status.available && status.percent >= 0) return String("BAT:") + String(status.percent) + "%";
+  return "BAT:USB";
 }

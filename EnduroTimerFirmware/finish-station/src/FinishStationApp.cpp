@@ -53,6 +53,7 @@ void FinishStationApp::begin() {
   sensor_.begin();
   Serial.println("[BOOT] Finish button OK");
   buzzer_.begin();
+  battery_.begin();
   led_.begin();
   beginRadio();
   state_.begin();
@@ -280,6 +281,15 @@ void FinishStationApp::sendStatus(uint32_t nowMs) {
     message.startSnr = startLink_.lastSnr;
     message.startLastSeenAgoMs = linkAgeMs(startLink_);
   }
+  const BatteryStatus battery = battery_.read();
+  message.hasBatteryVoltage = battery.available;
+  message.batteryVoltage = battery.voltage;
+  message.batteryPercent = battery.percent;
+  message.startTimestampMs = remoteStartTimestampMs_;
+  message.remoteStartTimestampMs = remoteStartTimestampMs_;
+  message.localRunStartReceivedMillis = state_.localRunStartReceivedMillis();
+  message.finishLocalElapsedMs = finishLocalElapsedMs_;
+  message.finishTimestampMs = state_.finishTimestampMs();
   int resultCode = 0;
   if (sendRadio(message, &resultCode)) {
     heartbeatCounter_ += 1;
@@ -351,8 +361,12 @@ void FinishStationApp::sendRunStartAck(const String& runId) {
 void FinishStationApp::acceptFinishButton(uint32_t nowMs) {
   Serial.println("FINISH button short press");
   Serial.printf("Finish accepted runId=%s\n", state_.runId().c_str());
-  const uint32_t finishTimestampMs = state_.startTimestampMs() + state_.elapsedMs(nowMs);
-  localResultMs_ = finishTimestampMs >= state_.startTimestampMs() ? finishTimestampMs - state_.startTimestampMs() : 0;
+  finishLocalElapsedMs_ = state_.elapsedMs(nowMs);
+  const uint32_t finishTimestampMs = state_.startTimestampMs() + finishLocalElapsedMs_;
+  localResultMs_ = finishLocalElapsedMs_;
+  Serial.printf("FINISH accepted localElapsedMs=%lu\n", static_cast<unsigned long>(finishLocalElapsedMs_));
+  Serial.printf("remoteStartTimestampMs=%lu\n", static_cast<unsigned long>(state_.startTimestampMs()));
+  Serial.printf("finishTimestampMs=%lu\n", static_cast<unsigned long>(finishTimestampMs));
   lastResultMs_ = localResultMs_;
   lastResultFormatted_ = formatSeconds(localResultMs_);
   lastFinishedRunId_ = state_.runId();
@@ -484,6 +498,7 @@ void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
     Serial.printf("RUN_START duplicate? %s\n", duplicate ? "yes" : "no");
     if (!duplicate) {
       const uint32_t localStartMs = millis();
+      remoteStartTimestampMs_ = message.startTimestampMs;
       state_.startRun(message.runId, message.riderName, message.trailName, message.startTimestampMs, localStartMs);
       Serial.println("Finish state -> Riding");
       Serial.printf("localRunStartReceivedMillis=%lu\n", static_cast<unsigned long>(localStartMs));
@@ -492,6 +507,7 @@ void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
       manualResendCount_ = 0;
       finishAckReceived_ = false;
       localResultMs_ = 0;
+      finishLocalElapsedMs_ = 0;
       lastFinishSendMs_ = 0;
       finishLineCrossedUntilMs_ = 0;
       showNoRunUntilMs_ = 0;
@@ -530,7 +546,7 @@ void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
       Serial.printf("Last result = %s\n", lastResultFormatted_.c_str());
 #if ENABLE_OLED
       if (!display_.testPatternOnly()) {
-        display_.showLines({finishHeader(), "ACK OK", lastResultFormatted_, isLinkActive(startLink_) ? String("START:") + String(startLink_.lastRssi) + "dBm" : String("START:NO SIG")});
+        display_.showLines({finishHeader(), "ACK OK", lastResultFormatted_, batteryText(battery_.read())});
       }
 #endif
     } else {
@@ -543,7 +559,9 @@ void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
 void FinishStationApp::updateDisplay() {
   const String runShort = state_.runId().length() > 0 ? state_.runId().substring(max(0, static_cast<int>(state_.runId().length()) - 6)) : "-";
   const bool startOnline = isLinkActive(startLink_);
-  const String startSignal = startOnline ? String("START:") + String(startLink_.lastRssi) + "dBm" : String("START:NO SIG");
+  const BatteryStatus battery = battery_.read();
+  const String bat = batteryText(battery);
+  const String startSignal = startOnline ? String("START:") + String(startLink_.lastRssi) + "dBm" : String("START:NO SIGNAL");
   const String linkDebug = startLink_.lastPacketType.length() > 0 ? String("PKT:") + startLink_.lastPacketType : String("HB:") + String(startHeartbeatCount_);
   if (finishLineCrossedUntilMs_ > millis()) {
     display_.showLines({finishHeader(), "FINISH LINE", "CROSSED", lastResultFormatted_});
@@ -551,7 +569,7 @@ void FinishStationApp::updateDisplay() {
   }
 
   if (showAckOkUntilMs_ > millis()) {
-    display_.showLines({finishHeader(), "ACK OK", lastResultFormatted_.length() > 0 ? lastResultFormatted_ : String("-"), startSignal});
+    display_.showLines({finishHeader(), "ACK OK", lastResultFormatted_.length() > 0 ? lastResultFormatted_ : String("-"), bat});
     return;
   }
 
@@ -574,21 +592,21 @@ void FinishStationApp::updateDisplay() {
     String anim = String("RIDING ");
     for (uint8_t i = 0; i < ridingAnimationFrame(); ++i) anim += " ";
     anim += ">";
-    display_.showLines({finishHeader(), anim, toDisplayText(state_.riderName(), 16), formatDurationMs(state_.elapsedMs(millis())).substring(0, 5), startSignal});
+    display_.showLines({finishHeader(), anim, formatDurationMs(state_.elapsedMs(millis())).substring(0, 5), startSignal, bat});
     return;
   }
 
   if (state_.state() == FinishRunState::FinishSent) {
-    display_.showLines({finishHeader(), "FINISH SENT", lastResultFormatted_.length() > 0 ? lastResultFormatted_ : String("-"), "Sent: " + String(finishAttempts_) + "/" + String(FINISH_MAX_RETRY_ATTEMPTS), startSignal});
+    display_.showLines({finishHeader(), "FINISH SENT", lastResultFormatted_.length() > 0 ? lastResultFormatted_ : String("-"), "Sent: " + String(finishAttempts_) + "/" + String(FINISH_MAX_RETRY_ATTEMPTS)});
     return;
   }
 
   display_.showLines({
     finishHeader(),
-    String("LoRa: ") + (radioReady_ ? "OK" : "FAIL"),
-    "State: IDLE",
-    "Last: " + (lastResultFormatted_.length() > 0 ? lastResultFormatted_ : String("-")),
     startSignal,
+    bat,
+    "IDLE",
+    "Last: " + (lastResultFormatted_.length() > 0 ? lastResultFormatted_ : String("-")),
   });
 }
 
@@ -611,12 +629,17 @@ void FinishStationApp::logHeartbeat(uint32_t nowMs) {
   String heartbeatState = state_.stateText();
   heartbeatState.toUpperCase();
   Serial.printf("FINISH BUTTON raw=%d pressed=%d state=%s\n", sensor_.buttonRaw(), sensor_.buttonPressed() ? 1 : 0, state_.stateText().c_str());
-  Serial.printf("FINISH alive state=%s uptime=%lu heap=%lu minHeap=%lu buttonRaw=%d buttonPressed=%s\n", heartbeatState.c_str(),
+  Serial.printf("FINISH alive state=%s uptime=%lu heap=%lu minHeap=%lu buttonRaw=%d buttonPressed=%s canFinish=%s localRunStartReceivedMillis=%lu finishLocalElapsedMs=%lu remoteStartTimestampMs=%lu\n", heartbeatState.c_str(),
                 static_cast<unsigned long>(nowMs), static_cast<unsigned long>(ESP.getFreeHeap()),
-                static_cast<unsigned long>(ESP.getMinFreeHeap()), sensor_.buttonRaw(), sensor_.buttonPressed() ? "true" : "false");
+                static_cast<unsigned long>(ESP.getMinFreeHeap()), sensor_.buttonRaw(), sensor_.buttonPressed() ? "true" : "false", state_.canFinish() ? "true" : "false", static_cast<unsigned long>(state_.localRunStartReceivedMillis()), static_cast<unsigned long>(finishLocalElapsedMs_), static_cast<unsigned long>(remoteStartTimestampMs_));
   Serial.printf("FINISH LINK DEBUG:\n  finishHbSent=%lu\n  startActive=%d\n  startAge=%lu\n  startRssi=%d\n  startLastType=%s\n  startHbReceived=%lu\n",
                 static_cast<unsigned long>(heartbeatCounter_), isLinkActive(startLink_) ? 1 : 0,
                 static_cast<unsigned long>(linkAgeMs(startLink_)), startLink_.lastRssi,
                 startLink_.lastPacketType.c_str(), static_cast<unsigned long>(startHeartbeatCount_));
   lastHeartbeatMs_ = nowMs;
+}
+
+String FinishStationApp::batteryText(const BatteryStatus& status) const {
+  if (status.available && status.percent >= 0) return String("BAT:") + String(status.percent) + "%";
+  return "BAT:USB";
 }

@@ -29,6 +29,7 @@ public:
   const String& trailName() const { return trailName_; }
   uint32_t startTimestampMs() const { return startTimestampMs_; }
   uint32_t finishTimestampMs() const { return finishTimestampMs_; }
+  uint32_t localRunStartReceivedMillis() const { return localRunStartReceivedMillis_; }
   uint32_t elapsedMs(uint32_t nowMs) const;
 
 private:

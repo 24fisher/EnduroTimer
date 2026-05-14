@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <RadioLib.h>
 
+#include "BatteryService.h"
 #include "BuzzerStub.h"
 #include "FinishSensorStub.h"
 #include "FinishState.h"
@@ -21,6 +22,7 @@ private:
   void beginRadio();
   void updateLed(uint32_t nowMs);
   String finishHeader() const;
+  String batteryText(const BatteryStatus& status) const;
   void pollRadio();
   bool sendRadio(const RadioMessage& message, int* resultCode = nullptr);
   void restoreRadioReceiveMode();
@@ -42,6 +44,7 @@ private:
   String makeBootId(const char* stationId) const;
 
   ClockService clock_;
+  BatteryService battery_;
   OledDisplay display_;
   BuzzerStub buzzer_;
   LedIndicator led_;
@@ -69,6 +72,8 @@ private:
   uint32_t lastResultMs_ = 0;
   String lastResultFormatted_;
   uint32_t localResultMs_ = 0;
+  uint32_t finishLocalElapsedMs_ = 0;
+  uint32_t remoteStartTimestampMs_ = 0;
   String lastPacket_ = "-";
   String lastRunStartAckRunId_;
   String lastLoRaRaw_ = "-";

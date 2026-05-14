@@ -6,6 +6,7 @@ let trails = [];
 let settings = {};
 let lastRunsRefreshMs = 0;
 let lastCatalogRefreshMs = 0;
+let timeSyncedOnce = false;
 
 async function api(path, options = {}) {
   const response = await fetch(path, { cache: 'no-store', headers: { 'Content-Type': 'application/json' }, ...options });
@@ -72,6 +73,14 @@ function renderStatus(status) {
   $('runTimer').textContent = status.currentRunElapsedFormatted || '00:00';
   $('lastResult').textContent = status.lastResultFormatted || '—';
   $('lastSource').textContent = status.lastFinishSource || '—';
+  $('lastTiming').textContent = status.lastTimingSource ? `${status.lastTimingSource}: ${status.lastTimingNote || ''}` : '—';
+  $('timeSynced').textContent = status.wallClockSynced ? 'да' : 'нет';
+  $('stationTime').textContent = status.currentTimeText || '—';
+  $('lastTimeSync').textContent = status.lastTimeSyncText ? `${status.lastTimeSyncText} (${status.timeSource || '—'})` : '—';
+  const startBat = status.startBatteryAvailable ? `${status.startBatteryPercent}% / ${Number(status.startBatteryVoltage).toFixed(2)}V` : 'USB/--';
+  const finishBat = status.finishBatteryAvailable ? `${status.finishBatteryPercent}% / ${Number(status.finishBatteryVoltage).toFixed(2)}V` : 'USB/--';
+  $('debugStartBattery').textContent = startBat;
+  $('debugFinishBattery').textContent = finishBat;
   $('riderName').textContent = status.currentRiderName || 'Test Rider';
   $('trailName').textContent = status.currentTrailName || 'Default trail';
   $('selectedTrailName').textContent = status.selectedTrailName || status.currentTrailName || 'Default trail';
@@ -81,11 +90,11 @@ function renderStatus(status) {
 function renderRuns(runs) {
   const body = $('runsBody');
   $('runsError').textContent = '';
-  if (!runs.length) { body.innerHTML = '<tr><td colspan="6">No runs yet</td></tr>'; return; }
+  if (!runs.length) { body.innerHTML = '<tr><td colspan="7">No runs yet</td></tr>'; return; }
   body.innerHTML = runs
     .filter((run) => run.status === 'Finished')
-    .map((run) => `<tr><td><code>${run.runId}</code></td><td>${run.riderName}</td><td>${run.trailName || '—'}</td><td>${run.resultFormatted || '—'}</td><td>${run.status}</td><td>${run.source || run.finishSource || '—'}</td></tr>`)
-    .join('') || '<tr><td colspan="6">No finished runs yet</td></tr>';
+    .map((run) => `<tr title="runId: ${run.runId}"><td>${run.runNumber || '—'}</td><td>${run.startedAtText || run.runStartedAtText || 'TIME NOT SYNCED'}</td><td>${run.riderName}</td><td>${run.trailName || '—'}</td><td>${run.resultFormatted || '—'}</td><td>${run.status}</td><td>${run.source || run.finishSource || '—'}</td></tr>`)
+    .join('') || '<tr><td colspan="7">No finished runs yet</td></tr>';
 }
 
 function renderCatalogs() {
@@ -95,6 +104,19 @@ function renderCatalogs() {
   const activeTrails = trails.filter((t) => t.isActive);
   $('selectedTrail').innerHTML = activeTrails.map((t) => `<option value="${t.trailId}" ${settings.selectedTrailId === t.trailId ? 'selected' : ''}>${t.displayName}</option>`).join('');
   $('trailsBody').innerHTML = trails.length ? trails.map((t) => `<tr><td>${t.displayName}</td><td>${t.isActive ? 'Yes' : 'No'}</td><td>${t.isActive ? `<button data-trail="${t.trailId}" class="secondary deactivate-trail">Deactivate</button>` : '—'}</td></tr>`).join('') : '<tr><td colspan="3">No trails</td></tr>';
+}
+
+function localIsoText(date) {
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+async function syncBrowserTime(showToast = false) {
+  const now = new Date();
+  await api('/api/time/sync', { method: 'POST', body: JSON.stringify({ epochMs: now.getTime(), timezoneOffsetMinutes: now.getTimezoneOffset(), isoLocal: localIsoText(now) }) });
+  timeSyncedOnce = true;
+  if (showToast) showMessage('Время синхронизировано.');
+  await refreshStatus();
 }
 
 async function saveSettings() {
@@ -189,6 +211,7 @@ function bindUi() {
   $('addTrailButton').addEventListener('click', addTrail);
   $('selectedRider').addEventListener('change', saveSettings);
   $('selectedTrail').addEventListener('change', saveSettings);
+  $('syncTimeBtn').addEventListener('click', async () => { try { await syncBrowserTime(true); } catch (e) { showMessage(e.message, true); } });
   document.addEventListener('click', async (event) => {
     try {
       if (event.target.classList.contains('deactivate-rider')) { await api('/api/riders/deactivate', { method: 'POST', body: JSON.stringify({ riderId: event.target.dataset.rider }) }); await refreshCatalogs(); }
@@ -199,6 +222,7 @@ function bindUi() {
 
 document.addEventListener('DOMContentLoaded', () => {
   bindUi();
+  syncBrowserTime(false).catch((error) => showMessage(`Не удалось синхронизировать время: ${error.message}`, false, true));
   refreshCatalogs();
   refreshRuns();
   refresh();

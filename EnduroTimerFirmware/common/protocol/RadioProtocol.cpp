@@ -64,8 +64,12 @@ bool RadioProtocol::serialize(const RadioMessage& message, String& output) {
     if (message.riderName.length() > 0) { doc["rn"] = message.riderName; doc["riderName"] = message.riderName; }
     if (message.trailName.length() > 0) { doc["tn"] = message.trailName; doc["trailName"] = message.trailName; }
     if (message.elapsedMs > 0) doc["el"] = message.elapsedMs;
+    if (message.localRunStartReceivedMillis > 0) doc["localRunStartReceivedMillis"] = message.localRunStartReceivedMillis;
+    if (message.finishLocalElapsedMs > 0) doc["finishLocalElapsedMs"] = message.finishLocalElapsedMs;
+    if (message.remoteStartTimestampMs > 0) doc["remoteStartTimestampMs"] = message.remoteStartTimestampMs;
     if (message.resultMs > 0) { doc["resultMs"] = message.resultMs; doc["res"] = message.resultMs; }
     if (message.resultFormatted.length() > 0) doc["resultFormatted"] = message.resultFormatted;
+  if (message.hasBatteryVoltage) { doc["batteryVoltage"] = message.batteryVoltage; doc["batteryPercent"] = message.batteryPercent; }
     if (message.startLinkActive || message.startPacketCount > 0 || message.hasStartRssi || message.hasStartSnr) {
       doc["sl"] = message.startLinkActive;
       doc["sp"] = message.startPacketCount;
@@ -73,7 +77,7 @@ bool RadioProtocol::serialize(const RadioMessage& message, String& output) {
       if (message.hasStartRssi) doc["sr"] = message.startRssi;
       if (message.hasStartSnr) doc["ss"] = message.startSnr;
     }
-    if (message.hasBatteryVoltage) doc["bv"] = message.batteryVoltage;
+    if (message.hasBatteryVoltage) { doc["bv"] = message.batteryVoltage; doc["bp"] = message.batteryPercent; doc["batteryPercent"] = message.batteryPercent; }
     output = "";
     return serializeJson(doc, output) > 0;
   }
@@ -98,6 +102,7 @@ bool RadioProtocol::serialize(const RadioMessage& message, String& output) {
   if (message.elapsedMs > 0) doc["elapsedMs"] = message.elapsedMs;
   if (message.resultMs > 0) doc["resultMs"] = message.resultMs;
   if (message.resultFormatted.length() > 0) doc["resultFormatted"] = message.resultFormatted;
+  if (message.hasBatteryVoltage) { doc["batteryVoltage"] = message.batteryVoltage; doc["batteryPercent"] = message.batteryPercent; }
 
   output = "";
   return serializeJson(doc, output) > 0;
@@ -142,6 +147,9 @@ bool RadioProtocol::deserialize(const String& input, RadioMessage& output, Strin
   output.heartbeat = doc["heartbeat"] | 0;
   if (output.heartbeat == 0) output.heartbeat = doc["hb"] | 0;
   output.startTimestampMs = doc["startTimestampMs"] | 0;
+  output.localRunStartReceivedMillis = doc["localRunStartReceivedMillis"] | 0;
+  output.finishLocalElapsedMs = doc["finishLocalElapsedMs"] | 0;
+  output.remoteStartTimestampMs = doc["remoteStartTimestampMs"] | 0;
   if (output.startTimestampMs == 0) output.startTimestampMs = doc["sts"] | 0;
   output.finishTimestampMs = doc["finishTimestampMs"] | 0;
   if (output.finishTimestampMs == 0) output.finishTimestampMs = doc["fts"] | 0;
@@ -164,10 +172,12 @@ bool RadioProtocol::deserialize(const String& input, RadioMessage& output, Strin
   if (!doc["batteryVoltage"].isNull()) {
     output.hasBatteryVoltage = true;
     output.batteryVoltage = doc["batteryVoltage"].as<float>();
+    output.batteryPercent = doc["batteryPercent"] | -1;
   }
   if (!doc["bv"].isNull()) {
     output.hasBatteryVoltage = true;
     output.batteryVoltage = doc["bv"].as<float>();
+    output.batteryPercent = doc["bp"] | output.batteryPercent;
   }
 
   if (output.messageId.length() == 0) {

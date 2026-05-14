@@ -5,6 +5,7 @@
 #include <RadioLib.h>
 #include <vector>
 
+#include "BatteryService.h"
 #include "ButtonDebouncer.h"
 #include "BuzzerStub.h"
 #include "OledDisplay.h"
@@ -65,6 +66,7 @@ public:
   bool deactivateTrail(const String& trailId, String& error);
   bool updateSettings(const String& selectedRiderId, const String& selectedTrailId, String& error);
   String runsCsv() const;
+  bool syncBrowserTime(uint64_t epochMs, int timezoneOffsetMinutes, const String& isoLocal, String& error);
 
 private:
   void configureButton();
@@ -111,8 +113,13 @@ private:
   bool findActiveTrail(const String& id, TrailRecord& trail) const;
   String makeEntityId(const char* prefix) const;
   String escapeCsv(const String& value) const;
+  uint64_t currentEpochMs() const;
+  String currentTimeText() const;
+  String formatEpochLocal(uint64_t epochMs) const;
+  String batteryText(const BatteryStatus& status) const;
 
   ClockService clock_;
+  BatteryService battery_;
   OledDisplay display_;
   BuzzerStub buzzer_;
   LedIndicator led_;
@@ -169,4 +176,17 @@ private:
   std::vector<RiderRecord> riders_;
   std::vector<TrailRecord> trails_;
   AppSettings settings_;
+  uint32_t runSequenceCounter_ = 0;
+  bool wallClockSynced_ = false;
+  uint64_t wallClockEpochMsAtSync_ = 0;
+  uint32_t localMillisAtSync_ = 0;
+  int timezoneOffsetMinutes_ = 0;
+  String lastTimeSyncText_ = "";
+  String timeSource_ = "NONE";
+  bool finishBatteryAvailable_ = false;
+  float finishBatteryVoltage_ = 0.0F;
+  int finishBatteryPercent_ = -1;
+  uint32_t finishLocalRunStartReceivedMillis_ = 0;
+  uint32_t finishLocalElapsedMs_ = 0;
+  uint32_t finishRemoteStartTimestampMs_ = 0;
 };
