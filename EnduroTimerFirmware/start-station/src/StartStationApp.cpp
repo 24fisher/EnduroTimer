@@ -20,6 +20,7 @@ static constexpr int LORA_BUSY = 13;
 static constexpr uint32_t FinishOfflineTimeoutMs = 10000UL;
 static constexpr uint32_t DisplayRefreshMs = 250UL;
 static constexpr uint32_t ButtonDebounceMs = 50UL;
+static constexpr uint32_t StatusIntervalMs = 1000UL;
 RTC_DATA_ATTR static uint32_t startBootCounter = 0;
 #if ENABLE_LORA
 static SX1262 radio = new Module(LORA_NSS, LORA_DIO1, LORA_RST, LORA_BUSY);
@@ -58,6 +59,11 @@ void StartStationApp::loop() {
 #if ENABLE_LORA
   pollRadio();
 #endif
+  if (now - lastStatusSendMs_ >= StatusIntervalMs) {
+    sendStatus(now);
+    lastStatusSendMs_ = now;
+  }
+
   if (lastFinishSeenMs_ > 0 && now - lastFinishSeenMs_ > FinishOfflineTimeoutMs) {
     hasFinishSignal_ = false;
     hasFinishReportedStartSignal_ = false;
@@ -138,6 +144,7 @@ String StartStationApp::statusJson() const {
   doc["webOk"] = webStarted_;
   doc["loraOk"] = radioReady_;
   doc["finishStationOnline"] = finishOnline();
+  doc["finishSignalText"] = finishSignalText();
   doc["finishLastSeenAgoMs"] = lastFinishSeenMs_ > 0 ? finishLastSeenAgoMs() : 0;
   doc["finishLastStatusMs"] = finishLastStatusMs_;
   doc["finishHeartbeatCount"] = finishHeartbeatCount_;
@@ -159,13 +166,18 @@ String StartStationApp::statusJson() const {
     doc["finishReportedStartRssi"] = finishReportedStartRssi_;
     doc["finishReportedStartSnr"] = finishReportedStartSnr_;
     doc["finishReportedStartLastSeenAgoMs"] = finishReportedStartLastSeenAgoMs_;
+    doc["finishReportedStartSignalText"] = finishReportedStartSignalText();
   } else {
     doc["finishReportedStartRssi"] = nullptr;
     doc["finishReportedStartSnr"] = nullptr;
     doc["finishReportedStartLastSeenAgoMs"] = nullptr;
+    doc["finishReportedStartSignalText"] = "NO SIGNAL";
   }
   doc["lastPacketType"] = lastFinishPacketType_;
   doc["lastLoRaPacketType"] = lastFinishPacketType_;
+  doc["lastAnyPacketMs"] = lastAnyPacketMs_;
+  doc["lastRssi"] = lastRssi_;
+  doc["lastSnr"] = lastSnr_;
   doc["lastLoRaRaw"] = lastLoRaRaw_;
   doc["lastLoRaRawShort"] = lastLoRaRaw_;
   doc["currentRunId"] = current.runId;
@@ -178,6 +190,7 @@ String StartStationApp::statusJson() const {
   uint32_t elapsedMs = (state_.state() == StartRunState::Riding && current.startTimestampMs > 0) ? millis() - current.startTimestampMs : 0;
   doc["currentRunElapsedMs"] = elapsedMs;
   doc["currentRunElapsedFormatted"] = elapsedMs > 0 ? formatDurationMs(elapsedMs).substring(0, 5) : String("00:00");
+  doc["ridingAnimationFrame"] = ridingAnimationFrame();
   doc["countdownText"] = state_.countdownText(millis());
   doc["lastResultMs"] = last.resultMs > 0 ? last.resultMs : 0;
   doc["lastResultFormatted"] = last.resultFormatted;
@@ -293,22 +306,34 @@ void StartStationApp::pollRadio() {
   String payload;
   const int state = radio.receive(payload, 0);
   if (state == RADIOLIB_ERR_NONE) {
+    lastAnyPacketMs_ = millis();
     lastLoRaRaw_ = payload;
     if (lastLoRaRaw_.length() > 96) lastLoRaRaw_ = lastLoRaRaw_.substring(0, 96);
-    Serial.printf("LoRa RX raw: %s\n", payload.c_str());
-    finishRssi_ = static_cast<int>(radio.getRSSI());
-    finishSnr_ = radio.getSNR();
-    hasFinishSignal_ = true;
+    lastRssi_ = static_cast<int>(radio.getRSSI());
+    lastSnr_ = radio.getSNR();
+    finishRssi_ = lastRssi_;
+    finishSnr_ = lastSnr_;
     RadioMessage message;
     String error;
     if (!RadioProtocol::deserialize(payload, message, &error)) {
       lastFinishPacketType_ = "PARSE_FAILED";
-      Serial.printf("LoRa parse failed raw=%s error=%s\n", payload.c_str(), error.c_str());
+      Serial.printf("LORA parse failed raw=%s error=%s\n", payload.c_str(), error.c_str());
       return;
     }
     lastFinishPacketType_ = RadioProtocol::typeToString(message.type);
+    Serial.printf("LORA RX type=%s rssi=%d snr=%.1f raw=%s\n", lastFinishPacketType_.c_str(), lastRssi_, static_cast<double>(lastSnr_), lastLoRaRaw_.c_str());
     if (message.type == RadioMessageType::Unknown) {
-      Serial.printf("LoRa unknown type=%s raw=%s\n", lastFinishPacketType_.c_str(), payload.c_str());
+      Serial.printf("LORA unknown type=%s raw=%s\n", lastFinishPacketType_.c_str(), payload.c_str());
+    }
+    if (message.stationId.length() == 0) {
+      Serial.printf("LORA missing stationId raw=%s\n", payload.c_str());
+    }
+    if (message.stationId == "finish") {
+      lastFinishSeenMs_ = millis();
+      finishRssi_ = lastRssi_;
+      finishSnr_ = lastSnr_;
+      hasFinishSignal_ = true;
+      if (!finishOnlineState_) { finishOnlineState_ = true; Serial.println("FINISH ONLINE"); }
     }
     handleRadioMessage(message);
   }
@@ -338,6 +363,7 @@ bool StartStationApp::sendRadio(const RadioMessage& message) {
 void StartStationApp::sendRunStart(const RunRecord& run) {
   RadioMessage message;
   message.type = RadioMessageType::RunStart;
+  message.stationId = "start";
   message.messageId = RadioProtocol::makeMessageId("start");
   message.runId = run.runId;
   message.riderName = run.riderName;
@@ -353,6 +379,7 @@ void StartStationApp::sendRunStart(const RunRecord& run) {
 void StartStationApp::sendFinishAck(const String& runId) {
   RadioMessage message;
   message.type = RadioMessageType::FinishAck;
+  message.stationId = "start";
   message.messageId = RadioProtocol::makeMessageId("ack");
   message.runId = runId;
   if (sendRadio(message)) {
@@ -360,14 +387,27 @@ void StartStationApp::sendFinishAck(const String& runId) {
   }
 }
 
+void StartStationApp::sendStatus(uint32_t nowMs) {
+  RadioMessage message;
+  message.type = RadioMessageType::Status;
+  message.stationId = "start";
+  message.messageId = RadioProtocol::makeMessageId("start-status");
+  message.state = state_.stateText();
+  message.uptimeMs = nowMs;
+  message.timestampMs = nowMs;
+  message.heartbeat = ++startHeartbeatCount_;
+  const RunRecord& current = state_.currentRun();
+  if (current.runId.length() > 0) message.runId = current.runId;
+  if (current.riderName.length() > 0) message.riderName = current.riderName;
+  if (state_.state() == StartRunState::Riding && current.startTimestampMs > 0) message.elapsedMs = nowMs - current.startTimestampMs;
+  if (sendRadio(message) && startHeartbeatCount_ % 5 == 0) {
+    Serial.printf("START STATUS sent heartbeat=%lu state=%s\n", static_cast<unsigned long>(startHeartbeatCount_), message.state.c_str());
+  }
+}
+
 void StartStationApp::handleRadioMessage(const RadioMessage& message) {
-  if (message.type == RadioMessageType::Status) {
-    lastFinishSeenMs_ = millis();
-    Serial.printf("STATUS received heartbeat=%lu rssi=%d snr=%.1f\n", static_cast<unsigned long>(message.heartbeat), finishRssi_, static_cast<double>(finishSnr_));
-    if (!finishOnlineState_) {
-      finishOnlineState_ = true;
-      Serial.println("FINISH ONLINE");
-    }
+  if (message.type == RadioMessageType::Status && message.stationId == "finish") {
+    Serial.printf("STATUS received heartbeat=%lu state=%s rssi=%d snr=%.1f\n", static_cast<unsigned long>(message.heartbeat), message.state.c_str(), finishRssi_, static_cast<double>(finishSnr_));
     finishLastStatusMs_ = message.timestampMs > 0 ? message.timestampMs : message.uptimeMs;
     finishHeartbeatCount_ = message.heartbeat;
     if (message.state.length() > 0) finishState_ = message.state;
@@ -398,7 +438,7 @@ void StartStationApp::handleRadioMessage(const RadioMessage& message) {
       buzzer_.beep("FINISH");
       sendFinishAck(message.runId);
     } else if (state_.lastRun().runId == message.runId && message.runId.length() > 0) {
-      Serial.println("duplicate FINISH, ACK resent");
+      Serial.printf("Duplicate FINISH received, ACK resent runId=%s\n", message.runId.c_str());
       sendFinishAck(message.runId);
     } else {
       Serial.println("[StartStation] FINISH ignored: unknown runId or state mismatch");
@@ -407,7 +447,7 @@ void StartStationApp::handleRadioMessage(const RadioMessage& message) {
 }
 
 bool StartStationApp::finishOnline() const {
-  return finishOnlineState_;
+  return finishOnlineState_ && lastFinishSeenMs_ > 0 && millis() - lastFinishSeenMs_ <= FinishOfflineTimeoutMs;
 }
 
 uint32_t StartStationApp::finishLastSeenAgoMs() const {
@@ -439,7 +479,7 @@ void StartStationApp::updateDisplay() {
   const RunRecord& last = state_.lastRun();
   const String runShort = current.runId.length() > 0 ? current.runId.substring(max(0, static_cast<int>(current.runId.length()) - 6)) : "-";
   const String lastResult = last.resultFormatted.length() > 0 ? last.resultFormatted : "-";
-  const String fin = finishOnline() && hasFinishSignal_ ? String("FIN:") + String(finishRssi_) + "dBm" : String("FIN: NO SIGNAL");
+  const String fin = finishOnline() && hasFinishSignal_ ? String("FIN:") + String(finishRssi_) + "dBm" : String("FIN:NO SIGNAL");
 
   if (state_.state() == StartRunState::Countdown) {
     display_.showCountdown(state_.countdownText(millis()), "START");
@@ -452,7 +492,10 @@ void StartStationApp::updateDisplay() {
   }
 
   if (state_.state() == StartRunState::Riding) {
-    display_.showLines({"START TERMINAL", "RIDING", formatDurationMs(millis() - current.startTimestampMs).substring(0, 5), fin});
+    String anim = String("RIDING ");
+    for (uint8_t i = 0; i < ridingAnimationFrame(); ++i) anim += " ";
+    anim += ">";
+    display_.showLines({"START TERMINAL", anim, "Rider: " + toDisplayText(current.riderName, 16), "Time: " + formatDurationMs(millis() - current.startTimestampMs).substring(0, 5), fin});
     return;
   }
 
@@ -465,6 +508,18 @@ void StartStationApp::updateDisplay() {
     "Trail: " + toDisplayText(trail.displayName, 16),
     "Last: " + lastResult,
   });
+}
+
+String StartStationApp::finishSignalText() const {
+  return finishOnline() && hasFinishSignal_ ? String(finishRssi_) + " dBm" : String("NO SIGNAL");
+}
+
+String StartStationApp::finishReportedStartSignalText() const {
+  return hasFinishReportedStartSignal_ ? String(finishReportedStartRssi_) + " dBm" : String("NO SIGNAL");
+}
+
+uint8_t StartStationApp::ridingAnimationFrame() const {
+  return static_cast<uint8_t>((millis() / 250UL) % 10UL);
 }
 
 void StartStationApp::logHeartbeat(uint32_t nowMs) {
@@ -701,9 +756,10 @@ bool StartStationApp::addTrail(const String& displayName, String& error, TrailRe
   name.trim();
   Serial.printf("trail add request name=%s\n", name.c_str());
   if (name.length() == 0) { error = "Trail name is required"; Serial.printf("trail add failed: %s\n", error.c_str()); return false; }
+  const bool isFirstTrail = trails_.empty();
   TrailRecord newTrail{makeEntityId("t"), name, true, millis()};
   trails_.push_back(newTrail);
-  settings_.selectedTrailId = newTrail.id;
+  if (isFirstTrail || settings_.selectedTrailId.length() == 0) settings_.selectedTrailId = newTrail.id;
   if (!saveTrails()) { error = "Failed to save trails"; return false; }
   if (addedTrail != nullptr) *addedTrail = newTrail;
   if (!saveSettings()) { error = "Failed to save settings"; Serial.printf("trail add failed: %s\n", error.c_str()); return false; }

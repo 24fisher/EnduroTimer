@@ -49,12 +49,14 @@ bool RadioProtocol::serialize(const RadioMessage& message, String& output) {
   if (message.elapsedMs > 0) doc["elapsedMs"] = message.elapsedMs;
 
   if (message.type == RadioMessageType::Status) {
-    if (message.runId.length() > 0) doc["activeRunId"] = message.runId;
+    doc["activeRunId"] = message.runId;
+    doc["riderName"] = message.riderName;
+    doc["elapsedMs"] = message.elapsedMs;
     doc["beamClear"] = message.beamClear;
     doc["buttonReady"] = message.buttonReady;
     if (message.hasStartRssi) doc["startRssi"] = message.startRssi; else doc["startRssi"] = nullptr;
     if (message.hasStartSnr) doc["startSnr"] = message.startSnr; else doc["startSnr"] = nullptr;
-    if (message.startLastSeenAgoMs > 0) doc["startLastSeenAgoMs"] = message.startLastSeenAgoMs; else doc["startLastSeenAgoMs"] = nullptr;
+    if (message.hasStartRssi || message.hasStartSnr) doc["startLastSeenAgoMs"] = message.startLastSeenAgoMs; else doc["startLastSeenAgoMs"] = nullptr;
     if (message.hasBatteryVoltage) {
       doc["batteryVoltage"] = message.batteryVoltage;
     } else {
@@ -101,5 +103,10 @@ bool RadioProtocol::deserialize(const String& input, RadioMessage& output, Strin
     output.batteryVoltage = doc["batteryVoltage"].as<float>();
   }
 
-  return output.type != RadioMessageType::Unknown && output.messageId.length() > 0;
+  if (output.messageId.length() == 0) {
+    if (error != nullptr) *error = "missing messageId";
+    return false;
+  }
+
+  return true;
 }

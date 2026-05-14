@@ -46,19 +46,16 @@ The current Heltec V3 OLED configuration is fixed in `platformio.ini`:
 
 ## FinishStation online status and LoRa signal
 
-FinishStation sends `STATUS` every 1000 ms in all states: `Idle`, externally displayed `Riding`, `FinishSent`, and `Error` / ACK timeout.
+FinishStation sends `STATUS` every 1000 ms in all states: `Idle`, externally displayed `Riding`, `FinishSent`, and `Error` / ACK timeout. StartStation also sends a `STATUS` heartbeat with `stationId: "start"` every 1000 ms, so FinishStation can show StartStation signal even while idle.
 
-StartStation online hysteresis:
+Signal display rules:
 
-- `offline -> online`: immediately on the first valid FinishStation `STATUS`.
-- `online -> offline`: only when the last `STATUS` is older than 10000 ms.
-- StartStation logs transitions only: `FINISH ONLINE` and `FINISH NO SIGNAL lastSeenAgo=...`.
-- The UI and OLED use `NO SIGNAL` instead of `OFF` whenever radio packets have not been seen for more than 10 seconds.
-
-Signal tracking:
-
-- StartStation stores RSSI/SNR from every packet received from FinishStation and shows `FIN:-72dBm` on OLED/Web UI while the signal is fresh. If no packet has arrived for 10000 ms it shows `FIN: NO SIGNAL`.
-- FinishStation stores RSSI/SNR from every packet received from StartStation and shows `START:-33dBm` on OLED while the signal is fresh. If no packet has arrived for 10000 ms it shows `START:NO SIGNAL`.
+- `NO SIGNAL` means no valid packet from the other station has been received for more than 10 seconds.
+- `FIN:-72dBm` means StartStation is currently hearing packets from FinishStation.
+- `START:-33dBm` means FinishStation is currently hearing packets from StartStation.
+- StartStation updates the FinishStation signal from any valid `stationId: "finish"` packet, including both `STATUS` and `FINISH`.
+- FinishStation updates the StartStation signal from any valid `stationId: "start"` packet, including `STATUS`, `RUN_START`, and `FINISH_ACK`.
+- Every received LoRa packet logs `LORA RX type=... rssi=... snr=... raw=...`; JSON parse failures, missing `stationId`, and unknown `type` are logged explicitly.
 - FinishStation includes its reported StartStation RSSI/SNR and `startLastSeenAgoMs` in `STATUS`, so StartStation can show both directions in `/api/status`.
 
 ## Riders, trails, settings, and results
@@ -153,11 +150,13 @@ Returns current status, for example:
   "webOk": true,
   "loraOk": true,
   "finishStationOnline": true,
+  "finishSignalText": "-72 dBm",
   "finishState": "Riding",
   "finishLastSeenAgoMs": 1200,
   "finishHeartbeatCount": 42,
   "finishRssi": -72,
   "finishSnr": 8.5,
+  "finishReportedStartSignalText": "-69 dBm",
   "finishReportedStartRssi": -69,
   "finishReportedStartSnr": 9.2,
   "currentRunId": "RUN-...",
@@ -166,8 +165,10 @@ Returns current status, for example:
   "selectedTrailId": "t001",
   "selectedTrailName": "Default trail",
   "lastLoRaPacketType": "STATUS",
+  "lastLoRaRawShort": "{...}",
   "currentRunElapsedMs": 12345,
   "currentRunElapsedFormatted": "00:12",
+  "ridingAnimationFrame": 3,
   "countdownText": "",
   "lastResultMs": 20123,
   "lastResultFormatted": "00:20.123",
@@ -218,6 +219,7 @@ The UI polls `/api/status` once per second, `/api/runs` every two seconds, and r
 {
   "type": "RUN_START",
   "messageId": "...",
+  "stationId": "start",
   "runId": "...",
   "riderName": "Test Rider",
   "trailName": "Default trail",
@@ -244,12 +246,13 @@ FinishStation `STATUS` includes state, active run, timer, button readiness, and 
 }
 ```
 
-FinishStation sends and retries `FINISH` once per second until `FINISH_ACK` or 5 attempts:
+FinishStation sends and retries `FINISH` once per second until `FINISH_ACK` or 15 attempts. A short FinishStation button press in `FinishSent` immediately resends the same saved `FINISH`; a short press after ACK timeout resets attempts to 1 and resends the last `FINISH` without changing the saved finish timestamp:
 
 ```json
 {
   "type": "FINISH",
   "messageId": "...",
+  "stationId": "finish",
   "runId": "...",
   "finishTimestampMs": 123476789,
   "source": "BUTTON_STUB"
@@ -307,12 +310,13 @@ START
 
 The countdown state machine is millis-based and non-blocking: `3` for 1000 ms, `2` for 1000 ms, `1` for 1000 ms, and `GO` for about 700 ms. Serial logs include `COUNTDOWN step=... time=...` and `OLED countdown rendered step=... at ms=...`.
 
-StartStation Riding:
+StartStation Riding includes a non-blocking moving `>` animation updated from `millis()` about every 250 ms:
 
 ```text
 START TERMINAL
-RIDING
-00:12
+RIDING >
+Rider: Test Rider
+Time: 00:12
 FIN:-72dBm
 ```
 
@@ -334,14 +338,13 @@ State: IDLE
 START:-70dBm
 ```
 
-FinishStation Riding:
+FinishStation Riding also shows the moving `>` animation:
 
 ```text
 FINISH TERMINAL
-RIDING
+RIDING >
 Rider: Test Rider
-Timer: 00:12
-Btn: FINISH
+Time: 00:12
 START:-70dBm
 ```
 
@@ -358,7 +361,7 @@ FinishStation FinishSent:
 ```text
 FINISH TERMINAL
 FINISH SENT
-Sent: x/5
+Sent: x/15
 START:-70dBm
 ```
 
@@ -398,14 +401,23 @@ pio run -e start_station -t uploadfs
 
 If files are still missing, the fallback page at `http://192.168.4.1/` should appear and show the uploadfs command.
 
-### FinishStation is always `NO SIGNAL`
+### FinishStation or StartStation is always `NO SIGNAL`
 
 1. Check that `ENABLE_LORA=1` is present for both `start_station` and `finish_station` in `platformio.ini`.
 2. Check that both boards use `LORA_FREQUENCY_MHZ=868.0`.
 3. Watch FinishStation Serial for `STATUS sent heartbeat=5 state=...` every fifth heartbeat. STATUS is still sent every second.
-4. Watch StartStation Serial for `LoRa RX raw: ...` and `STATUS received heartbeat=... rssi=... snr=...`.
-5. If packet parsing fails, inspect `LoRa RX raw: ...` and `LoRa parse failed raw=... error=...` on Serial.
-6. Check that antennas are connected to both boards.
+4. Watch StartStation Serial for `LORA RX type=STATUS ...` and `STATUS received heartbeat=... state=... rssi=... snr=...`.
+5. Watch FinishStation Serial for `START STATUS received heartbeat=... rssi=... snr=...`; this confirms StartStation heartbeat packets are reaching FinishStation in Idle.
+6. If packet parsing fails, inspect `LORA parse failed raw=... error=...` on Serial.
+7. Check that antennas are connected to both boards.
+
+### Rider/trail Add button does nothing
+
+1. Open the browser console and confirm `EnduroTimer UI loaded` appears. If it does not, check that `/app.js` is served from LittleFS and upload the filesystem again.
+2. Press Add and check for `Adding rider ...` or `Adding trail ...` in the console.
+3. Watch StartStation Serial for `HTTP POST /api/riders/add body=...` or `HTTP POST /api/trails/add body=...`.
+4. Use `GET /api/debug/routes` to confirm the expected API routes are registered.
+5. The Web UI now shows per-section success/error text in `ridersMessage` and `trailsMessage`.
 
 ### Finish button does not react
 

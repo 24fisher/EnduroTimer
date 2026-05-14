@@ -49,6 +49,9 @@ bool WebServerController::begin() {
   });
 
   server_.on("/api/status", HTTP_GET, [this]() { sendJson(200, app_.statusJson()); });
+  server_.on("/api/debug/routes", HTTP_GET, [this]() {
+    sendJson(200, String("{\"ok\":true,\"routes\":[\"/api/status\",\"/api/riders/add\",\"/api/trails/add\",\"/api/runs\",\"/api/export/runs.csv\"]}"));
+  });
 
   server_.on("/api/time/sync", HTTP_POST, [this]() {
     JsonDocument doc;
@@ -95,8 +98,8 @@ bool WebServerController::begin() {
   server_.on("/api/settings", HTTP_GET, [this]() { sendJson(200, app_.settingsJson()); });
 
   server_.on("/api/riders/add", HTTP_POST, [this]() {
-    Serial.println("POST /api/riders/add");
     const String body = server_.arg("plain");
+    Serial.printf("HTTP POST /api/riders/add body=%s\n", body.c_str());
     JsonDocument doc;
     DeserializationError jsonError = deserializeJson(doc, body);
     if (body.length() == 0 || jsonError) {
@@ -130,8 +133,8 @@ bool WebServerController::begin() {
   });
 
   server_.on("/api/trails/add", HTTP_POST, [this]() {
-    Serial.println("POST /api/trails/add");
     const String body = server_.arg("plain");
+    Serial.printf("HTTP POST /api/trails/add body=%s\n", body.c_str());
     JsonDocument doc;
     DeserializationError jsonError = deserializeJson(doc, body);
     if (body.length() == 0 || jsonError) {
@@ -186,6 +189,7 @@ bool WebServerController::begin() {
 
   server_.begin();
   webStarted_ = apStarted_;
+  Serial.println("Routes registered: /api/status /api/riders/add /api/trails/add /api/runs /api/export/runs.csv /api/debug/routes");
   Serial.println(webStarted_ ? "[BOOT] WebServer OK" : "[BOOT] WebServer FAIL");
   return webStarted_;
 }
@@ -220,7 +224,10 @@ void WebServerController::sendFallbackIndex() {
 }
 
 bool WebServerController::serveStaticFile(const String& path) {
-  if (!fsMounted_ || !LittleFS.exists(path)) return false;
+  if (!fsMounted_ || !LittleFS.exists(path)) {
+    Serial.printf("Static file not found: %s\n", path.c_str());
+    return false;
+  }
 
   String contentType = "text/plain";
   if (path.endsWith(".html")) contentType = "text/html";
