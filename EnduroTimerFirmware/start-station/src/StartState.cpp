@@ -4,7 +4,7 @@ void StartState::begin() {
   state_ = StartRunState::Ready;
 }
 
-bool StartState::startCountdown(String& error) {
+bool StartState::startCountdown(const String& riderId, const String& riderName, const String& trailId, const String& trailName, String& error) {
   if (state_ != StartRunState::Ready) {
     error = "Run can start only from Ready state";
     return false;
@@ -12,7 +12,10 @@ bool StartState::startCountdown(String& error) {
 
   currentRun_ = RunRecord{};
   currentRun_.runId = makeRunId();
-  currentRun_.riderName = "Test Rider";
+  currentRun_.riderId = riderId;
+  currentRun_.riderName = riderName.length() > 0 ? riderName : String("Test Rider");
+  currentRun_.trailId = trailId;
+  currentRun_.trailName = trailName.length() > 0 ? trailName : String("Трасса по умолчанию");
   currentRun_.status = "Countdown";
   countdownStartedMs_ = millis();
   state_ = StartRunState::Countdown;

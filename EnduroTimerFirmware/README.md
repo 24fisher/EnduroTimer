@@ -2,7 +2,7 @@
 
 This folder contains the PlatformIO firmware for a two-board **Heltec WiFi LoRa 32 V3 / ESP32-S3** smoke test.
 
-The firmware keeps the normal split PlatformIO structure:
+The firmware keeps StartStation and FinishStation as separate applications:
 
 ```text
 EnduroTimerFirmware/
@@ -15,7 +15,7 @@ EnduroTimerFirmware/
    └─ src/              # FinishStation app, state machine, finish button stub
 ```
 
-StartStation and FinishStation are intentionally separate applications. The smoke test does not connect a real E3JK sensor, buzzer GPIO, encoder, or RFID reader yet; those parts remain stubs.
+The smoke test still does **not** connect a real E3JK sensor, buzzer GPIO, encoder, or RFID reader. Those parts remain stubs.
 
 ## Known working OLED and serial configuration
 
@@ -34,36 +34,84 @@ The current Heltec V3 OLED configuration is fixed in `platformio.ini`:
 
 `OLED_TEST_PATTERN_ONLY=0` for the full smoke-test mode so application screens can update after the U8g2 boot test.
 
+## Current hardware-test behavior
 
-## First hardware test fixes
+- A run starts **only from the physical StartStation button**. The Web UI no longer starts runs.
+- `ENABLE_WEB_START=0` is set for StartStation. `POST /api/runs/start` remains present for future debug, but returns HTTP 403 by default with `Start is only available from hardware button`.
+- FinishStation completes a run with the physical finish button while the lower terminal is in the riding/wait-for-finish state.
+- Buttons use debounced short press events with `INPUT_PULLUP`; one press creates one start or finish event.
+- Countdown, timers, finish retries, OLED refresh, WebServer handling, and LoRa polling are all millis-based and should not block the main loop.
+- Runtime init failures for OLED, Wi-Fi, LittleFS, Web, or LoRa are logged and exposed in `/api/status`; they do not stop the loop or restart the ESP32.
+- Serial diagnostics and one-second `START alive` / `FINISH alive` heartbeats are intentionally kept.
 
-The first field smoke test on two Heltec WiFi LoRa 32 V3 boards led to these firmware adjustments:
+## FinishStation online status and LoRa signal
 
-- Buttons now use debounced short press events, not long press. One press creates one start or finish request, and holding the BOOT/PRG button does not repeat the action.
-- StartStation accepts the physical start button only in `Ready`; other states are logged as ignored.
-- FinishStation accepts the physical finish button only in `WaitFinish`; `Idle` presses are logged as no active run, and `FinishSent` presses do not create duplicate `FINISH` messages.
-- Power saving is disabled at boot. StartStation disables Wi-Fi sleep with `WiFi.setSleep(false)`, and both roles log `Power save: disabled`.
-- FinishStation sends a `STATUS` heartbeat every 1 second with `stationId`, `state`, `uptimeMs`, `heartbeat`, `activeRunId`, and `buttonReady`.
-- StartStation keeps FinishStation online for 5 seconds after the last `STATUS`, so one lost heartbeat does not immediately flip the Web UI to offline.
-- `/api/status` now includes `finishLastSeenAgoMs`, `finishLastStatusMs`, `finishHeartbeatCount`, `loraLastRssi`, and `loraLastSnr` for easier LoRa diagnostics.
-- The countdown is non-blocking and OLED should show `3`, `2`, `1`, and `GO` as separate visible steps before `RUN_START`.
-- `FinishSent` is not an error. It means the lower station sent `FINISH` and is waiting for `FINISH_ACK`; it should be shown as a pending/normal state in the UI.
-- Finish retry remains timer-driven: one `FINISH` per second, up to 5 attempts. Only an ACK timeout after the final attempt becomes an error.
-- StartStation resends `FINISH_ACK` when it receives a duplicate `FINISH` for the already completed run, without creating a second result.
-- StartStation OLED keeps the finished result visible for at least 5 seconds, then the normal status screen keeps `Last: mm:ss.mmm`.
-- The Web UI polls less aggressively, uses `cache: no-store`, treats one or two fetch failures as a soft unstable-connection warning, and only shows `No response from station` after repeated failures. If `failed to fetch` appears, check for loop blocking, missing `webServer.handleClient()` calls, Wi-Fi AP stability, and LoRa/OLED calls that take too long.
+FinishStation sends `STATUS` every 1000 ms in all states: `Idle`, externally displayed `Riding`, `FinishSent`, and `Error` / ACK timeout.
+
+StartStation online hysteresis:
+
+- `offline -> online`: immediately on the first valid FinishStation `STATUS`.
+- `online -> offline`: only when the last `STATUS` is older than 10000 ms.
+- StartStation logs transitions only: `FINISH ONLINE` and `FINISH OFFLINE lastSeenAgo=...`.
+
+Signal tracking:
+
+- StartStation stores RSSI/SNR from every packet received from FinishStation and shows it on OLED and Web UI.
+- FinishStation stores RSSI/SNR from every packet received from StartStation and shows it on OLED.
+- FinishStation includes its reported StartStation RSSI/SNR in `STATUS`, so StartStation can show both directions in `/api/status`.
+
+## Riders, trails, settings, and results
+
+StartStation stores simple LittleFS data files:
+
+- `/riders.json` — rider list.
+- `/trails.json` — trail list.
+- `/settings.json` — selected rider/trail.
+- `/runs.csv` — finished run export with UTF-8 BOM and semicolon-separated columns.
+
+Run selection rules for the physical start button:
+
+1. Use `selectedRiderId` if it points to an active rider.
+2. Otherwise use the first active rider.
+3. If no active rider exists, use `Test Rider`.
+4. Use `selectedTrailId` if it points to an active trail.
+5. Otherwise use the first active trail.
+6. If no trail exists, create/use `Трасса по умолчанию`.
+
+Every finished run stores:
+
+- `runId`
+- `riderId`
+- `riderNameSnapshot`
+- `trailId`
+- `trailNameSnapshot`
+- start/finish/result timestamps
+- status and finish source
+
+CSV columns:
+
+```text
+RunId;Rider;Trail;StartMs;FinishMs;ResultMs;Result;Status;Source
+```
+
+Export endpoint:
+
+- `GET /api/export/runs.csv`
+- Content type: `text/csv; charset=utf-8`
+- Download filename: `enduro_runs.csv`
 
 ## Build environments
 
 ### StartStation
 
-`start_station` enables everything needed for the upper Heltec:
+`start_station` enables:
 
 - OLED via U8g2
 - Wi-Fi Access Point only (`WIFI_AP` + `WiFi.softAP`, no STA mode)
 - Web UI and JSON API
 - LoRa at 868.0 MHz
 - Physical start button on `START_BUTTON_PIN=0` with `INPUT_PULLUP`
+- `ENABLE_WEB_START=0`
 - `BuzzerStub` only
 
 Flash firmware and upload the Web UI filesystem:
@@ -73,18 +121,9 @@ pio run -e start_station -t upload
 pio run -e start_station -t uploadfs
 ```
 
-The top-level PlatformIO setting is:
-
-```ini
-[platformio]
-data_dir = start-station/data
-```
-
-`data_dir` must stay in `[platformio]`; PlatformIO ignores it under `[env:start_station]`.
-
 ### FinishStation
 
-`finish_station` enables only the services needed for the lower Heltec:
+`finish_station` enables:
 
 - OLED via U8g2
 - LoRa at 868.0 MHz
@@ -98,122 +137,36 @@ Flash firmware:
 pio run -e finish_station -t upload
 ```
 
-## StartStation boot flow
-
-The StartStation boot sequence is:
-
-1. Serial first.
-2. Reset diagnostics.
-3. OLED init.
-4. Start button init.
-5. `BuzzerStub` init.
-6. Wi-Fi AP init.
-7. LittleFS init.
-8. WebServer init.
-9. LoRa init.
-10. State Ready.
-
-Expected boot log checkpoints include:
-
-```text
-[BOOT] OLED init...
-[BOOT] OLED OK/FAIL
-[BOOT] Button OK
-[BOOT] WiFi AP init...
-[BOOT] WiFi AP OK ssid=EnduroTimer ip=192.168.4.1
-[BOOT] LittleFS init...
-[BOOT] LittleFS OK/FAIL
-[BOOT] WebServer init...
-[BOOT] WebServer OK/FAIL
-[BOOT] LoRa init...
-[BOOT] LoRa OK/FAIL
-[BOOT] State Ready
-```
-
-An OLED, Wi-Fi, LittleFS, Web, or LoRa init failure is not fatal. The loop continues, Serial heartbeat continues, and `/api/status` reports the relevant service flag as false.
-
-## FinishStation boot flow
-
-The FinishStation boot sequence is:
-
-1. Serial first.
-2. Reset diagnostics.
-3. OLED init.
-4. Finish button init.
-5. `BuzzerStub` init.
-6. LoRa init.
-7. State Idle.
-
-Expected boot log checkpoints include:
-
-```text
-[BOOT] OLED init...
-[BOOT] OLED OK/FAIL
-[BOOT] Finish button OK
-[BOOT] LoRa init...
-[BOOT] LoRa OK/FAIL
-[BOOT] State Idle
-```
-
-Wi-Fi and Web are not started on FinishStation.
-
-## Wi-Fi AP and Web UI
-
-StartStation creates only an Access Point:
-
-- SSID: `EnduroTimer`
-- Password: `endurotimer`
-- URL: `http://192.168.4.1`
-
-Expected Wi-Fi log:
-
-```text
-WiFi AP starting...
-WiFi AP OK
-SSID: EnduroTimer
-IP: 192.168.4.1
-```
-
-If `WiFi.softAP()` fails, Serial prints `WiFi AP FAIL`, the OLED shows Wi-Fi failure/offline information, and the loop continues.
-
-The Web UI is served from LittleFS files in `start-station/data`:
-
-- `index.html`
-- `app.js`
-- `style.css`
-
-If the filesystem was not uploaded or `index.html` is missing, `GET /` returns a built-in fallback page that says:
-
-- `EnduroTimer StartStation`
-- `LittleFS web files not found`
-- `Use: pio run -e start_station -t uploadfs`
-
 ## StartStation JSON API
 
 ### `GET /api/status`
 
-Returns current smoke-test status, for example:
+Returns current status, for example:
 
 ```json
 {
   "device": "StartStation",
-  "state": "Ready",
+  "state": "Riding",
   "oledOk": true,
   "wifiOk": true,
   "webOk": true,
   "loraOk": true,
   "finishStationOnline": true,
-  "finishState": "Idle",
-  "loraLastRssi": -72,
-  "loraLastSnr": 8.5,
+  "finishState": "Riding",
   "finishLastSeenAgoMs": 1200,
-  "finishLastStatusMs": 123000,
   "finishHeartbeatCount": 42,
-  "currentRunId": "",
+  "finishRssi": -72,
+  "finishSnr": 8.5,
+  "finishReportedStartRssi": -69,
+  "finishReportedStartSnr": 9.2,
+  "currentRunId": "RUN-...",
   "currentRiderName": "Test Rider",
+  "currentTrailName": "Трасса по умолчанию",
+  "currentRunElapsedMs": 12345,
+  "currentRunElapsedFormatted": "00:12",
   "countdownText": "",
-  "lastResultMs": 20000,
-  "lastResultFormatted": "00:20.000",
+  "lastResultMs": 20123,
+  "lastResultFormatted": "00:20.123",
   "lastFinishSource": "BUTTON_STUB",
   "uptimeMs": 123456,
   "heap": 123456,
@@ -221,58 +174,40 @@ Returns current smoke-test status, for example:
 }
 ```
 
-### `POST /api/runs/start`
+### Other endpoints
 
-When state is `Ready`, starts the non-blocking countdown and quickly returns:
-
-```json
-{ "ok": true, "state": "Countdown" }
-```
-
-If a countdown or ride is already active, returns HTTP 409:
-
-```json
-{ "ok": false, "error": "Run already active" }
-```
-
-### `POST /api/system/reset`
-
-Clears the active run and returns the StartStation to `Ready`. The last result may stay in RAM.
-
-### `GET /api/runs`
-
-Returns the recent run list stored in RAM.
+- `POST /api/runs/start` — disabled by default with HTTP 403 unless `ENABLE_WEB_START=1` is compiled.
+- `POST /api/system/reset` — clears the active run and returns StartStation to `Ready`.
+- `GET /api/runs` — recent finished runs in RAM.
+- `GET /api/export/runs.csv` — finished run CSV download.
+- `GET /api/riders` — rider list.
+- `POST /api/riders/add` — JSON body `{ "displayName": "..." }`.
+- `POST /api/riders/deactivate` — JSON body `{ "riderId": "..." }`.
+- `GET /api/trails` — trail list.
+- `POST /api/trails/add` — JSON body `{ "displayName": "..." }`.
+- `POST /api/trails/deactivate` — JSON body `{ "trailId": "..." }`.
+- `GET /api/settings` — selected rider/trail.
+- `POST /api/settings` — JSON body `{ "selectedRiderId": "...", "selectedTrailId": "..." }`.
 
 ## Web UI
 
-The minimum Web UI shows:
+The LittleFS Web UI shows:
 
-- `EnduroTimer StartStation` heading
-- StartStation state
-- OLED OK/FAIL
-- Wi-Fi OK/FAIL
-- Web OK/FAIL
-- LoRa OK/FAIL
-- Finish online/offline
-- Finish state
-- RSSI/SNR
-- Countdown
-- Current run ID
-- Last result
-- `Start test run` button
-- `Reset` button
-- Notes: `Старт: кнопка на верхнем Heltec или кнопка в вебке.` and `Финиш: кнопка на нижнем Heltec.`
-- Recent runs table
+- StartStation service flags and state.
+- FinishStation online/offline, state, heartbeat, and last seen age.
+- Finish RSSI/SNR and Finish-reported Start RSSI/SNR.
+- Countdown and current run timer.
+- Selected rider and trail.
+- Rider and trail management tables.
+- Reset system button.
+- CSV download link.
+- Recent results table with Rider, Trail, Result, Status, Source, and Run ID.
 
-The UI polls `/api/status` every 1000 ms and handles short fetch outages without breaking the dashboard.
+The UI polls once per second. It does not show a hard error for a single failed fetch; after more than five consecutive failures it shows `Нет связи с верхним терминалом`.
 
 ## LoRa protocol
 
-The firmware uses the shared `RadioProtocol` / `RadioMessage` JSON protocol.
-
-FinishStation sends `STATUS` every 1 second. StartStation marks FinishStation online when a status packet was received within the last 5 seconds.
-
-StartStation sends `RUN_START` on GO:
+`RUN_START` from StartStation includes the selected rider and trail snapshots:
 
 ```json
 {
@@ -280,7 +215,26 @@ StartStation sends `RUN_START` on GO:
   "messageId": "...",
   "runId": "...",
   "riderName": "Test Rider",
+  "trailName": "Трасса по умолчанию",
   "startTimestampMs": 123456789
+}
+```
+
+FinishStation `STATUS` includes state, active run, timer, button readiness, and reverse signal diagnostics:
+
+```json
+{
+  "type": "STATUS",
+  "stationId": "finish",
+  "state": "Riding",
+  "uptimeMs": 123456,
+  "heartbeat": 42,
+  "activeRunId": "RUN-...",
+  "riderName": "Test Rider",
+  "elapsedMs": 12345,
+  "startRssi": -70,
+  "startSnr": 8.5,
+  "buttonReady": true
 }
 ```
 
@@ -296,17 +250,7 @@ FinishStation sends and retries `FINISH` once per second until `FINISH_ACK` or 5
 }
 ```
 
-StartStation replies to a matching active run with `FINISH_ACK`:
-
-```json
-{
-  "type": "FINISH_ACK",
-  "messageId": "...",
-  "runId": "..."
-}
-```
-
-Unknown `runId` FINISH packets are logged and ignored.
+StartStation replies to a matching active run with `FINISH_ACK`. Duplicate `FINISH` packets for the already completed run receive another ACK without creating a second result.
 
 ## Smoke-test flow
 
@@ -323,72 +267,88 @@ Unknown `runId` FINISH packets are logged and ignored.
    pio run -e finish_station -t upload
    ```
 4. Open serial monitors for both boards.
-5. Both OLEDs should show boot/status screens.
-6. Connect to Wi-Fi:
+5. Connect to Wi-Fi:
    - SSID: `EnduroTimer`
    - password: `endurotimer`
-7. Open `http://192.168.4.1`.
+6. Open `http://192.168.4.1`.
+7. Add/select a rider and trail if desired.
 8. Wait until the Web UI shows Finish online.
-9. Press the StartStation board button or click `Start test run` in the Web UI.
-10. FinishStation should show `WAIT FINISH`.
-11. Press the FinishStation board button.
-12. StartStation should show the result on OLED.
-13. Web UI should show the result and recent run row.
+9. Press the StartStation physical button.
+10. FinishStation should show `RIDING`, the rider name, timer, and `Btn: FINISH`.
+11. Press the FinishStation physical button.
+12. FinishStation should show `FINISH SENT` and then `ACK OK` after acknowledgment.
+13. StartStation should show `FINISHED` and append the result to `/runs.csv`.
+14. Download results from `GET /api/export/runs.csv` or the Web UI CSV link.
 
 ## OLED screens
 
-StartStation screens:
+StartStation Ready:
 
 ```text
 ENDURO TIMER
 START
-AP: 192.168.4.1
-FIN: OK/OFF
-LoRa: OK/OFF
-READY
+FIN: OK -72
+Rider: Test Rider
+Trail: Трасса
+Last: 00:20.1
 ```
 
+StartStation Countdown:
+
 ```text
-COUNTDOWN
 3 / 2 / 1 / GO
+Rider name
 ```
+
+StartStation Riding:
 
 ```text
 RIDING
-Run: short id
-FIN: OK/OFF
+Test Rider
+00:12
+FIN: OK -72
 ```
+
+StartStation Finished:
 
 ```text
 FINISHED
+Test Rider
 00:20.123
 ```
 
-FinishStation screens:
+FinishStation Idle:
 
 ```text
-ENDURO TIMER
 FINISH
-LoRa: OK/OFF
+LoRa: OK
+ST RSSI: -70
 IDLE
-HB: counter
 ```
 
+FinishStation Riding:
+
 ```text
-WAIT FINISH
-Run: short id
-Btn: finish
+RIDING
+Test Rider
+00:12
+Btn: FINISH
+ST: -70
 ```
+
+FinishStation FinishSent:
 
 ```text
 FINISH SENT
-Run: short id
 Sent: x/5
+ST: -70
 ```
 
+FinishStation ACK:
+
 ```text
-ERROR
-...
+ACK OK
+IDLE
 ```
 
 ## Troubleshooting
@@ -406,10 +366,6 @@ SDA=17 SCL=18 RST=21 VEXT=36 active LOW address=0x3C driver=SSD1306_NONAME U8g2
 ```
 
 The OLED init path logs each step and does not restart or stop the loop on failure.
-
-### Wi-Fi AP is not visible
-
-Check `ENABLE_WIFI=1` in `start_station`. `ENABLE_WEB` can be set to `0` for an AP-only test, but the full smoke test uses `ENABLE_WEB=1`.
 
 ### Web page is not loading
 
@@ -429,10 +385,6 @@ If files are still missing, the fallback page at `http://192.168.4.1/` should ap
 - Attach antennas to both boards.
 - Review Serial logs for LoRa begin result codes and TX errors.
 
-### Unexpected reset
-
-Check USB power, cable quality, and reset reason in Serial diagnostics.
-
 ## Intentional limitations
 
 Do not add these to the current smoke test:
@@ -443,5 +395,6 @@ Do not add these to the current smoke test:
 - Real buzzer GPIO
 - Encoder
 - RFID
+- C# backend integration
 
 Serial diagnostics and one-second heartbeats are intentionally kept on both roles.

@@ -18,6 +18,7 @@ struct RadioMessage {
   String stationId;
   String runId;
   String riderName;
+  String trailName;
   String state;
   String source;
   bool beamClear = true;
@@ -29,4 +30,9 @@ struct RadioMessage {
   uint32_t heartbeat = 0;
   uint32_t startTimestampMs = 0;
   uint32_t finishTimestampMs = 0;
+  uint32_t elapsedMs = 0;
+  bool hasStartRssi = false;
+  int startRssi = 0;
+  bool hasStartSnr = false;
+  float startSnr = 0.0F;
 };
