@@ -34,6 +34,30 @@ RadioMessageType RadioProtocol::typeFromString(const String& type) {
 
 bool RadioProtocol::serialize(const RadioMessage& message, String& output) {
   JsonDocument doc;
+
+  if (message.type == RadioMessageType::Status) {
+    doc["t"] = "S";
+    doc["mid"] = message.messageId;
+    doc["sid"] = message.stationId;
+    doc["st"] = message.state;
+    if (message.uptimeMs > 0) doc["up"] = message.uptimeMs;
+    if (message.timestampMs > 0) doc["ts"] = message.timestampMs;
+    if (message.heartbeat > 0) doc["hb"] = message.heartbeat;
+    if (message.runId.length() > 0) doc["rid"] = message.runId;
+    if (message.riderName.length() > 0) doc["rn"] = message.riderName;
+    if (message.elapsedMs > 0) doc["el"] = message.elapsedMs;
+    if (message.startLinkActive || message.startPacketCount > 0 || message.hasStartRssi || message.hasStartSnr) {
+      doc["sl"] = message.startLinkActive;
+      doc["sp"] = message.startPacketCount;
+      doc["sla"] = message.startLastSeenAgoMs;
+      if (message.hasStartRssi) doc["sr"] = message.startRssi;
+      if (message.hasStartSnr) doc["ss"] = message.startSnr;
+    }
+    if (message.hasBatteryVoltage) doc["bv"] = message.batteryVoltage;
+    output = "";
+    return serializeJson(doc, output) > 0;
+  }
+
   doc["type"] = typeToString(message.type);
   doc["messageId"] = message.messageId;
 
@@ -50,24 +74,6 @@ bool RadioProtocol::serialize(const RadioMessage& message, String& output) {
   if (message.finishTimestampMs > 0) doc["finishTimestampMs"] = message.finishTimestampMs;
   if (message.elapsedMs > 0) doc["elapsedMs"] = message.elapsedMs;
 
-  if (message.type == RadioMessageType::Status || message.type == RadioMessageType::StartStatus) {
-    doc["activeRunId"] = message.runId;
-    doc["riderName"] = message.riderName;
-    doc["elapsedMs"] = message.elapsedMs;
-    doc["beamClear"] = message.beamClear;
-    doc["buttonReady"] = message.buttonReady;
-    if (message.hasStartRssi) doc["startRssi"] = message.startRssi; else doc["startRssi"] = nullptr;
-    if (message.hasStartSnr) doc["startSnr"] = message.startSnr; else doc["startSnr"] = nullptr;
-    doc["startLinkActive"] = message.startLinkActive;
-    if (message.hasStartRssi || message.hasStartSnr) doc["startLastSeenAgoMs"] = message.startLastSeenAgoMs; else doc["startLastSeenAgoMs"] = nullptr;
-    doc["startPacketCount"] = message.startPacketCount;
-    if (message.hasBatteryVoltage) {
-      doc["batteryVoltage"] = message.batteryVoltage;
-    } else {
-      doc["batteryVoltage"] = nullptr;
-    }
-  }
-
   output = "";
   return serializeJson(doc, output) > 0;
 }
@@ -81,32 +87,54 @@ bool RadioProtocol::deserialize(const String& input, RadioMessage& output, Strin
   }
 
   output = RadioMessage{};
-  output.type = typeFromString(doc["type"].as<String>());
+  const String compactType = doc["t"] | "";
+  output.type = compactType == "S" ? RadioMessageType::Status : typeFromString(doc["type"].as<String>());
   output.messageId = doc["messageId"] | "";
+  if (output.messageId.length() == 0) output.messageId = doc["mid"] | "";
   output.stationId = doc["stationId"] | "";
+  if (output.stationId.length() == 0) output.stationId = doc["sid"] | "";
   output.runId = doc["runId"] | "";
   if (output.runId.length() == 0) output.runId = doc["activeRunId"] | "";
+  if (output.runId.length() == 0) output.runId = doc["rid"] | "";
   output.riderName = doc["riderName"] | "";
+  if (output.riderName.length() == 0) output.riderName = doc["rn"] | "";
   output.trailName = doc["trailName"] | "";
+  if (output.trailName.length() == 0) output.trailName = doc["tn"] | "";
   output.state = doc["state"] | "";
+  if (output.state.length() == 0) output.state = doc["st"] | "";
   output.source = doc["source"] | "";
   output.beamClear = doc["beamClear"] | true;
   output.buttonReady = doc["buttonReady"] | false;
   output.timestampMs = doc["timestampMs"] | 0;
+  if (output.timestampMs == 0) output.timestampMs = doc["ts"] | 0;
   output.uptimeMs = doc["uptimeMs"] | 0;
+  if (output.uptimeMs == 0) output.uptimeMs = doc["up"] | 0;
   output.heartbeat = doc["heartbeat"] | 0;
+  if (output.heartbeat == 0) output.heartbeat = doc["hb"] | 0;
   output.startTimestampMs = doc["startTimestampMs"] | 0;
+  if (output.startTimestampMs == 0) output.startTimestampMs = doc["sts"] | 0;
   output.finishTimestampMs = doc["finishTimestampMs"] | 0;
+  if (output.finishTimestampMs == 0) output.finishTimestampMs = doc["fts"] | 0;
   output.elapsedMs = doc["elapsedMs"] | 0;
+  if (output.elapsedMs == 0) output.elapsedMs = doc["el"] | 0;
   if (!doc["startRssi"].isNull()) { output.hasStartRssi = true; output.startRssi = doc["startRssi"].as<int>(); }
+  if (!doc["sr"].isNull()) { output.hasStartRssi = true; output.startRssi = doc["sr"].as<int>(); }
   if (!doc["startSnr"].isNull()) { output.hasStartSnr = true; output.startSnr = doc["startSnr"].as<float>(); }
+  if (!doc["ss"].isNull()) { output.hasStartSnr = true; output.startSnr = doc["ss"].as<float>(); }
   output.startLastSeenAgoMs = doc["startLastSeenAgoMs"] | 0;
+  if (output.startLastSeenAgoMs == 0) output.startLastSeenAgoMs = doc["sla"] | 0;
   output.startLinkActive = doc["startLinkActive"] | false;
+  if (!output.startLinkActive) output.startLinkActive = doc["sl"] | false;
   output.startPacketCount = doc["startPacketCount"] | 0;
+  if (output.startPacketCount == 0) output.startPacketCount = doc["sp"] | 0;
 
   if (!doc["batteryVoltage"].isNull()) {
     output.hasBatteryVoltage = true;
     output.batteryVoltage = doc["batteryVoltage"].as<float>();
+  }
+  if (!doc["bv"].isNull()) {
+    output.hasBatteryVoltage = true;
+    output.batteryVoltage = doc["bv"].as<float>();
   }
 
   if (output.messageId.length() == 0) {
