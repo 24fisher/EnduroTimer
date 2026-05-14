@@ -1,4 +1,4 @@
-console.log("EnduroTimer UI loaded v0.09");
+console.log("EnduroTimer UI loaded v0.10");
 const $ = (id) => document.getElementById(id);
 let consecutiveFetchErrors = 0;
 let riders = [];

@@ -17,7 +17,6 @@ static constexpr int LORA_RST = 12;
 static constexpr int LORA_BUSY = 13;
 static constexpr uint8_t FINISH_MAX_RETRY_ATTEMPTS = 15;
 static constexpr uint32_t FINISH_RETRY_INTERVAL_MS = 1000UL;
-static constexpr uint32_t StatusIntervalMs = LINK_HEARTBEAT_INTERVAL_MS;
 static constexpr uint32_t DisplayRefreshMs = 200UL;
 RTC_DATA_ATTR static uint32_t finishBootCounter = 0;
 #if ENABLE_LORA
@@ -58,6 +57,7 @@ void FinishStationApp::begin() {
   beginRadio();
   state_.begin();
   raceClock_.begin();
+  nextFinishStatusDueMs_ = millis() + 500UL + static_cast<uint32_t>(random(0, 301));
   Serial.println("[BOOT] State Idle");
 }
 
@@ -67,6 +67,14 @@ void FinishStationApp::loop() {
   pollRadio();
 #endif
   updateLed(now);
+  if (syncInProgress_ && syncReadyUntilMs_ > 0 && now > syncReadyUntilMs_ && !raceClock_.isSynced()) {
+    syncInProgress_ = false;
+    syncReady_ = false;
+    activeSyncId_ = "";
+    syncReadyUntilMs_ = 0;
+    syncStatusText_ = "SYNC REQUIRED";
+    Serial.println("SYNC ready timeout, waiting for new request");
+  }
 
   uint32_t finishTimestampMs = 0;
   if (sensor_.update(now, finishTimestampMs)) {
@@ -99,12 +107,14 @@ void FinishStationApp::loop() {
     }
   }
 
-  if (now - lastStatusMs_ >= StatusIntervalMs) {
+  if (nextFinishStatusDueMs_ > 0 && now >= nextFinishStatusDueMs_) {
     if (priorityPending) {
       Serial.println("TX deferred STATUS because priority message pending");
+      nextFinishStatusDueMs_ = now + 500UL;
     } else {
       sendStatus(now);
       lastStatusMs_ = now;
+      nextFinishStatusDueMs_ = now + FINISH_STATUS_INTERVAL_MS + static_cast<uint32_t>(random(0, 301));
     }
   }
 
@@ -153,7 +163,7 @@ void FinishStationApp::updateLed(uint32_t nowMs) {
   switch (state_.state()) {
     case FinishRunState::Boot:
     case FinishRunState::Idle:
-      mode = LedMode::ReadySlowBlink;
+      mode = (isLinkActive(startLink_) || (syncInProgress_ && linkAgeMs(startLink_) < LINK_TIMEOUT_MS)) ? LedMode::ReadySlowBlink : LedMode::NoSignalBlink;
       break;
     case FinishRunState::Riding:
       mode = LedMode::RidingSolid;
@@ -330,18 +340,24 @@ void FinishStationApp::sendHelloAck(uint32_t nowMs) {
 
 bool FinishStationApp::discoveryActive() const {
   const bool activeRun = state_.isRiding() || state_.state() == FinishRunState::FinishSent || state_.state() == FinishRunState::AckTimeout;
-  return !activeRun && !isLinkActive(startLink_);
+  return !activeRun && !syncInProgress_ && !isLinkActive(startLink_) && linkAgeMs(startLink_) >= LINK_TIMEOUT_MS;
 }
 
 bool FinishStationApp::priorityTxPending(uint32_t nowMs) const {
-  const bool priorityTxRecently = lastPriorityTxMs_ > 0 && nowMs - lastPriorityTxMs_ < 2UL;
+  const bool priorityTxRecently = lastPriorityTxMs_ > 0 && nowMs - lastPriorityTxMs_ < LORA_POST_PRIORITY_QUIET_MS;
   return priorityTxRecently ||
          (!finishAckReceived_ && state_.state() == FinishRunState::FinishSent &&
           (finishAttempts_ < FINISH_MAX_RETRY_ATTEMPTS || nowMs - lastFinishSendMs_ < FINISH_RETRY_INTERVAL_MS));
 }
 
 void FinishStationApp::enterSyncReady(uint32_t nowMs) {
+  if (syncInProgress_) {
+    Serial.printf("SYNC already in progress syncId=%s, not creating new sync request\n", activeSyncId_.c_str());
+    return;
+  }
+  syncInProgress_ = true;
   syncReady_ = true;
+  activeSyncId_ = "";
   syncReadyUntilMs_ = nowMs + 15000UL;
   syncStatusText_ = "SYNC READY";
   Serial.println("Finish sync-ready mode: waiting SYNC_PING");
@@ -379,11 +395,18 @@ void FinishStationApp::sendSyncPong(const RadioMessage& ping) {
 }
 
 void FinishStationApp::sendSyncAck(const RadioMessage& apply) {
+  if (syncInProgress_ && activeSyncId_.length() > 0 && apply.syncId != activeSyncId_) {
+    Serial.printf("SYNC_APPLY ignored mismatched syncId active=%s rx=%s\n", activeSyncId_.c_str(), apply.syncId.c_str());
+    return;
+  }
   raceClock_.setOffsetToMaster(apply.offsetToMasterMs);
   raceClock_.markSynced();
   syncAccuracyMs_ = apply.networkDelayMs > 0 ? apply.networkDelayMs : (apply.roundTripMs / 2UL);
   lastSyncMs_ = millis();
   syncReady_ = false;
+  syncInProgress_ = false;
+  activeSyncId_ = apply.syncId;
+  syncReadyUntilMs_ = 0;
   syncStatusText_ = "SYNC OK";
 
   RadioMessage message;
@@ -571,8 +594,16 @@ void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
 
   if (message.type == RadioMessageType::SyncPing && message.stationId == "start") {
     if (!syncReady_ && !raceClock_.isSynced()) {
-      Serial.println("SYNC_PING RX while not ready; responding because physical Start button initiated sync");
+      Serial.println("SYNC_PING RX while not ready; responding because StartStation is sync master");
     }
+    if (syncInProgress_ && activeSyncId_.length() > 0 && message.syncId != activeSyncId_) {
+      Serial.printf("SYNC_PING ignored mismatched syncId active=%s rx=%s\n", activeSyncId_.c_str(), message.syncId.c_str());
+      return;
+    }
+    syncInProgress_ = true;
+    syncReady_ = true;
+    activeSyncId_ = message.syncId;
+    syncReadyUntilMs_ = millis() + 15000UL;
     sendSyncPong(message);
     return;
   }
