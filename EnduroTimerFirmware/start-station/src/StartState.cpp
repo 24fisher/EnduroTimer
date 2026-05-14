@@ -4,24 +4,33 @@ void StartState::begin() {
   state_ = StartRunState::Ready;
 }
 
-bool StartState::startCountdown(const String& riderId, const String& riderName, const String& trailId, const String& trailName, String& error) {
+bool StartState::startCountdown(uint32_t runNumber, const String& startedAtText, uint64_t startedAtEpochMs, const String& riderId, const String& riderName, const String& trailId, const String& trailName, String& error) {
   if (state_ != StartRunState::Ready) {
     error = "Run can start only from Ready state";
     return false;
   }
 
   currentRun_ = RunRecord{};
+  currentRun_.runNumber = runNumber;
   currentRun_.runId = makeRunId();
   currentRun_.riderId = riderId;
   currentRun_.riderName = riderName.length() > 0 ? riderName : String("Test Rider");
   currentRun_.trailId = trailId;
   currentRun_.trailName = trailName.length() > 0 ? trailName : String("Трасса по умолчанию");
+  currentRun_.startedAtEpochMs = startedAtEpochMs;
+  currentRun_.startedAtText = startedAtText.length() > 0 ? startedAtText : String("TIME NOT SYNCED");
+  currentRun_.timingSource = "PENDING";
+  currentRun_.timingNote = "Start timestamp will be fixed on GO; countdown is not part of result";
   currentRun_.status = "Countdown";
   countdownActive_ = true;
   countdownStepIndex_ = 0;
-  countdownStepStartedMs_ = millis();
+  countdownStartedMs_ = millis();
+  countdownStepStartedMs_ = countdownStartedMs_;
+  goTimestampMs_ = 0;
   countdownText_ = countdownStepText(countdownStepIndex_);
   state_ = StartRunState::Countdown;
+  Serial.printf("New run created runNumber=%lu runId=%s\n", static_cast<unsigned long>(currentRun_.runNumber), currentRun_.runId.c_str());
+  Serial.printf("New run startedAtText=%s\n", currentRun_.startedAtText.c_str());
   return true;
 }
 
@@ -29,7 +38,9 @@ void StartState::resetActiveRun() {
   currentRun_ = RunRecord{};
   countdownActive_ = false;
   countdownStepIndex_ = 0;
+  countdownStartedMs_ = 0;
   countdownStepStartedMs_ = 0;
+  goTimestampMs_ = 0;
   countdownText_ = "";
   state_ = StartRunState::Ready;
 }
@@ -52,7 +63,10 @@ bool StartState::updateCountdown(uint32_t nowMs, RunRecord& runToStart) {
 
   countdownActive_ = false;
   countdownText_ = "";
+  goTimestampMs_ = nowMs;
   currentRun_.startTimestampMs = nowMs;
+  currentRun_.timingSource = "RUNNING";
+  currentRun_.timingNote = "Countdown excluded; result starts at GO";
   currentRun_.status = "Riding";
   state_ = StartRunState::Riding;
   runToStart = currentRun_;
@@ -62,12 +76,24 @@ bool StartState::updateCountdown(uint32_t nowMs, RunRecord& runToStart) {
 bool StartState::completeRun(const String& runId, uint32_t finishTimestampMs, const String& source, RunRecord& completedRun) {
   if (state_ != StartRunState::Riding || currentRun_.runId != runId) return false;
 
-  currentRun_.finishTimestampMs = finishTimestampMs;
-  currentRun_.resultMs = finishTimestampMs >= currentRun_.startTimestampMs
-                           ? finishTimestampMs - currentRun_.startTimestampMs
-                           : 0;
-  currentRun_.resultFormatted = formatSeconds(currentRun_.resultMs);
   currentRun_.finishSource = source;
+  if (finishTimestampMs > 0) {
+    currentRun_.finishTimestampMs = finishTimestampMs;
+    currentRun_.resultMs = finishTimestampMs >= currentRun_.startTimestampMs
+                             ? finishTimestampMs - currentRun_.startTimestampMs
+                             : 0;
+    currentRun_.timingSource = "FINISH_LOCAL_ELAPSED";
+    currentRun_.timingNote = "No RTC; result based on FinishStation elapsed since RUN_START receipt";
+  } else {
+    currentRun_.finishTimestampMs = millis();
+    currentRun_.resultMs = currentRun_.finishTimestampMs >= currentRun_.startTimestampMs
+                             ? currentRun_.finishTimestampMs - currentRun_.startTimestampMs
+                             : 0;
+    currentRun_.finishSource = "START_RECEIVE_FALLBACK";
+    currentRun_.timingSource = "START_RECEIVE_FALLBACK";
+    currentRun_.timingNote = "Finish timestamp missing; result based on StartStation FINISH receive time";
+  }
+  currentRun_.resultFormatted = formatSeconds(currentRun_.resultMs);
   currentRun_.status = "Finished";
   lastRun_ = currentRun_;
   completedRun = currentRun_;

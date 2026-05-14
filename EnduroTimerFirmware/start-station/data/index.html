@@ -18,10 +18,16 @@
       <article class="card metric"><span>Связь / Finish station</span><strong id="finishOnline">—</strong><small id="finishState">state: —</small></article>
       <article class="card metric"><span>Radio signal</span><strong id="loraStats">—</strong><small id="reverseLoraStats">reported Start RSSI/SNR: —</small><small id="lastPacket">packet: —</small></article>
       <article class="card metric"><span>Timer</span><strong id="runTimer">00:00</strong><small id="countdown">—</small></article>
-      <article class="card metric"><span>Last result</span><strong id="lastResult">—</strong><small id="lastSource">—</small></article>
+      <article class="card metric"><span>Last result</span><strong id="lastResult">—</strong><small id="lastSource">—</small><small id="lastTiming">—</small></article>
     </section>
 
-
+    <section class="card controls">
+      <h2>Time sync</h2>
+      <p>Время синхронизировано: <strong id="timeSynced">нет</strong></p>
+      <p>Текущее время станции: <strong id="stationTime">—</strong></p>
+      <p>Последняя синхронизация: <strong id="lastTimeSync">—</strong></p>
+      <button id="syncTimeBtn" class="secondary" type="button">Синхронизировать время</button>
+    </section>
 
     <section class="card lora-debug">
       <h2>LoRa debug</h2>
@@ -40,6 +46,8 @@
         <p>Finish state: <strong id="debugFinishState">—</strong></p>
         <p>Finish reports start signal: <strong id="debugReverseSignal">NO SIGNAL</strong></p>
         <p>Finish reports start last seen: <strong id="debugReverseAge">—</strong></p>
+        <p>Start battery: <strong id="debugStartBattery">—</strong></p>
+        <p>Finish battery: <strong id="debugFinishBattery">—</strong></p>
       </div>
     </section>
 
@@ -73,7 +81,7 @@
 
     <section class="card">
       <h2>Results / Recent finished runs</h2><p id="runsError" class="message error"></p>
-      <div class="table-wrap"><table><thead><tr><th>Run ID</th><th>Rider</th><th>Trail</th><th>Result</th><th>Status</th><th>Source</th></tr></thead><tbody id="runsBody"><tr><td colspan="6">No runs yet</td></tr></tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th>№</th><th>Время заезда</th><th>Rider</th><th>Trail</th><th>Result</th><th>Status</th><th>Source</th></tr></thead><tbody id="runsBody"><tr><td colspan="7">No runs yet</td></tr></tbody></table></div>
     </section>
   </main>
   <script src="/app.js"></script>

@@ -55,11 +55,20 @@ bool WebServerController::begin() {
 
   server_.on("/api/time/sync", HTTP_POST, [this]() {
     JsonDocument doc;
-    doc["ok"] = true;
-    doc["message"] = "RTC is not installed yet; millis-based clock is used.";
-    doc["uptimeMs"] = millis();
+    DeserializationError jsonError = deserializeJson(doc, server_.arg("plain"));
+    if (jsonError) { sendError(400, "Invalid time sync payload"); return; }
+    String error;
+    uint64_t epochMs = 0;
+    if (!doc["epochMs"].isNull()) epochMs = doc["epochMs"].as<uint64_t>();
+    const int timezoneOffsetMinutes = doc["timezoneOffsetMinutes"] | 0;
+    const String isoLocal = doc["isoLocal"] | "";
+    if (!app_.syncBrowserTime(epochMs, timezoneOffsetMinutes, isoLocal, error)) { sendError(400, error); return; }
+    JsonDocument out;
+    out["ok"] = true;
+    out["wallClockSynced"] = true;
+    out["uptimeMs"] = millis();
     String output;
-    serializeJson(doc, output);
+    serializeJson(out, output);
     sendJson(200, output);
   });
 
