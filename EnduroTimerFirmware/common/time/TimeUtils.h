@@ -8,3 +8,4 @@ public:
 };
 
 String formatDurationMs(uint32_t durationMs);
+String formatSeconds(uint32_t durationMs);

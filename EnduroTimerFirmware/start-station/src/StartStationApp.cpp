@@ -21,6 +21,8 @@ static constexpr int LORA_BUSY = 13;
 static constexpr uint32_t DisplayRefreshMs = 250UL;
 static constexpr uint32_t ButtonDebounceMs = 50UL;
 static constexpr uint32_t StatusIntervalMs = LINK_HEARTBEAT_INTERVAL_MS;
+static constexpr uint8_t FINISH_ACK_REPEAT_COUNT = 3;
+static constexpr uint32_t FINISH_ACK_REPEAT_INTERVAL_MS = 250UL;
 RTC_DATA_ATTR static uint32_t startBootCounter = 0;
 #if ENABLE_LORA
 static SX1262 radio = new Module(LORA_NSS, LORA_DIO1, LORA_RST, LORA_BUSY);
@@ -83,6 +85,7 @@ void StartStationApp::loop() {
   }
 
   retryRunStartAck(now);
+  processFinishAckRepeats(now);
 
   const bool priorityPending = priorityTxPending();
   if (discoveryActive() && now - lastDiscoverySentMs_ >= LINK_DISCOVERY_INTERVAL_MS) {
@@ -249,6 +252,13 @@ String StartStationApp::statusJson() const {
   doc["countdownText"] = state_.countdownText(millis());
   doc["lastResultMs"] = last.resultMs > 0 ? last.resultMs : 0;
   doc["lastResultFormatted"] = last.resultFormatted;
+  doc["pendingFinishAck"] = pendingFinishAckRunId_.length() > 0;
+  doc["finishAckRepeatCount"] = pendingFinishAckRunId_.length() > 0 ? finishAckSendCount_ : 0;
+  doc["finishAckRepeatTotal"] = FINISH_ACK_REPEAT_COUNT;
+  doc["lastFinishedRunId"] = last.runId;
+  doc["lastFinishAckSentMs"] = lastFinishAckSentMs_;
+  doc["lastFinishAckRunId"] = lastFinishAckRunId_;
+  doc["finishAckSendCount"] = finishAckSendCount_;
   doc["lastFinishSource"] = last.finishSource.length() > 0 ? last.finishSource : String("");
   doc["uptimeMs"] = millis();
   doc["heap"] = ESP.getFreeHeap();
@@ -487,21 +497,61 @@ void StartStationApp::retryRunStartAck(uint32_t nowMs) {
 bool StartStationApp::priorityTxPending() const {
   const uint32_t nowMs = millis();
   const bool priorityTxRecently = lastPriorityTxMs_ > 0 && nowMs - lastPriorityTxMs_ < 2UL;
-  return pendingRunStartAck_ || priorityTxRecently;
+  return pendingRunStartAck_ || pendingFinishAckRunId_.length() > 0 || priorityTxRecently;
 }
 
-void StartStationApp::sendFinishAck(const String& runId) {
+void StartStationApp::sendFinishAck(const RunRecord& run, uint8_t sequence, bool duplicateResend) {
   RadioMessage message;
   message.type = RadioMessageType::FinishAck;
   message.stationId = "start";
-  message.messageId = RadioProtocol::makeMessageId("ack");
-  message.runId = runId;
+  message.messageId = RadioProtocol::makeMessageId("finish-ack");
+  message.runId = run.runId;
   message.version = FIRMWARE_VERSION;
   message.bootId = bootId_;
-  if (sendRadio(message)) {
+  message.resultMs = run.resultMs;
+  message.resultFormatted = run.resultFormatted.length() > 0 ? run.resultFormatted : formatSeconds(run.resultMs);
+  message.timestampMs = clock_.nowMs();
+
+  Serial.printf("FINISH_ACK TX runId=%s resultMs=%lu\n", run.runId.c_str(), static_cast<unsigned long>(run.resultMs));
+  int resultCode = 0;
+  if (sendRadio(message, &resultCode)) {
     lastPriorityTxMs_ = clock_.nowMs();
-    Serial.printf("[StartStation] FINISH_ACK sent: %s\n", runId.c_str());
+    lastFinishAckSentMs_ = lastPriorityTxMs_;
+    lastFinishAckRunId_ = run.runId;
+    if (sequence > finishAckSendCount_) finishAckSendCount_ = sequence;
+    Serial.println(duplicateResend ? "FINISH_ACK resend OK" : "FINISH_ACK sent OK");
+  } else {
+    Serial.printf("FINISH_ACK TX failed code=%d runId=%s\n", resultCode, run.runId.c_str());
   }
+}
+
+void StartStationApp::scheduleFinishAckRepeats(const RunRecord& run) {
+  pendingFinishAckRunId_ = run.runId;
+  pendingFinishAckResultMs_ = run.resultMs;
+  pendingFinishAckResultFormatted_ = run.resultFormatted.length() > 0 ? run.resultFormatted : formatSeconds(run.resultMs);
+  finishAckSendCount_ = 0;
+  lastFinishAckSentMs_ = 0;
+  Serial.printf("FINISH_ACK scheduled repeats=%u\n", FINISH_ACK_REPEAT_COUNT);
+  sendFinishAck(run, 1);
+}
+
+void StartStationApp::processFinishAckRepeats(uint32_t nowMs) {
+  if (pendingFinishAckRunId_.length() == 0) return;
+  if (finishAckSendCount_ >= FINISH_ACK_REPEAT_COUNT) {
+    pendingFinishAckRunId_ = "";
+    return;
+  }
+  if (lastFinishAckSentMs_ > 0 && nowMs - lastFinishAckSentMs_ < FINISH_ACK_REPEAT_INTERVAL_MS) return;
+
+  RunRecord ackRun = state_.lastRun();
+  if (ackRun.runId != pendingFinishAckRunId_) {
+    ackRun.runId = pendingFinishAckRunId_;
+    ackRun.resultMs = pendingFinishAckResultMs_;
+    ackRun.resultFormatted = pendingFinishAckResultFormatted_;
+  }
+  const uint8_t nextSequence = finishAckSendCount_ + 1;
+  Serial.printf("FINISH_ACK repeat %u/%u runId=%s\n", nextSequence, FINISH_ACK_REPEAT_COUNT, ackRun.runId.c_str());
+  sendFinishAck(ackRun, nextSequence, true);
 }
 
 void StartStationApp::sendStatus(uint32_t nowMs) {
@@ -638,25 +688,29 @@ void StartStationApp::handleRadioMessage(const RadioMessage& message) {
     return;
   }
 
-  if (message.type == RadioMessageType::Finish) {
-    Serial.printf("FINISH received runId=%s finish=%lu source=%s\n", message.runId.c_str(),
-                  static_cast<unsigned long>(message.finishTimestampMs), message.source.c_str());
+  if (message.type == RadioMessageType::Finish && message.stationId == "finish") {
+    Serial.printf("FINISH RX raw=%s\n", lastLoRaRaw_.c_str());
+    Serial.printf("FINISH RX runId=%s finishTimestampMs=%lu\n", message.runId.c_str(),
+                  static_cast<unsigned long>(message.finishTimestampMs));
+    Serial.printf("FINISH parsed runId=%s source=%s\n", message.runId.c_str(), message.source.c_str());
     RunRecord completed;
     if (state_.completeRun(message.runId, message.finishTimestampMs, message.source, completed)) {
-      Serial.printf("result calculated resultMs=%lu formatted=%s\n", static_cast<unsigned long>(completed.resultMs), completed.resultFormatted.c_str());
+      Serial.printf("FINISH resultMs=%lu\n", static_cast<unsigned long>(completed.resultMs));
+      Serial.printf("FINISH accepted runId=%s resultMs=%lu\n", completed.runId.c_str(), static_cast<unsigned long>(completed.resultMs));
       Serial.printf("run saved to recentRuns count=%u\n", static_cast<unsigned>(state_.runs().size()));
       appendRunCsv(completed);
 #if ENABLE_OLED
       if (!display_.testPatternOnly()) {
-        display_.showLines({startShortHeader(), "FINISHED", completed.resultFormatted, "Run: " + completed.runId, "Finish: " + completed.finishSource});
+        display_.showLines({startHeader(), "FINISHED", completed.resultFormatted, "Rider: " + toDisplayText(completed.riderName, 10), "Trail: " + toDisplayText(completed.trailName, 10)});
       }
 #endif
       buzzer_.beep("FINISH");
       led_.flash(2, 100, 120);
-      sendFinishAck(message.runId);
+      scheduleFinishAckRepeats(completed);
     } else if (state_.lastRun().runId == message.runId && message.runId.length() > 0) {
-      Serial.printf("Duplicate FINISH received, ACK resent runId=%s\n", message.runId.c_str());
-      sendFinishAck(message.runId);
+      RunRecord last = state_.lastRun();
+      Serial.printf("Duplicate FINISH RX runId=%s, ACK resent\n", message.runId.c_str());
+      sendFinishAck(last, finishAckSendCount_ == 0 ? 1 : finishAckSendCount_, true);
     } else {
       Serial.println("[StartStation] FINISH ignored: unknown runId or state mismatch");
     }
@@ -705,7 +759,7 @@ void StartStationApp::updateDisplay() {
   }
 
   if (state_.state() == StartRunState::Finished) {
-    display_.showLines({startShortHeader(), "FINISHED", lastResult, toDisplayText(last.riderName, 16), linkDebug});
+    display_.showLines({startHeader(), "FINISHED", lastResult, "Rider: " + toDisplayText(last.riderName, 10), "Trail: " + toDisplayText(last.trailName, 10)});
     return;
   }
 
@@ -729,7 +783,7 @@ void StartStationApp::updateDisplay() {
     fin,
     "Rider: " + toDisplayText(rider.displayName, 16),
     "Trail: " + toDisplayText(trail.displayName, 16),
-    discoveryLine,
+    "Last: " + (last.resultFormatted.length() > 0 ? last.resultFormatted : String("-")),
   });
 }
 
