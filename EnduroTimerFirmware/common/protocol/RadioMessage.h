@@ -26,6 +26,7 @@ struct RadioMessage {
   String messageId;
   String stationId;
   String runId;
+  uint32_t runNumber = 0;
   String riderName;
   String trailName;
   String state;

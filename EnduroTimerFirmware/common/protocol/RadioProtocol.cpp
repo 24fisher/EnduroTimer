@@ -91,6 +91,7 @@ bool RadioProtocol::serializeCompactStatus(const RadioMessage& message, String& 
   if (message.version.length() > 0) doc["ver"] = message.version;
   if (message.bootId.length() > 0) doc["bid"] = message.bootId;
   if (message.state.length() > 0) doc["st"] = compactState(message.state);
+  if (message.runId.length() > 0) { doc["ar"] = true; doc["rid"] = message.runId.substring(max(0, static_cast<int>(message.runId.length()) - 8)); }
   if (message.raceClockSynced) doc["rcs"] = true;
   if (message.raceClockNowMs > 0) doc["rcn"] = message.raceClockNowMs;
   if (message.syncAccuracyMs > 0) doc["sacc"] = message.syncAccuracyMs;
@@ -131,6 +132,7 @@ bool RadioProtocol::serialize(const RadioMessage& message, String& output) {
 
   if (message.stationId.length() > 0) doc["stationId"] = message.stationId;
   if (message.runId.length() > 0) doc["runId"] = message.runId;
+  if (message.runNumber > 0) doc["runNumber"] = message.runNumber;
   if (message.riderName.length() > 0) doc["riderName"] = message.riderName;
   if (message.trailName.length() > 0) doc["trailName"] = message.trailName;
   if (message.state.length() > 0) doc["state"] = message.state;
@@ -184,6 +186,8 @@ bool RadioProtocol::deserialize(const String& input, RadioMessage& output, Strin
   output.runId = doc["runId"] | "";
   if (output.runId.length() == 0) output.runId = doc["activeRunId"] | "";
   if (output.runId.length() == 0) output.runId = doc["rid"] | "";
+  output.runNumber = doc["runNumber"] | 0;
+  if (output.runNumber == 0) output.runNumber = doc["rnbr"] | 0;
   output.riderName = doc["riderName"] | "";
   if (output.riderName.length() == 0) output.riderName = doc["rn"] | "";
   output.trailName = doc["trailName"] | "";

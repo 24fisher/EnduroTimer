@@ -90,6 +90,8 @@ private:
   uint32_t remoteStartTimestampMs_ = 0;
   String lastPacket_ = "-";
   String lastRunStartAckRunId_;
+  uint32_t lastRunStartRxMs_ = 0;
+  uint32_t lastStatusRidingWarnMs_ = 0;
   String lastLoRaRaw_ = "-";
   int lastRssi_ = 0;
   float lastSnr_ = 0.0F;
