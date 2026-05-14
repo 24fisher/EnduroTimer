@@ -20,7 +20,7 @@ static constexpr int LORA_RST = 12;
 static constexpr int LORA_BUSY = 13;
 static constexpr uint32_t DisplayRefreshMs = 250UL;
 static constexpr uint32_t ButtonDebounceMs = 50UL;
-static constexpr uint32_t StatusIntervalMs = 1000UL;
+static constexpr uint32_t StatusIntervalMs = LINK_HEARTBEAT_INTERVAL_MS;
 RTC_DATA_ATTR static uint32_t startBootCounter = 0;
 #if ENABLE_LORA
 static SX1262 radio = new Module(LORA_NSS, LORA_DIO1, LORA_RST, LORA_BUSY);
@@ -33,7 +33,9 @@ void StartStationApp::begin() {
   Serial.println("Version: " FIRMWARE_VERSION);
   Serial.println("Build: " __DATE__ " " __TIME__);
   Serial.println("Board/role: Heltec WiFi LoRa 32 V3 / StartStation");
+  bootId_ = makeBootId("start");
   Serial.printf("Boot counter: %lu\n", static_cast<unsigned long>(startBootCounter));
+  Serial.printf("BootId: %s\n", bootId_.c_str());
   Serial.printf("Chip: %s rev %u cores=%u efuseMac=%llX\n", ESP.getChipModel(), ESP.getChipRevision(), ESP.getChipCores(), ESP.getEfuseMac());
   Serial.println("Power save: disabled");
 
@@ -72,6 +74,11 @@ void StartStationApp::loop() {
     buzzer_.beep("GO");
     sendRunStart(runToStart);
     lastPriorityTxMs_ = now;
+  }
+
+  if (discoveryActive() && now - lastDiscoverySentMs_ >= LINK_DISCOVERY_INTERVAL_MS && (lastPriorityTxMs_ == 0 || now > lastPriorityTxMs_)) {
+    sendHello(now);
+    lastDiscoverySentMs_ = now;
   }
 
   if (now - lastStatusSendMs_ >= StatusIntervalMs && (lastPriorityTxMs_ == 0 || now > lastPriorityTxMs_)) {
@@ -136,6 +143,7 @@ String StartStationApp::statusJson() const {
 
   doc["device"] = "StartStation";
   doc["firmwareVersion"] = FIRMWARE_VERSION;
+  doc["bootId"] = bootId_;
   doc["buildDate"] = __DATE__;
   doc["buildTime"] = __TIME__;
   doc["state"] = state_.stateText();
@@ -150,6 +158,12 @@ String StartStationApp::statusJson() const {
   doc["finishSignalText"] = finishSignalText();
   doc["finishLastSeenAgoMs"] = finishAgeMs == UINT32_MAX ? 0 : finishAgeMs;
   doc["finishPacketCount"] = finishLink_.packetCount;
+  doc["discoveryActive"] = discoveryActive();
+  doc["remoteBootId"] = finishLink_.remoteBootId;
+  doc["finishBootId"] = finishLink_.remoteBootId;
+  doc["remoteRebootCount"] = finishLink_.remoteRebootCount;
+  doc["lastDiscoverySentAgoMs"] = lastDiscoverySentMs_ > 0 ? static_cast<uint32_t>(millis() - lastDiscoverySentMs_) : UINT32_MAX;
+  doc["lastHelloReceivedAgoMs"] = lastHelloReceivedMs_ > 0 ? static_cast<uint32_t>(millis() - lastHelloReceivedMs_) : UINT32_MAX;
   doc["finishLastPacketType"] = finishLink_.lastPacketType;
   doc["finishLastStatusMs"] = finishLastStatusMs_;
   doc["finishHeartbeatCount"] = finishHeartbeatCount_;
@@ -376,8 +390,8 @@ bool StartStationApp::sendRadio(const RadioMessage& message, int* resultCode) {
   const int result = radio.transmit(payload);
   if (resultCode != nullptr) *resultCode = result;
   restoreRadioReceiveMode();
-  const bool logTxMode = message.type != RadioMessageType::Status || message.heartbeat == 0 || message.heartbeat % 5 == 0;
-  if (logTxMode) Serial.println("LoRa RX mode restored");
+  const bool logTxMode = true;
+  Serial.println("LoRa RX mode restored");
   if (result != RADIOLIB_ERR_NONE) {
     Serial.printf("[StartStation] LoRa TX failed: %d\n", result);
     return false;
@@ -407,11 +421,17 @@ void StartStationApp::sendRunStart(const RunRecord& run) {
   message.riderName = run.riderName;
   message.trailName = run.trailName;
   message.startTimestampMs = run.startTimestampMs;
+  message.version = FIRMWARE_VERSION;
+  message.bootId = bootId_;
 
-  if (sendRadio(message)) {
+  Serial.printf("RUN_START TX runId=%s rider=%s\n", run.runId.c_str(), run.riderName.c_str());
+  int resultCode = 0;
+  if (sendRadio(message, &resultCode)) {
     lastPriorityTxMs_ = clock_.nowMs();
-    Serial.printf("[StartStation] RUN_START sent: %s start=%lu\n", run.runId.c_str(),
+    Serial.printf("RUN_START sent OK runId=%s start=%lu\n", run.runId.c_str(),
                   static_cast<unsigned long>(run.startTimestampMs));
+  } else {
+    Serial.printf("RUN_START failed code=%d runId=%s\n", resultCode, run.runId.c_str());
   }
 }
 
@@ -421,6 +441,8 @@ void StartStationApp::sendFinishAck(const String& runId) {
   message.stationId = "start";
   message.messageId = RadioProtocol::makeMessageId("ack");
   message.runId = runId;
+  message.version = FIRMWARE_VERSION;
+  message.bootId = bootId_;
   if (sendRadio(message)) {
     lastPriorityTxMs_ = clock_.nowMs();
     Serial.printf("[StartStation] FINISH_ACK sent: %s\n", runId.c_str());
@@ -434,6 +456,7 @@ void StartStationApp::sendStatus(uint32_t nowMs) {
   message.messageId = RadioProtocol::makeMessageId("start-status");
   message.state = state_.stateText();
   message.version = FIRMWARE_VERSION;
+  message.bootId = bootId_;
   message.uptimeMs = nowMs;
   message.timestampMs = nowMs;
   message.heartbeat = startHeartbeatCount_ + 1;
@@ -445,17 +468,55 @@ void StartStationApp::sendStatus(uint32_t nowMs) {
   if (sendRadio(message, &resultCode)) {
     startHeartbeatCount_ += 1;
     lastStatusSentOkMs_ = nowMs;
-    if (startHeartbeatCount_ % 5 == 0) {
-      Serial.printf("START STATUS sent hb=%lu state=%s\n", static_cast<unsigned long>(startHeartbeatCount_), message.state.c_str());
-    }
+    Serial.printf("START STATUS sent hb=%lu state=%s\n", static_cast<unsigned long>(startHeartbeatCount_), message.state.c_str());
   } else {
     Serial.printf("START STATUS send failed code=%d\n", resultCode);
   }
 }
 
+void StartStationApp::sendHello(uint32_t nowMs) {
+  RadioMessage message;
+  message.type = RadioMessageType::Hello;
+  message.stationId = "start";
+  message.messageId = RadioProtocol::makeMessageId("hello");
+  message.version = FIRMWARE_VERSION;
+  message.bootId = bootId_;
+  message.role = "StartStation";
+  message.uptimeMs = nowMs;
+  if (sendRadio(message)) {
+    Serial.printf("START HELLO sent bootId=%s\n", bootId_.c_str());
+  }
+}
+
+void StartStationApp::sendHelloAck(uint32_t nowMs) {
+  RadioMessage message;
+  message.type = RadioMessageType::HelloAck;
+  message.stationId = "start";
+  message.messageId = RadioProtocol::makeMessageId("hello-ack");
+  message.version = FIRMWARE_VERSION;
+  message.bootId = bootId_;
+  message.role = "StartStation";
+  message.uptimeMs = nowMs;
+  if (sendRadio(message)) {
+    Serial.printf("START HELLO_ACK sent bootId=%s\n", bootId_.c_str());
+  }
+}
+
+bool StartStationApp::discoveryActive() const {
+  return !isLinkActive(finishLink_);
+}
+
 void StartStationApp::updateFinishLink(const RadioMessage& message, int packetRssi, float packetSnr) {
   const String packetType = RadioProtocol::typeToString(message.type);
-  updateLinkStatus(finishLink_, message.stationId, packetType, packetRssi, packetSnr);
+  const String oldBootId = finishLink_.remoteBootId;
+  const bool rebootDetected = updateLinkStatus(finishLink_, message.stationId, packetType, message.bootId, packetRssi, packetSnr);
+  if (rebootDetected) {
+    Serial.printf("REMOTE REBOOT detected station=finish oldBootId=%s newBootId=%s\n", oldBootId.c_str(), message.bootId.c_str());
+    finishHeartbeatCount_ = 0;
+    finishActiveRunId_ = "";
+    finishRiderName_ = "";
+    finishElapsedMs_ = 0;
+  }
   Serial.printf("LORA RX from=%s type=%s rssi=%d snr=%.1f age=0 count=%lu\n",
                 message.stationId.c_str(), packetType.c_str(), packetRssi, static_cast<double>(packetSnr),
                 static_cast<unsigned long>(finishLink_.packetCount));
@@ -463,9 +524,7 @@ void StartStationApp::updateFinishLink(const RadioMessage& message, int packetRs
 
 void StartStationApp::handleRadioMessage(const RadioMessage& message) {
   if (message.type == RadioMessageType::Status && message.stationId == "finish") {
-    if (message.heartbeat == 0 || message.heartbeat % 5 == 0) {
-      Serial.printf("STATUS RX from=finish hb=%lu rssi=%d\n", static_cast<unsigned long>(message.heartbeat), finishLink_.lastRssi);
-    }
+    Serial.printf("STATUS RX from=finish hb=%lu rssi=%d\n", static_cast<unsigned long>(message.heartbeat), finishLink_.lastRssi);
     finishLastStatusMs_ = message.timestampMs > 0 ? message.timestampMs : message.uptimeMs;
     finishHeartbeatCount_ = message.heartbeat;
     if (message.state.length() > 0) finishState_ = message.state;
@@ -483,6 +542,19 @@ void StartStationApp::handleRadioMessage(const RadioMessage& message) {
     } else {
       hasFinishReportedStartSignal_ = false;
     }
+    return;
+  }
+
+  if (message.type == RadioMessageType::Hello && message.stationId == "finish") {
+    lastHelloReceivedMs_ = millis();
+    if (message.version.length() > 0) finishFirmwareVersion_ = message.version;
+    sendHelloAck(millis());
+    return;
+  }
+
+  if (message.type == RadioMessageType::HelloAck && message.stationId == "finish") {
+    lastHelloReceivedMs_ = millis();
+    if (message.version.length() > 0) finishFirmwareVersion_ = message.version;
     return;
   }
 
@@ -545,6 +617,7 @@ void StartStationApp::updateDisplay() {
   const String lastResult = last.resultFormatted.length() > 0 ? last.resultFormatted : "-";
   const String fin = finishOnline() ? String("FIN:") + String(finishLink_.lastRssi) + "dBm" : String("FIN:NO SIG");
   const String linkDebug = finishLink_.lastPacketType.length() > 0 ? String("PKT:") + finishLink_.lastPacketType : String("HB:") + String(finishHeartbeatCount_);
+  const String discoveryLine = discoveryActive() ? String("DISCOVERY...") : linkDebug;
 
   if (state_.state() == StartRunState::Countdown) {
     display_.showCountdown(state_.countdownText(millis()), startShortHeader());
@@ -565,7 +638,7 @@ void StartStationApp::updateDisplay() {
   }
 
   if (state_.state() == StartRunState::Error) {
-    display_.showLines({startHeader(), "ERROR", fin, linkDebug});
+    display_.showLines({startHeader(), "ERROR", fin, discoveryLine});
     return;
   }
 
@@ -576,7 +649,7 @@ void StartStationApp::updateDisplay() {
     fin,
     "Rider: " + toDisplayText(rider.displayName, 16),
     "Trail: " + toDisplayText(trail.displayName, 16),
-    linkDebug,
+    discoveryLine,
   });
 }
 
@@ -590,6 +663,15 @@ String StartStationApp::finishReportedStartSignalText() const {
 
 uint8_t StartStationApp::ridingAnimationFrame() const {
   return static_cast<uint8_t>((millis() / 250UL) % 10UL);
+}
+
+String StartStationApp::makeBootId(const char* stationId) const {
+  const uint64_t mac = ESP.getEfuseMac();
+  char buffer[48];
+  snprintf(buffer, sizeof(buffer), "%s-%08lX%08lX-%lu", stationId,
+           static_cast<unsigned long>(mac >> 32), static_cast<unsigned long>(mac & 0xFFFFFFFFULL),
+           static_cast<unsigned long>(startBootCounter));
+  return String(buffer);
 }
 
 void StartStationApp::logHeartbeat(uint32_t nowMs) {

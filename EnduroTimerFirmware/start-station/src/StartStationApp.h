@@ -78,8 +78,12 @@ private:
   void sendRunStart(const RunRecord& run);
   void sendFinishAck(const String& runId);
   void sendStatus(uint32_t nowMs);
+  void sendHello(uint32_t nowMs);
+  void sendHelloAck(uint32_t nowMs);
+  bool discoveryActive() const;
   String finishSignalText() const;
   String finishReportedStartSignalText() const;
+  String makeBootId(const char* stationId) const;
   void updateFinishLink(const RadioMessage& message, int packetRssi, float packetSnr);
   uint8_t ridingAnimationFrame() const;
   void handleRadioMessage(const RadioMessage& message);
@@ -123,9 +127,12 @@ private:
   uint32_t startHeartbeatCount_ = 0;
   uint32_t lastStatusSendMs_ = 0;
   uint32_t lastStatusSentOkMs_ = 0;
+  uint32_t lastDiscoverySentMs_ = 0;
+  uint32_t lastHelloReceivedMs_ = 0;
   uint32_t lastPriorityTxMs_ = 0;
   uint32_t lastAnyPacketMs_ = 0;
   String finishState_ = "Unknown";
+  String bootId_;
   String finishFirmwareVersion_;
   String finishActiveRunId_;
   String finishRiderName_;

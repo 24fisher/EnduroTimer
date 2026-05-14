@@ -33,6 +33,10 @@ void FinishState::fail() {
   state_ = FinishRunState::Error;
 }
 
+void FinishState::ackTimeout() {
+  state_ = FinishRunState::AckTimeout;
+}
+
 uint32_t FinishState::elapsedMs(uint32_t nowMs) const {
   if (localRunStartReceivedMillis_ == 0 || state_ == FinishRunState::Idle) return 0;
   return nowMs - localRunStartReceivedMillis_;
@@ -44,6 +48,7 @@ String FinishState::stateText() const {
     case FinishRunState::Idle: return "Idle";
     case FinishRunState::WaitFinish: return "Riding";
     case FinishRunState::FinishSent: return "FinishSent";
+    case FinishRunState::AckTimeout: return "AckTimeout";
     case FinishRunState::Error: return "Error";
   }
   return "Error";

@@ -31,7 +31,7 @@ The current Heltec V3 OLED configuration is fixed in `platformio.ini`:
 - Library: U8g2
 - `ARDUINO_USB_CDC_ON_BOOT=0`
 - `ARDUINO_USB_MODE=0`
-- `FIRMWARE_VERSION=0.01`
+- `FIRMWARE_VERSION=0.02`
 - `STATUS_LED_PIN=35`
 - `STATUS_LED_ACTIVE_LEVEL=1`
 
@@ -53,8 +53,8 @@ The current Heltec V3 OLED configuration is fixed in `platformio.ini`:
 - Firmware version is a manual semantic-like incremental string.
 - Initial version: `0.00`.
 - Each MR/iteration increments the string by `0.01` manually.
-- Current version: `0.01`.
-- The version is configured with `FIRMWARE_VERSION` and has a source fallback of `0.01`.
+- Current version: `0.02`.
+- The version is configured with `FIRMWARE_VERSION` and has a source fallback of `0.02`.
 - Version is shown in the OLED header, Serial boot logs, Web API status, Web UI status block, and LoRa `STATUS` payload.
 
 ## Onboard LED indication
@@ -77,19 +77,46 @@ Both stations use one source of truth for radio link state: the timestamp of the
 
 Signal display rules:
 
-- `NO SIGNAL` means no valid packet from the other station has been received for more than 15 seconds.
+- `NO SIGNAL` means no valid packet from the other station has been received for more than 25 seconds.
 - RSSI without an active link should not happen in normal UI/API output: if a fresh packet updates RSSI, it also updates the last-packet timestamp and the link is active until it becomes stale.
 - Signal and station state are separate. A stale link displays `NO SIGNAL`; the station state is reported as `Unknown` in the API while the last known state remains available for diagnostics.
 - `FIN:-72dBm` means StartStation is currently hearing packets from FinishStation.
 - `START:-33dBm` means FinishStation is currently hearing packets from StartStation.
-- StartStation sends a `STATUS` heartbeat with `stationId: "start"` every 1000 ms, so FinishStation can show StartStation signal while idle.
-- FinishStation sends a `STATUS` heartbeat with `stationId: "finish"` every 1000 ms in all states: `Idle`, externally displayed `Riding`, `FinishSent`, and `Error` / ACK timeout. FINISH retry packets keep priority; if a retry and STATUS would be transmitted in the same millisecond, STATUS is deferred to the next loop.
+- StartStation sends a `STATUS` heartbeat with `stationId: "start"` every 5000 ms, so FinishStation can show StartStation signal while idle.
+- FinishStation sends a `STATUS` heartbeat with `stationId: "finish"` every 5000 ms in all states: `Idle`, externally displayed `Riding`, `FinishSent`, and `Error` / ACK timeout. FINISH retry packets keep priority; if a retry and STATUS would be transmitted in the same millisecond, STATUS is deferred to the next loop.
 - Any valid packet from the opposite station updates link status, not only `STATUS`. StartStation updates the FinishStation link from `STATUS`, `FINISH`, and any other valid `stationId: "finish"` packet. FinishStation updates the StartStation link from `STATUS`, `RUN_START`, `FINISH_ACK`, and any other valid `stationId: "start"` packet.
 - Every received LoRa packet logs `LORA RX type=... rssi=... snr=... raw=...`; valid opposite-station packets also log `LORA RX from=... type=... rssi=... snr=... age=0 count=...`. JSON parse failures, missing `stationId`, and unknown `type` are logged explicitly with the raw packet.
-- After every LoRa TX (`STATUS`, `RUN_START`, `FINISH`, or `FINISH_ACK`), the current firmware uses polling receive, so the next `pollRadio()` call explicitly re-enters receive/listen mode after the short blocking transmit. To avoid STATUS log spam, Serial prints `LoRa TX STATUS ok` and `LoRa RX mode restored` for every fifth STATUS heartbeat and prints the TX/RX-restore diagnostics for non-STATUS packets.
-- `STATUS payload len=...` is logged for every fifth STATUS heartbeat and whenever a STATUS payload exceeds 200 bytes. STATUS packets are serialized in a compact JSON form to keep the LoRa payload small while remaining accepted by the same deserializer.
-- StartStation and FinishStation include their `version` in every LoRa `STATUS` payload.
+- After every LoRa TX (`HELLO`, `HELLO_ACK`, `STATUS`, `RUN_START`, `FINISH`, or `FINISH_ACK`), the current firmware uses polling receive, so the next `pollRadio()` call explicitly re-enters receive/listen mode after the short blocking transmit. Serial prints `LoRa RX mode restored` after every transmit; STATUS is now only sent every five seconds, so each STATUS heartbeat is logged.
+- `STATUS payload len=...` is logged for heartbeat diagnostics and whenever a STATUS payload exceeds 200 bytes. STATUS packets are serialized in a compact JSON form to keep the LoRa payload small while remaining accepted by the same deserializer.
+- StartStation and FinishStation include `version: "0.02"` and a per-boot `bootId` in every LoRa `STATUS`, `RUN_START`, `FINISH`, `FINISH_ACK`, `HELLO`, and `HELLO_ACK` payload.
 - FinishStation includes its reported StartStation link fields (`startLinkActive`, `startRssi`, `startSnr`, `startLastSeenAgoMs`, and `startPacketCount`) in `STATUS`, so StartStation can show both radio directions in `/api/status`.
+
+
+## LoRa discovery and remote reboot detection
+
+Firmware v0.02 adds an explicit discovery handshake for stations that are powered on at different times or rebooted independently:
+
+- `LINK_HEARTBEAT_INTERVAL_MS` is 5000 ms.
+- `LINK_TIMEOUT_MS` is 25000 ms.
+- While no active link exists, each station sends `HELLO` every 1000 ms.
+- The other station answers with `HELLO_ACK`.
+- Any valid packet from the opposite station refreshes `LinkStatus`, RSSI/SNR, last packet type, and last seen age.
+- When a link is active, normal `STATUS` heartbeat packets continue every 5000 ms in every state.
+- `NO SIGNAL` is shown only when the shared `LinkStatus` is stale for more than 25000 ms; as soon as a fresh `HELLO`, `HELLO_ACK`, `STATUS`, `RUN_START`, `FINISH`, or `FINISH_ACK` arrives, the display and Web UI switch back to RSSI.
+- Each boot generates a station-specific `bootId`. If the remote station sends the same `stationId` with a different `bootId`, the receiver logs `REMOTE REBOOT detected ...`, updates the debug boot id, increments the remote reboot counter, and clears stale per-session assumptions.
+- StartStation `/api/status` exposes discovery state, remote boot id, remote reboot count, last packet type, packet count, signal, and FinishStation-reported reverse StartStation signal.
+
+## FinishStation riding and finish flow
+
+Firmware v0.02 restores the lower-terminal run state machine:
+
+- FinishStation enters externally visible `Riding` immediately after a valid `RUN_START` packet from StartStation.
+- The Riding OLED screen shows `FINISH TERM v0.02`, a moving `RIDING >` indicator, rider name, elapsed timer, and StartStation RSSI or `START:NO SIG`.
+- A short press on the finish button in Riding accepts the finish, shows `FINISH LINE / CROSSED`, sends a `FINISH` packet with `source: "BUTTON_STUB"`, and moves to `FinishSent`.
+- `FINISH_MAX_RETRY_ATTEMPTS` is 15 and `FINISH_RETRY_INTERVAL_MS` is 1000 ms.
+- In `FinishSent`, automatic retries continue until ACK or timeout. A short button press manually resends the last `FINISH` without changing its timestamp.
+- If ACK retries are exhausted, the state becomes `AckTimeout` and the OLED shows `ACK TIMEOUT / PRESS BTN RESEND`. A short button press returns to `FinishSent` and resends the saved `FINISH`.
+- StartStation resends `FINISH_ACK` for duplicate `FINISH` packets from an already completed run id without creating duplicate results.
 
 ## Riders, trails, settings, and results
 
@@ -337,7 +364,7 @@ StartStation replies to a matching active run with `FINISH_ACK`. Duplicate `FINI
 StartStation Ready:
 
 ```text
-START TERM v0.01
+START TERM v0.02
 FIN:-72dBm
 Rider: Test Rider
 Trail: Default trail
@@ -347,7 +374,7 @@ PKT:STATUS
 StartStation Countdown uses immediate rendering on every countdown text change and is not throttled by the normal status screen refresh:
 
 ```text
-START v0.01
+START v0.02
 3 / 2 / 1 / GO
 ```
 
@@ -356,7 +383,7 @@ The countdown state machine is millis-based and non-blocking: `3` for 1000 ms, `
 StartStation Riding includes a non-blocking moving `>` animation updated from `millis()` about every 250 ms:
 
 ```text
-START TERM v0.01
+START TERM v0.02
 RIDING >
 Time: 00:12
 FIN:-72dBm
@@ -366,7 +393,7 @@ PKT:STATUS
 StartStation Finished:
 
 ```text
-START v0.01
+START v0.02
 FINISHED
 Test Rider
 00:20.123
@@ -375,7 +402,7 @@ Test Rider
 FinishStation Idle:
 
 ```text
-FINISH TERM v0.01
+FINISH TERM v0.02
 LoRa: OK
 State: IDLE
 START:-70dBm
@@ -385,7 +412,7 @@ PKT:STATUS
 FinishStation Riding also shows the moving `>` animation:
 
 ```text
-FINISH TERM v0.01
+FINISH TERM v0.02
 RIDING >
 Time: 00:12
 START:-70dBm
@@ -395,7 +422,7 @@ PKT:STATUS
 FinishStation finish-line overlay appears immediately after an accepted finish button press while retries and ACK handling continue in the background:
 
 ```text
-FINISH TERM v0.01
+FINISH TERM v0.02
 FINISH LINE
 CROSSED
 ```
@@ -403,7 +430,7 @@ CROSSED
 FinishStation FinishSent:
 
 ```text
-FINISH TERM v0.01
+FINISH TERM v0.02
 FINISH SENT
 Sent: x/15
 START:-70dBm
@@ -413,7 +440,7 @@ PKT:STATUS
 FinishStation ACK:
 
 ```text
-FINISH TERM v0.01
+FINISH TERM v0.02
 ACK OK
 IDLE
 ```

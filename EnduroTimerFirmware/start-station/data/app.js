@@ -33,7 +33,7 @@ function signalText(rssi, snr) {
 }
 
 function ageText(ageMs) {
-  return ageMs === null || ageMs === undefined || ageMs === 0 ? '—' : `${ageMs} ms`;
+  return ageMs === null || ageMs === undefined || ageMs === 4294967295 ? '—' : `${ageMs} ms`;
 }
 
 function renderStatus(status) {
@@ -49,7 +49,7 @@ function renderStatus(status) {
   $('finishOnline').className = finishLinkActive ? 'online' : 'offline';
   $('finishState').textContent = `Состояние: ${finishStateLabel(status)} · heartbeat: ${status.finishHeartbeatCount || 0} · последний пакет назад: ${ageText(lastSeen)}`;
   $('finishState').className = status.finishHasError ? 'offline' : status.finishState === 'FinishSent' ? 'pending' : '';
-  $('loraStats').textContent = `Сигнал финиша: ${finishSignal} · age: ${ageText(lastSeen)} · пакетов: ${status.finishPacketCount || 0}`;
+  $('loraStats').textContent = `Сигнал финиша: ${finishSignal} · age: ${ageText(lastSeen)} · пакетов: ${status.finishPacketCount || 0} · discovery: ${status.discoveryActive ? 'active' : 'inactive'}`;
   const reverseSignal = status.finishReportedStartLinkActive ? (status.finishReportedStartSignalText || signalText(status.finishReportedStartRssi, status.finishReportedStartSnr)) : 'NO SIGNAL';
   $('reverseLoraStats').textContent = `Сигнал старта по данным финиша: ${reverseSignal} · age: ${ageText(status.finishReportedStartLastSeenAgoMs)} · пакетов: ${status.finishReportedStartPacketCount || 0}`;
   $('lastPacket').textContent = `Последний пакет: ${status.finishLastPacketType || status.lastLoRaPacketType || status.lastPacketType || '—'} · raw: ${status.lastLoRaRawShort || '—'}`;
@@ -62,6 +62,10 @@ function renderStatus(status) {
   $('debugFinishSnr').textContent = status.finishSnr === null || status.finishSnr === undefined ? '—' : `${Number(status.finishSnr).toFixed(1)} dB`;
   $('debugSignal').textContent = finishSignal;
   $('debugStartStatusAge').textContent = ageText(status.lastStartStatusSentAgoMs);
+  $('debugDiscovery').textContent = status.discoveryActive ? `active · last HELLO ${ageText(status.lastDiscoverySentAgoMs)} ago` : 'inactive';
+  $('debugFinishBootId').textContent = status.remoteBootId || status.finishBootId || '—';
+  $('debugFinishRebootCount').textContent = status.remoteRebootCount || 0;
+  $('debugFinishState').textContent = status.finishState || '—';
   $('debugReverseSignal').textContent = reverseSignal;
   $('debugReverseAge').textContent = ageText(status.finishReportedStartLastSeenAgoMs);
   $('countdown').textContent = status.countdownText ? `Countdown: ${status.countdownText}` : 'Countdown: —';
