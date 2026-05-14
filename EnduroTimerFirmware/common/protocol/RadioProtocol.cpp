@@ -2,6 +2,42 @@
 
 #include <ArduinoJson.h>
 
+namespace {
+String compactStationId(const String& stationId) {
+  if (stationId == "start" || stationId == "s") return "s";
+  if (stationId == "finish" || stationId == "f") return "f";
+  return stationId;
+}
+
+String fullStationId(const String& stationId) {
+  if (stationId == "s") return "start";
+  if (stationId == "f") return "finish";
+  return stationId;
+}
+
+String compactState(const String& state) {
+  if (state == "Ready" || state == "R") return "R";
+  if (state == "Countdown" || state == "C") return "C";
+  if (state == "Riding" || state == "G") return "G";
+  if (state == "Idle" || state == "I") return "I";
+  if (state == "FinishSent" || state == "F") return "F";
+  if (state == "AckTimeout" || state == "A") return "A";
+  if (state == "Error" || state == "E") return "E";
+  return state;
+}
+
+String fullState(const String& state) {
+  if (state == "R") return "Ready";
+  if (state == "C") return "Countdown";
+  if (state == "G") return "Riding";
+  if (state == "I") return "Idle";
+  if (state == "F") return "FinishSent";
+  if (state == "A") return "AckTimeout";
+  if (state == "E") return "Error";
+  return state;
+}
+}  // namespace
+
 String RadioProtocol::makeMessageId(const char* prefix) {
   static uint32_t sequence = 0;
   sequence += 1;
@@ -38,50 +74,39 @@ RadioMessageType RadioProtocol::typeFromString(const String& type) {
   return RadioMessageType::Unknown;
 }
 
-bool RadioProtocol::serialize(const RadioMessage& message, String& output) {
+bool RadioProtocol::serializeCompactStatus(const RadioMessage& message, String& output) {
   JsonDocument doc;
+  doc["t"] = "S";
+  doc["sid"] = compactStationId(message.stationId);
+  if (message.state.length() > 0) doc["st"] = compactState(message.state);
+  if (message.heartbeat > 0) doc["hb"] = message.heartbeat;
+  if (message.uptimeMs > 0) doc["up"] = message.uptimeMs / 1000UL;
+  if (message.hasStartRssi) doc["sr"] = message.startRssi;
+  if (message.hasStartSnr) doc["ss"] = static_cast<int>(message.startSnr);
+  if (message.startLastSeenAgoMs > 0) doc["sa"] = message.startLastSeenAgoMs / 1000UL;
+  if (message.hasFinishRssi) doc["fr"] = message.finishRssi;
+  if (message.hasFinishSnr) doc["fs"] = static_cast<int>(message.finishSnr);
 
+  output = "";
+  return serializeJson(doc, output) > 0;
+}
+
+bool RadioProtocol::serializeEmergencyStatus(const RadioMessage& message, String& output) {
+  JsonDocument doc;
+  doc["t"] = "S";
+  doc["sid"] = compactStationId(message.stationId);
+  if (message.heartbeat > 0) doc["hb"] = message.heartbeat;
+
+  output = "";
+  return serializeJson(doc, output) > 0;
+}
+
+bool RadioProtocol::serialize(const RadioMessage& message, String& output) {
   if (message.type == RadioMessageType::Status) {
-    doc["type"] = "STATUS";
-    doc["stationId"] = message.stationId;
-    doc["t"] = "S";
-    doc["mid"] = message.messageId;
-    doc["sid"] = message.stationId;
-    doc["st"] = message.state;
-    if (message.version.length() > 0) {
-      doc["version"] = message.version;
-      doc["ver"] = message.version;
-    }
-    if (message.bootId.length() > 0) {
-      doc["bootId"] = message.bootId;
-      doc["bid"] = message.bootId;
-    }
-    if (message.role.length() > 0) doc["role"] = message.role;
-    if (message.uptimeMs > 0) doc["up"] = message.uptimeMs;
-    if (message.timestampMs > 0) doc["ts"] = message.timestampMs;
-    if (message.heartbeat > 0) doc["hb"] = message.heartbeat;
-    if (message.runId.length() > 0) { doc["rid"] = message.runId; doc["activeRunId"] = message.runId; }
-    if (message.riderName.length() > 0) { doc["rn"] = message.riderName; doc["riderName"] = message.riderName; }
-    if (message.trailName.length() > 0) { doc["tn"] = message.trailName; doc["trailName"] = message.trailName; }
-    if (message.elapsedMs > 0) doc["el"] = message.elapsedMs;
-    if (message.localRunStartReceivedMillis > 0) doc["localRunStartReceivedMillis"] = message.localRunStartReceivedMillis;
-    if (message.finishLocalElapsedMs > 0) doc["finishLocalElapsedMs"] = message.finishLocalElapsedMs;
-    if (message.remoteStartTimestampMs > 0) doc["remoteStartTimestampMs"] = message.remoteStartTimestampMs;
-    if (message.resultMs > 0) { doc["resultMs"] = message.resultMs; doc["res"] = message.resultMs; }
-    if (message.resultFormatted.length() > 0) doc["resultFormatted"] = message.resultFormatted;
-  if (message.hasBatteryVoltage) { doc["batteryVoltage"] = message.batteryVoltage; doc["batteryPercent"] = message.batteryPercent; }
-    if (message.startLinkActive || message.startPacketCount > 0 || message.hasStartRssi || message.hasStartSnr) {
-      doc["sl"] = message.startLinkActive;
-      doc["sp"] = message.startPacketCount;
-      doc["sla"] = message.startLastSeenAgoMs;
-      if (message.hasStartRssi) doc["sr"] = message.startRssi;
-      if (message.hasStartSnr) doc["ss"] = message.startSnr;
-    }
-    if (message.hasBatteryVoltage) { doc["bv"] = message.batteryVoltage; doc["bp"] = message.batteryPercent; doc["batteryPercent"] = message.batteryPercent; }
-    output = "";
-    return serializeJson(doc, output) > 0;
+    return serializeCompactStatus(message, output);
   }
 
+  JsonDocument doc;
   doc["type"] = typeToString(message.type);
   doc["messageId"] = message.messageId;
 
@@ -118,11 +143,12 @@ bool RadioProtocol::deserialize(const String& input, RadioMessage& output, Strin
 
   output = RadioMessage{};
   const String compactType = doc["t"] | "";
-  output.type = compactType == "S" ? RadioMessageType::Status : typeFromString(doc["type"].as<String>());
+  const bool compactStatus = compactType == "S";
+  output.type = compactStatus ? RadioMessageType::Status : typeFromString(doc["type"].as<String>());
   output.messageId = doc["messageId"] | "";
   if (output.messageId.length() == 0) output.messageId = doc["mid"] | "";
   output.stationId = doc["stationId"] | "";
-  if (output.stationId.length() == 0) output.stationId = doc["sid"] | "";
+  if (output.stationId.length() == 0) output.stationId = fullStationId(doc["sid"] | "");
   output.runId = doc["runId"] | "";
   if (output.runId.length() == 0) output.runId = doc["activeRunId"] | "";
   if (output.runId.length() == 0) output.runId = doc["rid"] | "";
@@ -131,7 +157,7 @@ bool RadioProtocol::deserialize(const String& input, RadioMessage& output, Strin
   output.trailName = doc["trailName"] | "";
   if (output.trailName.length() == 0) output.trailName = doc["tn"] | "";
   output.state = doc["state"] | "";
-  if (output.state.length() == 0) output.state = doc["st"] | "";
+  if (output.state.length() == 0) output.state = fullState(doc["st"] | "");
   output.source = doc["source"] | "";
   output.version = doc["version"] | "";
   if (output.version.length() == 0) output.version = doc["ver"] | "";
@@ -143,7 +169,10 @@ bool RadioProtocol::deserialize(const String& input, RadioMessage& output, Strin
   output.timestampMs = doc["timestampMs"] | 0;
   if (output.timestampMs == 0) output.timestampMs = doc["ts"] | 0;
   output.uptimeMs = doc["uptimeMs"] | 0;
-  if (output.uptimeMs == 0) output.uptimeMs = doc["up"] | 0;
+  if (output.uptimeMs == 0 && !doc["up"].isNull()) {
+    const uint32_t compactUptimeSeconds = doc["up"].as<uint32_t>();
+    output.uptimeMs = compactStatus ? compactUptimeSeconds * 1000UL : compactUptimeSeconds;
+  }
   output.heartbeat = doc["heartbeat"] | 0;
   if (output.heartbeat == 0) output.heartbeat = doc["hb"] | 0;
   output.startTimestampMs = doc["startTimestampMs"] | 0;
@@ -163,11 +192,17 @@ bool RadioProtocol::deserialize(const String& input, RadioMessage& output, Strin
   if (!doc["startSnr"].isNull()) { output.hasStartSnr = true; output.startSnr = doc["startSnr"].as<float>(); }
   if (!doc["ss"].isNull()) { output.hasStartSnr = true; output.startSnr = doc["ss"].as<float>(); }
   output.startLastSeenAgoMs = doc["startLastSeenAgoMs"] | 0;
-  if (output.startLastSeenAgoMs == 0) output.startLastSeenAgoMs = doc["sla"] | 0;
+  if (output.startLastSeenAgoMs == 0) output.startLastSeenAgoMs = (doc["sla"] | 0);
+  if (output.startLastSeenAgoMs == 0 && !doc["sa"].isNull()) output.startLastSeenAgoMs = doc["sa"].as<uint32_t>() * 1000UL;
   output.startLinkActive = doc["startLinkActive"] | false;
   if (!output.startLinkActive) output.startLinkActive = doc["sl"] | false;
+  if (!output.startLinkActive && compactStatus && (output.hasStartRssi || output.hasStartSnr)) output.startLinkActive = true;
   output.startPacketCount = doc["startPacketCount"] | 0;
   if (output.startPacketCount == 0) output.startPacketCount = doc["sp"] | 0;
+  if (!doc["finishRssi"].isNull()) { output.hasFinishRssi = true; output.finishRssi = doc["finishRssi"].as<int>(); }
+  if (!doc["fr"].isNull()) { output.hasFinishRssi = true; output.finishRssi = doc["fr"].as<int>(); }
+  if (!doc["finishSnr"].isNull()) { output.hasFinishSnr = true; output.finishSnr = doc["finishSnr"].as<float>(); }
+  if (!doc["fs"].isNull()) { output.hasFinishSnr = true; output.finishSnr = doc["fs"].as<float>(); }
 
   if (!doc["batteryVoltage"].isNull()) {
     output.hasBatteryVoltage = true;
@@ -180,7 +215,7 @@ bool RadioProtocol::deserialize(const String& input, RadioMessage& output, Strin
     output.batteryPercent = doc["bp"] | output.batteryPercent;
   }
 
-  if (output.messageId.length() == 0) {
+  if (output.messageId.length() == 0 && output.type != RadioMessageType::Status) {
     if (error != nullptr) *error = "missing messageId";
     return false;
   }
