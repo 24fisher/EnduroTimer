@@ -31,7 +31,7 @@ The current Heltec V3 OLED configuration is fixed in `platformio.ini`:
 - Library: U8g2
 - `ARDUINO_USB_CDC_ON_BOOT=0`
 - `ARDUINO_USB_MODE=0`
-- `FIRMWARE_VERSION=0.13`
+- `FIRMWARE_VERSION=0.15`
 - `STATUS_LED_PIN=35`
 - `STATUS_LED_ACTIVE_LEVEL=1`
 
@@ -53,10 +53,25 @@ The current Heltec V3 OLED configuration is fixed in `platformio.ini`:
 - Firmware version is a manual semantic-like incremental string.
 - Initial version: `0.00`.
 - Each MR/iteration increments the string by `0.01` manually.
-- Current version: `0.13`.
-- The version is configured with `FIRMWARE_VERSION` and has a source fallback of `0.13`.
-- Version is shown in OLED headers, Serial boot logs, Web API status, the Web UI status block, and all LoRa payloads, including compact `STATUS` heartbeat packets (`ver`) and sync/control messages.
+- Current version: `0.15`.
+- The version is configured with `FIRMWARE_VERSION` and has a source fallback of `0.15`.
+- Version is shown in OLED headers, Serial boot logs, Web API status, the Web UI status block, compact `STATUS` heartbeat packets (`ver`), non-critical control messages, and the short `v` field on compact critical race packets when it fits.
 
+
+
+## v0.15 compact critical LoRa race packets
+
+Firmware v0.15 keeps StartStation and FinishStation as separate applications and fixes the critical oversized `RUN_START` packet. The v0.13 full `RUN_START` could grow to roughly 300 bytes because it carried rider/trail metadata, long IDs, timing source text, boot diagnostics, and a full version field. v0.15 sends compact JSON for race-critical packets so the SX1262 transmit path no longer rejects the start event.
+
+- `FIRMWARE_VERSION` is `0.15`; Serial boot logs show `Version: v0.15`, OLED headers show `START TERM v0.15` and `FINISH TERM v0.15`, and `/api/status.firmwareVersion` reports `0.15`.
+- `RUN_START` is sent as compact JSON with only timing-critical fields: `{"t":"RS","sid":"s","rid":"RUN-bba7","rn":1,"rs":58286}` plus optional short `v` when it fits. It no longer carries `riderName`, `trailName`, `messageId`, full `stationId`, full `bootId`, `timingSource`, or duplicate start timestamps.
+- FinishStation parses both compact `RUN_START` (`t=RS`, `sid=s`, `rid`, `rn`, `rs`) and the legacy full `RUN_START` format for compatibility, but StartStation now always transmits compact `RUN_START`.
+- FinishStation needs only `runId`, `runNumber`, and `raceStartTimeMs` to enter `Riding`, compute elapsed time, and enable `canFinish=true`. Rider/trail text is intentionally not required on FinishStation for timing.
+- StartStation keeps rider/trail metadata locally in the current run snapshot, so the Web UI and CSV exports continue to show `runNumber`, `startedAtText`, `riderName`, `trailName`, and formatted results without sending that metadata over the critical LoRa start packet.
+- `RUN_START_ACK`, `FINISH`, and `FINISH_ACK` are also compact critical packets: `t=RSA`, `t=F`, and `t=FA`. They omit long `resultFormatted`, `timingSource`, full `bootId`, and long `messageId` fields; StartStation formats `resultMs` locally for display and CSV.
+- Critical payload guards warn above 180 bytes and refuse to transmit any critical packet above 240 bytes, logging `CRITICAL payload too large, cannot send type=...` instead of silently attempting an oversized full packet.
+- `STATUS st=G` is still only a warning signal. FinishStation enters `Riding` only after a valid `RUN_START`; it does not use `STATUS` as a substitute race start.
+- If FinishStation stays `Idle` while StartStation is `Riding`, check Serial for `RUN_START compact payload len=...` (expected below 100 bytes), `LoRa TX RUN_START ok`, `LORA parsed type=RUN_START`, and `RUN_START_ACK compact TX ok`.
 
 ## v0.13 reliable RUN_START delivery
 
@@ -180,9 +195,9 @@ Firmware v0.10 keeps StartStation and FinishStation as separate applications and
 - Full debug data is no longer sent in the heartbeat. Web UI diagnostics are assembled from local `LinkStatus` and locally cached state, not by inflating the LoRa `STATUS` payload.
 - Compact keys are used for the heartbeat: `t` (`S` for STATUS), `sid` (`s` or `f`), `st` (`R`, `C`, `G`, `I`, `F`, `A`, `E`), `hb`, and uptime seconds in `up`. FinishStation may include compact reverse-link signal fields `sr`, `ss`, and `sa`.
 - The target heartbeat payload size is below 160 bytes, typically around 80-140 bytes with signal fields.
-- If a `STATUS` payload exceeds 200 bytes, firmware logs `STATUS payload too large len=...`.
+- If a `STATUS` payload exceeds 180 bytes, firmware logs `STATUS payload too large len=...`.
 - If a `STATUS` payload exceeds 240 bytes, firmware skips that oversized packet and transmits an emergency minimal heartbeat that still carries version/boot diagnostics, for example `{"t":"S","sid":"f","ver":"0.10","hb":2}`.
-- Priority messages (`RUN_START`, `RUN_START_ACK`, `FINISH`, `FINISH_ACK`, `HELLO`, and `HELLO_ACK`) keep their full JSON fields where needed, including run/rider/trail/result data, but their payload lengths are logged and warned when oversized.
+- Critical race messages (`RUN_START`, `RUN_START_ACK`, `FINISH`, and `FINISH_ACK`) use compact JSON. Non-critical `HELLO` and `HELLO_ACK` keep full JSON diagnostics, while all payload lengths are logged and warned when oversized.
 - The reason for this split is that LoRa payloads must remain small and reliable; previous full `STATUS` debug packets could grow after link data was added and exceed the SX1262/Radiolib transmit limit.
 
 The deserializer accepts both legacy full `STATUS` packets (`type`, `stationId`, `state`, `heartbeat`) and the new compact heartbeat (`t`, `sid`, `st`, `hb`) so mixed-version smoke tests can still exchange link heartbeats.
@@ -288,7 +303,7 @@ Signal display rules:
 - Any valid packet from the opposite station updates link status, not only `STATUS`. StartStation updates the FinishStation link from `STATUS`, `FINISH`, and any other valid `stationId: "finish"` packet. FinishStation updates the StartStation link from `STATUS`, `RUN_START`, `FINISH_ACK`, and any other valid `stationId: "start"` packet.
 - Every received LoRa packet logs `LORA RX type=... rssi=... snr=... raw=...`; valid opposite-station packets also log `LORA RX from=... type=... rssi=... snr=... age=0 count=...`. JSON parse failures, missing `stationId`, and unknown `type` are logged explicitly with the raw packet.
 - After every LoRa TX (`HELLO`, `HELLO_ACK`, `STATUS`, `RUN_START`, `RUN_START_ACK`, `FINISH`, or `FINISH_ACK`), the firmware yields briefly, waits 1 ms for SX1262 settle, and then lets the next polling `receive()` re-enter receive/listen mode after the short blocking transmit. Serial prints `LoRa RX mode restored` after every transmit; FinishStation STATUS is sent every five seconds plus jitter; StartStation STATUS is slower in Ready/Idle, and each STATUS heartbeat is logged.
-- `STATUS payload len=...` is logged for heartbeat diagnostics and whenever a STATUS payload exceeds 200 bytes. STATUS packets are serialized in a compact JSON form to keep the LoRa payload small while remaining accepted by the same deserializer.
+- `STATUS payload len=...` is logged for heartbeat diagnostics and whenever a STATUS payload exceeds 180 bytes. STATUS packets are serialized in a compact JSON form to keep the LoRa payload small while remaining accepted by the same deserializer.
 - StartStation and FinishStation include `version: "0.12"` and a per-boot `bootId` in `RUN_START`, `RUN_START_ACK`, `FINISH`, `FINISH_ACK`, `HELLO`, and `HELLO_ACK` payloads. Compact `STATUS` includes `ver` and `bid` for version and boot diagnostics.
 - FinishStation includes only compact numeric reverse-link fields (`sr`, `ss`, and optionally `sa`) in `STATUS`; StartStation combines those values with local link state for `/api/status`.
 
