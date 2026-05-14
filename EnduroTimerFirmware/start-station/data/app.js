@@ -1,4 +1,4 @@
-console.log("EnduroTimer UI loaded v0.10");
+console.log("EnduroTimer UI loaded v0.12");
 const $ = (id) => document.getElementById(id);
 let consecutiveFetchErrors = 0;
 let riders = [];
@@ -82,9 +82,15 @@ function renderStatus(status) {
   $('debugStartBattery').textContent = startBat;
   $('debugFinishBattery').textContent = finishBat;
   if ($('uiLoaded')) $('uiLoaded').textContent = 'yes';
-  if ($('raceClockState')) $('raceClockState').textContent = status.raceClockSynced ? 'SYNCED' : 'NOT SYNCED';
-  if ($('raceClockState')) $('raceClockState').className = status.raceClockSynced ? 'online' : 'offline';
-  if ($('syncAccuracy')) $('syncAccuracy').textContent = status.syncAccuracyMs === undefined ? '—' : `${status.syncAccuracyMs} ms`;
+  if ($('finishWifiState')) $('finishWifiState').textContent = status.finishWifiConnected ? `connected ${status.finishIp || ''}` : 'not connected';
+  if ($('finishWifiState')) $('finishWifiState').className = status.finishWifiConnected ? 'online' : 'offline';
+  if ($('raceClockState')) $('raceClockState').textContent = status.finishRaceClockSynced ? 'SYNCED' : 'NOT SYNCED';
+  if ($('raceClockState')) $('raceClockState').className = status.finishRaceClockSynced ? 'online' : 'offline';
+  if ($('syncMode')) $('syncMode').textContent = status.raceClockSyncSource === 'WIFI_HTTP_ONCE' ? 'one-time at boot' : (status.raceClockSyncSource || '—');
+  if ($('syncAccuracy')) $('syncAccuracy').textContent = status.finishSyncAccuracyMs === undefined ? '—' : `${status.finishSyncAccuracyMs} ms`;
+  if ($('readyForRace')) $('readyForRace').textContent = status.systemReadyForRace ? 'yes' : 'no';
+  if ($('readyForRace')) $('readyForRace').className = status.systemReadyForRace ? 'online' : 'offline';
+  if ($('readyBlockReason')) $('readyBlockReason').textContent = status.readyBlockReason || '—';
   if ($('finishOffset')) $('finishOffset').textContent = status.finishRaceClockOffsetMs === undefined ? `${status.raceClockOffsetMs || 0} ms` : `${status.finishRaceClockOffsetMs} ms`;
   if ($('raceClockNow')) $('raceClockNow').textContent = status.raceClockNowMs || '—';
   if ($('lastSync')) $('lastSync').textContent = ageText(status.lastSyncAgoMs);

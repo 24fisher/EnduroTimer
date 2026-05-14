@@ -24,11 +24,17 @@ void RaceClock::setOffsetToMaster(int32_t offsetMs) {
   offsetToMasterMs_ = offsetMs;
 }
 
-void RaceClock::markSynced() {
+void RaceClock::markSynced(uint32_t accuracyMs) {
   synced_ = true;
+  syncAccuracyMs_ = accuracyMs;
 }
 
 void RaceClock::clearSync() {
   synced_ = false;
   offsetToMasterMs_ = 0;
+  syncAccuracyMs_ = 0;
+}
+
+uint32_t RaceClock::syncAccuracyMs() const {
+  return syncAccuracyMs_;
 }

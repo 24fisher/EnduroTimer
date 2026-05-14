@@ -63,6 +63,8 @@ void StartStationApp::begin() {
   state_.begin();
   raceClock_.begin();
   raceClock_.setOffsetToMaster(0);
+  raceClock_.markSynced(0);
+  syncStatusText_ = "WAIT FINISH";
   nextStartStatusDueMs_ = millis() + 2500UL + static_cast<uint32_t>(random(0, 701));
   startStatusEarliestMs_ = nextStartStatusDueMs_;
   loadStorage();
@@ -76,7 +78,9 @@ void StartStationApp::loop() {
 
   updateButton(now);
   updateLed(now);
+#if ENABLE_LORA_TIME_SYNC
   updateSync(now);
+#endif
 
   RunRecord runToStart;
   updateCountdownDisplay(now);
@@ -151,9 +155,9 @@ void StartStationApp::loop() {
 bool StartStationApp::requestStartRun(String& error) {
   Serial.printf("START BUTTON pressed at ms=%lu\n", static_cast<unsigned long>(millis()));
   Serial.println("Start run requested");
-  if (!raceClock_.isSynced()) {
-    error = "Race clock sync required";
-    Serial.println("Start blocked: RaceClock not synced");
+  if (!raceClock_.isSynced() || !finishRaceClockSynced_ || !finishSyncDoneOnce_) {
+    error = "Finish Wi-Fi RaceClock sync required";
+    Serial.println("Start blocked: Finish RaceClock Wi-Fi sync not ready");
     return false;
   }
   RiderRecord rider = selectRider();
@@ -214,13 +218,25 @@ String StartStationApp::statusJson() const {
   doc["raceClockSynced"] = raceClock_.isSynced();
   doc["raceClockOffsetMs"] = raceClock_.offsetToMasterMs();
   doc["raceClockNowMs"] = raceClock_.nowRaceMs();
-  doc["syncRequired"] = !raceClock_.isSynced();
+  doc["raceClockSyncSource"] = "WIFI_HTTP_ONCE";
+  doc["syncRequired"] = !raceClock_.isSynced() || !finishRaceClockSynced_ || !finishSyncDoneOnce_;
   doc["syncInProgress"] = syncInProgress_;
   doc["syncStatusText"] = syncStatusText_;
   doc["syncAccuracyMs"] = syncAccuracyMs_;
+  doc["finishWifiConnected"] = finishWifiConnected_;
   doc["finishRaceClockSynced"] = finishRaceClockSynced_;
+  doc["finishSyncDoneOnce"] = finishSyncDoneOnce_;
   doc["finishRaceClockOffsetMs"] = finishRaceClockOffsetMs_;
+  doc["finishOffsetToMasterMs"] = finishRaceClockOffsetMs_;
+  doc["finishSyncAccuracyMs"] = syncAccuracyMs_;
+  doc["finishIp"] = finishWifiIp_;
   doc["lastSyncAgoMs"] = lastSyncMs_ > 0 ? static_cast<uint32_t>(millis() - lastSyncMs_) : UINT32_MAX;
+  const bool systemReadyForRace = raceClock_.isSynced() && finishRaceClockSynced_ && finishSyncDoneOnce_ && radioReady_;
+  doc["systemReadyForRace"] = systemReadyForRace;
+  String readyBlockReason = "";
+  if (!radioReady_) readyBlockReason = "LoRa not ready";
+  else if (!finishRaceClockSynced_ || !finishSyncDoneOnce_) readyBlockReason = "Waiting FinishStation Wi-Fi sync";
+  doc["readyBlockReason"] = readyBlockReason;
   doc["bootId"] = bootId_;
   doc["buildDate"] = __DATE__;
   doc["buildTime"] = __TIME__;
@@ -341,6 +357,54 @@ String StartStationApp::statusJson() const {
   return output;
 }
 
+
+String StartStationApp::raceSyncJson() const {
+  const uint32_t now = raceClock_.nowRaceMs();
+  Serial.printf("HTTP GET /api/time/race-sync t=%lu\n", static_cast<unsigned long>(now));
+  JsonDocument doc;
+  doc["ok"] = true;
+  doc["stationId"] = "start";
+  doc["version"] = FIRMWARE_VERSION;
+  doc["bootId"] = bootId_;
+  doc["tStartRaceMs"] = now;
+  doc["serverMillis"] = millis();
+  String output;
+  serializeJson(doc, output);
+  return output;
+}
+
+bool StartStationApp::applyFinishSyncStatus(const String& body, String& error) {
+  JsonDocument doc;
+  DeserializationError jsonError = deserializeJson(doc, body);
+  if (jsonError) {
+    error = "Invalid finish sync-status payload";
+    return false;
+  }
+  const String stationId = doc["stationId"] | "";
+  if (stationId != "finish") {
+    error = "Invalid stationId";
+    return false;
+  }
+  finishWifiConnected_ = true;
+  finishRaceClockSynced_ = doc["raceClockSynced"] | false;
+  finishSyncDoneOnce_ = doc["syncDoneOnce"] | false;
+  finishRaceClockOffsetMs_ = doc["offsetToMasterMs"] | 0;
+  syncAccuracyMs_ = doc["syncAccuracyMs"] | 0;
+  finishHttpBootId_ = doc["bootId"] | "";
+  if (finishHttpBootId_.length() > 0) finishLink_.remoteBootId = finishHttpBootId_;
+  finishWifiIp_ = doc["finishIp"] | "";
+  const String finishVersion = doc["version"] | "";
+  if (finishVersion.length() > 0) finishFirmwareVersion_ = finishVersion;
+  lastFinishWifiSyncStatusMs_ = millis();
+  syncStatusText_ = finishRaceClockSynced_ && finishSyncDoneOnce_ ? String("SYNC OK") : String("WAIT FINISH");
+  Serial.printf("Finish sync-status received accuracy=%lu\n", static_cast<unsigned long>(syncAccuracyMs_));
+  if (finishRaceClockSynced_ && finishSyncDoneOnce_) {
+    Serial.println("Finish RaceClock synced once");
+    if (radioReady_) Serial.println("System ready for race");
+  }
+  return finishRaceClockSynced_ && finishSyncDoneOnce_;
+}
+
 String StartStationApp::runsJson() const {
   JsonDocument doc;
   JsonArray array = doc.to<JsonArray>();
@@ -414,12 +478,8 @@ void StartStationApp::updateButton(uint32_t nowMs) {
   if (!startButton_.wasShortPressed()) return;
 
   Serial.println("START button short press event");
-  if (!raceClock_.isSynced()) {
-    if (syncInProgress_) {
-      Serial.printf("SYNC already in progress syncId=%s, button press ignored/accepted without restart.\n", currentSyncId_.c_str());
-      return;
-    }
-    startSync(nowMs);
+  if (!raceClock_.isSynced() || !finishRaceClockSynced_ || !finishSyncDoneOnce_) {
+    Serial.println("Start button ignored: wifi sync not ready");
     return;
   }
 
@@ -548,6 +608,7 @@ void StartStationApp::restoreRadioReceiveMode() {
 #endif
 }
 
+#if ENABLE_LORA_TIME_SYNC
 void StartStationApp::startSync(uint32_t nowMs) {
   if (syncInProgress_) {
     Serial.println("SYNC already in progress, not creating new syncId");
@@ -634,6 +695,8 @@ void StartStationApp::sendSyncApply(uint32_t nowMs) {
   startStatusEarliestMs_ = nowMs + LORA_POST_PRIORITY_QUIET_MS;
 }
 
+#endif
+
 void StartStationApp::sendRunStart(const RunRecord& run) {
   if (runStartAckAttempts_ >= 10) return;
   runStartAckAttempts_ += 1;
@@ -646,7 +709,7 @@ void StartStationApp::sendRunStart(const RunRecord& run) {
   message.trailName = run.trailName;
   message.startTimestampMs = run.startTimestampMs;
   message.raceStartTimeMs = run.raceStartTimeMs;
-  message.timingSource = "SYNCED_RACE_CLOCK";
+  message.timingSource = "WIFI_SYNCED_RACE_CLOCK_ONCE";
   message.version = FIRMWARE_VERSION;
   message.bootId = bootId_;
 
@@ -698,7 +761,7 @@ void StartStationApp::sendFinishAck(const RunRecord& run, uint8_t sequence, bool
   message.bootId = bootId_;
   message.resultMs = run.resultMs;
   message.resultFormatted = run.resultFormatted.length() > 0 ? run.resultFormatted : formatSeconds(run.resultMs);
-  message.timingSource = "SYNCED_RACE_CLOCK";
+  message.timingSource = "WIFI_SYNCED_RACE_CLOCK_ONCE";
   message.timestampMs = clock_.nowMs();
 
   Serial.printf("FINISH_ACK TX runId=%s resultMs=%lu\n", run.runId.c_str(), static_cast<unsigned long>(run.resultMs));
@@ -835,9 +898,10 @@ void StartStationApp::updateFinishLink(const RadioMessage& message, int packetRs
     finishActiveRunId_ = "";
     finishRiderName_ = "";
     finishElapsedMs_ = 0;
-    raceClock_.clearSync();
     finishRaceClockSynced_ = false;
-    syncStatusText_ = "SYNC REQUIRED";
+    finishSyncDoneOnce_ = false;
+    finishWifiConnected_ = false;
+    syncStatusText_ = "WAIT FINISH";
   }
   startStatusEarliestMs_ = millis() + 500UL + static_cast<uint32_t>(random(0, 501));
   if (nextStartStatusDueMs_ < startStatusEarliestMs_) nextStartStatusDueMs_ = startStatusEarliestMs_;
@@ -901,6 +965,7 @@ void StartStationApp::handleRadioMessage(const RadioMessage& message) {
     return;
   }
 
+#if ENABLE_LORA_TIME_SYNC
   if (message.type == RadioMessageType::SyncRequest && message.stationId == "finish") {
     Serial.println("SYNC_REQUEST RX from finish");
     if (!raceClock_.isSynced()) {
@@ -947,6 +1012,8 @@ void StartStationApp::handleRadioMessage(const RadioMessage& message) {
     Serial.printf("SYNC_ACK RX syncId=%s acc=%lu offset=%ld\n", currentSyncId_.c_str(), static_cast<unsigned long>(syncAccuracyMs_), static_cast<long>(finishRaceClockOffsetMs_));
     return;
   }
+
+#endif
 
   if (message.type == RadioMessageType::RunStartAck && message.stationId == "finish") {
     Serial.printf("RUN_START_ACK RX runId=%s\n", message.runId.c_str());
@@ -1060,19 +1127,16 @@ void StartStationApp::updateDisplay() {
     return;
   }
 
-  if (!raceClock_.isSynced()) {
-    display_.showLines({startHeader(), syncStatusText_, "PRESS BOTH", "NO RACE START", bat});
+  if (!finishRaceClockSynced_ || !finishSyncDoneOnce_) {
+    display_.showLines({startHeader(), wifiApStarted_ ? String("AP EnduroTimer") : String("AP STARTING"), "WAIT FINISH", "WIFI SYNC"});
     return;
   }
 
-  RiderRecord rider = selectRider();
-  TrailRecord trail = selectTrail();
   display_.showLines({
     startHeader(),
-    fin,
-    bat,
-    wallClockSynced_ ? String("TIME OK") : String("NO TIME"),
-    "Last:" + (last.resultFormatted.length() > 0 ? last.resultFormatted : String("-")),
+    "SYNCED",
+    "READY",
+    "acc: " + String(syncAccuracyMs_) + "ms",
   });
 }
 
@@ -1449,7 +1513,7 @@ bool StartStationApp::syncBrowserTime(uint64_t epochMs, int timezoneOffsetMinute
   localMillisAtSync_ = millis();
   timezoneOffsetMinutes_ = timezoneOffsetMinutes;
   lastTimeSyncText_ = isoLocal.length() > 0 ? isoLocal : formatEpochLocal(epochMs);
-  timeSource_ = "BROWSER";
+  timeSource_ = "BROWSER_FOR_STATS_ONLY";
   Serial.printf("TIME SYNC received epochMs=%llu timezoneOffsetMinutes=%d isoLocal=%s\n", static_cast<unsigned long long>(epochMs), timezoneOffsetMinutes_, lastTimeSyncText_.c_str());
   Serial.println("wallClockSynced=true");
   Serial.printf("currentTimeText=%s\n", currentTimeText().c_str());

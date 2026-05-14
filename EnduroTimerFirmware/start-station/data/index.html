@@ -22,23 +22,28 @@
     </section>
 
     <section class="card controls">
-      <h2>Time sync</h2>
-      <p>Время синхронизировано: <strong id="timeSynced">нет</strong></p>
-      <p>Текущее время станции: <strong id="stationTime">—</strong></p>
-      <p>Последняя синхронизация: <strong id="lastTimeSync">—</strong></p>
+      <h2>Время</h2>
+      <p>Browser time sync: <strong id="timeSynced">нет</strong></p>
+      <p>Текущее календарное время станции: <strong id="stationTime">—</strong></p>
+      <p>Последняя синхронизация браузером: <strong id="lastTimeSync">—</strong></p>
+      <p class="muted">Calendar/browser time is used only for result-table statistics and CSV RunTime.</p>
       <button id="syncTimeBtn" class="secondary" type="button">Синхронизировать время</button>
     </section>
 
     <section class="card controls">
-      <h2>Race clock sync</h2>
+      <h2>Синхронизация</h2>
       <p>UI loaded: <strong id="uiLoaded">no</strong></p>
+      <p>Finish Wi-Fi: <strong id="finishWifiState">not connected</strong></p>
       <p>Race clock: <strong id="raceClockState">NOT SYNCED</strong></p>
-      <p>Sync accuracy: <strong id="syncAccuracy">—</strong></p>
+      <p>Sync mode: <strong id="syncMode">one-time at boot</strong></p>
+      <p>Accuracy: <strong id="syncAccuracy">—</strong></p>
       <p>Finish offset: <strong id="finishOffset">—</strong></p>
+      <p>Ready for race: <strong id="readyForRace">no</strong></p>
+      <p>Block reason: <strong id="readyBlockReason">—</strong></p>
       <p>Race clock now: <strong id="raceClockNow">—</strong></p>
-      <p>Last sync: <strong id="lastSync">—</strong></p>
+      <p>Synced at uptime: <strong id="lastSync">—</strong></p>
       <p>Remote boot id: <strong id="remoteBootId">—</strong></p>
-      <p class="muted">Для синхронизации нажмите кнопки на обоих терминалах. Re-sync required if station rebooted.</p>
+      <p class="muted">FinishStation connects to StartStation Wi-Fi and syncs RaceClock once over HTTP at boot. No periodic resync.</p>
     </section>
 
     <section class="card lora-debug">

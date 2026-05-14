@@ -21,6 +21,7 @@ static bool beginWifiApOnly() {
   Serial.println("WiFi AP init...");
   WiFi.mode(WIFI_AP);
   WiFi.setSleep(false);
+  WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0));
   const bool apStarted = WiFi.softAP("EnduroTimer", "endurotimer");
   if (apStarted) {
     Serial.printf("WiFi AP OK, IP=%s\n", WiFi.softAPIP().toString().c_str());

@@ -2,6 +2,11 @@
 
 #include <SPI.h>
 #include <esp_system.h>
+#if ENABLE_WIFI
+#include <ArduinoJson.h>
+#include <HTTPClient.h>
+#include <WiFi.h>
+#endif
 
 #include "RadioProtocol.h"
 #include "DisplayText.h"
@@ -18,6 +23,8 @@ static constexpr int LORA_BUSY = 13;
 static constexpr uint8_t FINISH_MAX_RETRY_ATTEMPTS = 15;
 static constexpr uint32_t FINISH_RETRY_INTERVAL_MS = 1000UL;
 static constexpr uint32_t DisplayRefreshMs = 200UL;
+static constexpr uint32_t WIFI_RETRY_INTERVAL_MS = 2000UL;
+static constexpr uint8_t WIFI_SYNC_SAMPLE_COUNT = 5;
 RTC_DATA_ATTR static uint32_t finishBootCounter = 0;
 #if ENABLE_LORA
 static SX1262 radio = new Module(LORA_NSS, LORA_DIO1, LORA_RST, LORA_BUSY);
@@ -57,6 +64,7 @@ void FinishStationApp::begin() {
   beginRadio();
   state_.begin();
   raceClock_.begin();
+  beginWifi();
   nextFinishStatusDueMs_ = millis() + 500UL + static_cast<uint32_t>(random(0, 301));
   Serial.println("[BOOT] State Idle");
 }
@@ -67,6 +75,8 @@ void FinishStationApp::loop() {
   pollRadio();
 #endif
   updateLed(now);
+  updateWifiSync(now);
+#if ENABLE_LORA_TIME_SYNC
   if (syncInProgress_ && syncReadyUntilMs_ > 0 && now > syncReadyUntilMs_ && !raceClock_.isSynced()) {
     syncInProgress_ = false;
     syncReady_ = false;
@@ -75,6 +85,7 @@ void FinishStationApp::loop() {
     syncStatusText_ = "SYNC REQUIRED";
     Serial.println("SYNC ready timeout, waiting for new request");
   }
+#endif
 
   uint32_t finishTimestampMs = 0;
   if (sensor_.update(now, finishTimestampMs)) {
@@ -127,6 +138,165 @@ void FinishStationApp::loop() {
 #endif
 
   logHeartbeat(now);
+}
+
+
+void FinishStationApp::beginWifi() {
+#if ENABLE_WIFI
+  Serial.println("WiFi STA starting...");
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
+  wifiStarted_ = true;
+  nextWifiConnectAttemptMs_ = 0;
+#else
+  Serial.println("[BOOT] WiFi STA init skipped (ENABLE_WIFI=0)");
+#endif
+}
+
+void FinishStationApp::updateWifiSync(uint32_t nowMs) {
+#if ENABLE_WIFI
+  if (!wifiStarted_ || syncDoneOnce_) return;
+
+  if (WiFi.status() != WL_CONNECTED) {
+    wifiConnected_ = false;
+    if (nowMs >= nextWifiConnectAttemptMs_) {
+      if (nextWifiConnectAttemptMs_ > 0) Serial.println("WiFi connect failed, retry...");
+      Serial.println("Connecting to EnduroTimer...");
+      WiFi.disconnect(false);
+      WiFi.begin("EnduroTimer", "endurotimer");
+      nextWifiConnectAttemptMs_ = nowMs + WIFI_RETRY_INTERVAL_MS;
+      wifiStatusText_ = "WIFI SEARCH";
+    }
+    return;
+  }
+
+  if (!wifiConnected_) {
+    wifiConnected_ = true;
+    Serial.printf("WiFi connected ip=%s\n", WiFi.localIP().toString().c_str());
+    wifiStatusText_ = "WIFI OK";
+    nextWifiSyncAttemptMs_ = nowMs;
+    wifiSyncSampleIndex_ = 0;
+    bestWifiSyncRttMs_ = UINT32_MAX;
+  }
+
+  if (nowMs < nextWifiSyncAttemptMs_) return;
+  if (wifiSyncSampleIndex_ >= WIFI_SYNC_SAMPLE_COUNT) return;
+
+  uint32_t rttMs = 0;
+  int32_t offsetMs = 0;
+  String startBootId;
+  const uint8_t sampleNumber = wifiSyncSampleIndex_ + 1;
+  if (!takeWifiSyncSample(sampleNumber, rttMs, offsetMs, startBootId)) {
+    wifiSyncSampleIndex_ = 0;
+    bestWifiSyncRttMs_ = UINT32_MAX;
+    nextWifiSyncAttemptMs_ = nowMs + WIFI_RETRY_INTERVAL_MS;
+    return;
+  }
+
+  if (rttMs < bestWifiSyncRttMs_) {
+    bestWifiSyncRttMs_ = rttMs;
+    bestWifiSyncOffsetMs_ = offsetMs;
+    startHttpBootId_ = startBootId;
+  }
+  wifiSyncSampleIndex_ += 1;
+
+  if (wifiSyncSampleIndex_ >= WIFI_SYNC_SAMPLE_COUNT) {
+    if (bestWifiSyncRttMs_ <= 200UL) {
+      finishWifiSyncSuccess(bestWifiSyncOffsetMs_, bestWifiSyncRttMs_, startHttpBootId_);
+    } else if (bestWifiSyncRttMs_ > 1000UL) {
+      Serial.printf("WIFI SYNC bad rtt=%lu, retry...\n", static_cast<unsigned long>(bestWifiSyncRttMs_));
+      wifiSyncSampleIndex_ = 0;
+      bestWifiSyncRttMs_ = UINT32_MAX;
+      nextWifiSyncAttemptMs_ = nowMs + WIFI_RETRY_INTERVAL_MS;
+    } else {
+      finishWifiSyncSuccess(bestWifiSyncOffsetMs_, bestWifiSyncRttMs_, startHttpBootId_);
+    }
+  }
+#else
+  (void)nowMs;
+#endif
+}
+
+bool FinishStationApp::takeWifiSyncSample(uint8_t sampleNumber, uint32_t& rttMs, int32_t& offsetMs, String& startBootId) {
+#if ENABLE_WIFI
+  HTTPClient http;
+  const uint32_t t0FinishLocalMs = millis();
+  http.begin("http://192.168.4.1/api/time/race-sync");
+  const int code = http.GET();
+  const uint32_t t3FinishLocalMs = millis();
+  if (code != HTTP_CODE_OK) {
+    Serial.printf("WIFI SYNC sample %u HTTP failed code=%d\n", sampleNumber, code);
+    http.end();
+    return false;
+  }
+  const String body = http.getString();
+  http.end();
+
+  JsonDocument doc;
+  DeserializationError jsonError = deserializeJson(doc, body);
+  if (jsonError) {
+    Serial.printf("WIFI SYNC sample %u JSON failed error=%s\n", sampleNumber, jsonError.c_str());
+    return false;
+  }
+
+  const uint32_t tStartRaceMs = doc["tStartRaceMs"] | 0;
+  startBootId = doc["bootId"] | "";
+  rttMs = t3FinishLocalMs - t0FinishLocalMs;
+  const uint32_t localMiddleMs = t0FinishLocalMs + (rttMs / 2UL);
+  offsetMs = static_cast<int32_t>(tStartRaceMs) - static_cast<int32_t>(localMiddleMs);
+  Serial.printf("WIFI SYNC sample %u rtt=%lu offset=%ld\n", sampleNumber, static_cast<unsigned long>(rttMs), static_cast<long>(offsetMs));
+#if ENABLE_OLED
+  if (!display_.testPatternOnly()) display_.showLines({finishHeader(), "WIFI SYNC", "sample " + String(sampleNumber) + "/5"});
+#endif
+  return true;
+#else
+  (void)sampleNumber; (void)rttMs; (void)offsetMs; (void)startBootId;
+  return false;
+#endif
+}
+
+void FinishStationApp::finishWifiSyncSuccess(int32_t offsetMs, uint32_t rttMs, const String& startBootId) {
+  const uint32_t accuracyMs = rttMs / 2UL;
+  raceClock_.setOffsetToMaster(offsetMs);
+  raceClock_.markSynced(accuracyMs);
+  syncAccuracyMs_ = accuracyMs;
+  lastSyncMs_ = millis();
+  syncDoneOnce_ = true;
+  syncStatusText_ = "SYNCED";
+  startHttpBootId_ = startBootId;
+  Serial.printf("WIFI SYNC best rtt=%lu offset=%ld accuracy=%lu\n", static_cast<unsigned long>(rttMs), static_cast<long>(offsetMs), static_cast<unsigned long>(accuracyMs));
+  Serial.printf("RaceClock synced once offset=%ld accuracy=%lu\n", static_cast<long>(offsetMs), static_cast<unsigned long>(accuracyMs));
+  postFinishSyncStatus();
+#if ENABLE_OLED
+  if (!display_.testPatternOnly()) display_.showLines({finishHeader(), "SYNCED", "READY", "acc: " + String(syncAccuracyMs_) + "ms"});
+#endif
+}
+
+bool FinishStationApp::postFinishSyncStatus() {
+#if ENABLE_WIFI
+  if (WiFi.status() != WL_CONNECTED) return false;
+  JsonDocument doc;
+  doc["stationId"] = "finish";
+  doc["version"] = FIRMWARE_VERSION;
+  doc["bootId"] = bootId_;
+  doc["raceClockSynced"] = raceClock_.isSynced();
+  doc["syncDoneOnce"] = syncDoneOnce_;
+  doc["offsetToMasterMs"] = raceClock_.offsetToMasterMs();
+  doc["syncAccuracyMs"] = syncAccuracyMs_;
+  doc["finishIp"] = WiFi.localIP().toString();
+  doc["uptimeMs"] = millis();
+  String body;
+  serializeJson(doc, body);
+  HTTPClient http;
+  http.begin("http://192.168.4.1/api/finish/sync-status");
+  http.addHeader("Content-Type", "application/json");
+  const int code = http.POST(body);
+  http.end();
+  Serial.printf("Finish sync-status POST code=%d\n", code);
+  return code >= 200 && code < 300;
+#else
+  return false;
+#endif
 }
 
 void FinishStationApp::beginRadio() {
@@ -350,6 +520,7 @@ bool FinishStationApp::priorityTxPending(uint32_t nowMs) const {
           (finishAttempts_ < FINISH_MAX_RETRY_ATTEMPTS || nowMs - lastFinishSendMs_ < FINISH_RETRY_INTERVAL_MS));
 }
 
+#if ENABLE_LORA_TIME_SYNC
 void FinishStationApp::enterSyncReady(uint32_t nowMs) {
   if (syncInProgress_) {
     Serial.printf("SYNC already in progress syncId=%s, not creating new sync request\n", activeSyncId_.c_str());
@@ -423,6 +594,8 @@ void FinishStationApp::sendSyncAck(const RadioMessage& apply) {
   sendRadio(message);
 }
 
+#endif
+
 void FinishStationApp::sendRunStartAck(const String& runId) {
   RadioMessage message;
   message.type = RadioMessageType::RunStartAck;
@@ -471,8 +644,8 @@ void FinishStationApp::acceptFinishButton(uint32_t nowMs) {
 
 void FinishStationApp::handleFinishButton(uint32_t nowMs) {
   Serial.printf("current finish state=%s canFinish=%s active runId=%s\n", state_.stateText().c_str(), state_.canFinish() ? "true" : "false", state_.runId().c_str());
-  if (!raceClock_.isSynced()) {
-    enterSyncReady(nowMs);
+  if (!raceClock_.isSynced() || !syncDoneOnce_) {
+    Serial.println("Finish button ignored: wifi sync not ready");
     return;
   }
   if (state_.canFinish()) {
@@ -506,7 +679,7 @@ void FinishStationApp::sendFinish() {
   message.finishTimestampMs = state_.finishTimestampMs();
   message.finishRaceTimeMs = state_.finishTimestampMs();
   message.resultMs = localResultMs_ > 0 ? localResultMs_ : lastResultMs_;
-  message.timingSource = "SYNCED_RACE_CLOCK";
+  message.timingSource = "WIFI_SYNCED_RACE_CLOCK_ONCE";
   message.syncAccuracyMs = syncAccuracyMs_;
   message.source = "BUTTON_STUB";
   finishAttempts_ += 1;
@@ -556,7 +729,11 @@ void FinishStationApp::updateStartLink(const RadioMessage& message, int packetRs
     Serial.printf("REMOTE REBOOT detected station=start oldBootId=%s newBootId=%s\n", oldBootId.c_str(), message.bootId.c_str());
     startHeartbeatCount_ = 0;
     raceClock_.clearSync();
-    syncStatusText_ = "SYNC REQUIRED";
+    syncDoneOnce_ = false;
+    wifiSyncSampleIndex_ = 0;
+    bestWifiSyncRttMs_ = UINT32_MAX;
+    syncStatusText_ = "WIFI SEARCH";
+    wifiStatusText_ = "WIFI SEARCH";
   }
   if (message.state.length() > 0) startState_ = message.state;
   Serial.printf("LORA RX from=%s type=%s rssi=%d snr=%.1f age=0 count=%lu\n",
@@ -586,6 +763,7 @@ void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
     return;
   }
 
+#if ENABLE_LORA_TIME_SYNC
   if (message.type == RadioMessageType::SyncRequest && message.stationId == "start") {
     Serial.println("SYNC_REQUEST RX from start");
     enterSyncReady(millis());
@@ -613,17 +791,25 @@ void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
     return;
   }
 
+#endif
+
   if (message.type == RadioMessageType::RunStart && message.stationId == "start") {
     const bool duplicate = state_.runId() == message.runId && message.runId.length() > 0;
     Serial.printf("RUN_START received runId=%s stationId=%s\n", message.runId.c_str(), message.stationId.c_str());
     Serial.printf("RUN_START duplicate? %s\n", duplicate ? "yes" : "no");
     if (!duplicate) {
-      if (!raceClock_.isSynced()) {
+      if (!raceClock_.isSynced() || !syncDoneOnce_) {
         Serial.println("RUN_START ignored: RaceClock not synced");
+#if ENABLE_OLED
+        if (!display_.testPatternOnly()) display_.showLines({finishHeader(), "NO TIME SYNC"});
+#endif
         return;
       }
       const uint32_t localStartMs = raceClock_.nowRaceMs();
       remoteStartTimestampMs_ = message.raceStartTimeMs > 0 ? message.raceStartTimeMs : message.startTimestampMs;
+      Serial.printf("RUN_START RX raceStartTimeMs=%lu\n", static_cast<unsigned long>(remoteStartTimestampMs_));
+      Serial.printf("nowRaceMs=%lu\n", static_cast<unsigned long>(localStartMs));
+      Serial.printf("elapsedAtReceiveMs=%lu\n", static_cast<unsigned long>(localStartMs - remoteStartTimestampMs_));
       state_.startRun(message.runId, message.riderName, message.trailName, remoteStartTimestampMs_, localStartMs);
       Serial.println("Finish state -> Riding");
       Serial.printf("localRunStartReceivedMillis=%lu\n", static_cast<unsigned long>(localStartMs));
@@ -713,8 +899,9 @@ void FinishStationApp::updateDisplay() {
     return;
   }
 
-  if (!raceClock_.isSynced()) {
-    display_.showLines({finishHeader(), syncStatusText_, "PRESS BOTH", "NO FINISH", bat});
+  if (!raceClock_.isSynced() || !syncDoneOnce_) {
+    if (!wifiConnected_) display_.showLines({finishHeader(), "WIFI SEARCH", "EnduroTimer"});
+    else display_.showLines({finishHeader(), "WIFI OK", "SYNC TIME"});
     return;
   }
 
@@ -733,10 +920,9 @@ void FinishStationApp::updateDisplay() {
 
   display_.showLines({
     finishHeader(),
-    startSignal,
-    bat,
-    "IDLE",
-    "Last: " + (lastResultFormatted_.length() > 0 ? lastResultFormatted_ : String("-")),
+    "SYNCED",
+    "READY",
+    "acc: " + String(syncAccuracyMs_) + "ms",
   });
 }
 
