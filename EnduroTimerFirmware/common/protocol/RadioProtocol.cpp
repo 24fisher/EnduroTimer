@@ -16,6 +16,7 @@ String RadioProtocol::typeToString(RadioMessageType type) {
     case RadioMessageType::Finish: return "FINISH";
     case RadioMessageType::FinishAck: return "FINISH_ACK";
     case RadioMessageType::Status: return "STATUS";
+    case RadioMessageType::StartStatus: return "START_STATUS";
     default: return "UNKNOWN";
   }
 }
@@ -27,6 +28,7 @@ RadioMessageType RadioProtocol::typeFromString(const String& type) {
   if (type == "FINISH") return RadioMessageType::Finish;
   if (type == "FINISH_ACK") return RadioMessageType::FinishAck;
   if (type == "STATUS") return RadioMessageType::Status;
+  if (type == "START_STATUS") return RadioMessageType::StartStatus;
   return RadioMessageType::Unknown;
 }
 
@@ -48,7 +50,7 @@ bool RadioProtocol::serialize(const RadioMessage& message, String& output) {
   if (message.finishTimestampMs > 0) doc["finishTimestampMs"] = message.finishTimestampMs;
   if (message.elapsedMs > 0) doc["elapsedMs"] = message.elapsedMs;
 
-  if (message.type == RadioMessageType::Status) {
+  if (message.type == RadioMessageType::Status || message.type == RadioMessageType::StartStatus) {
     doc["activeRunId"] = message.runId;
     doc["riderName"] = message.riderName;
     doc["elapsedMs"] = message.elapsedMs;
@@ -56,7 +58,9 @@ bool RadioProtocol::serialize(const RadioMessage& message, String& output) {
     doc["buttonReady"] = message.buttonReady;
     if (message.hasStartRssi) doc["startRssi"] = message.startRssi; else doc["startRssi"] = nullptr;
     if (message.hasStartSnr) doc["startSnr"] = message.startSnr; else doc["startSnr"] = nullptr;
+    doc["startLinkActive"] = message.startLinkActive;
     if (message.hasStartRssi || message.hasStartSnr) doc["startLastSeenAgoMs"] = message.startLastSeenAgoMs; else doc["startLastSeenAgoMs"] = nullptr;
+    doc["startPacketCount"] = message.startPacketCount;
     if (message.hasBatteryVoltage) {
       doc["batteryVoltage"] = message.batteryVoltage;
     } else {
@@ -97,6 +101,8 @@ bool RadioProtocol::deserialize(const String& input, RadioMessage& output, Strin
   if (!doc["startRssi"].isNull()) { output.hasStartRssi = true; output.startRssi = doc["startRssi"].as<int>(); }
   if (!doc["startSnr"].isNull()) { output.hasStartSnr = true; output.startSnr = doc["startSnr"].as<float>(); }
   output.startLastSeenAgoMs = doc["startLastSeenAgoMs"] | 0;
+  output.startLinkActive = doc["startLinkActive"] | false;
+  output.startPacketCount = doc["startPacketCount"] | 0;
 
   if (!doc["batteryVoltage"].isNull()) {
     output.hasBatteryVoltage = true;

@@ -8,6 +8,7 @@
 #include "FinishState.h"
 #include "OledDisplay.h"
 #include "RadioMessage.h"
+#include "LinkStatus.h"
 #include "TimeUtils.h"
 
 class FinishStationApp {
@@ -25,6 +26,7 @@ private:
   void resendFinishFromButton(uint32_t nowMs);
   uint8_t ridingAnimationFrame() const;
   void handleRadioMessage(const RadioMessage& message);
+  void updateStartLink(const RadioMessage& message, int packetRssi, float packetSnr);
   void updateDisplay();
   void logHeartbeat(uint32_t nowMs);
 
@@ -50,10 +52,8 @@ private:
   String lastLoRaRaw_ = "-";
   int lastRssi_ = 0;
   float lastSnr_ = 0.0F;
-  int startRssi_ = 0;
-  float startSnr_ = 0.0F;
-  bool hasStartSignal_ = false;
-  uint32_t startLastSeenMs_ = 0;
+  LinkStatus startLink_;
+  String startState_ = "Unknown";
   uint32_t showNoRunUntilMs_ = 0;
   uint32_t showAckOkUntilMs_ = 0;
   uint32_t finishLineCrossedUntilMs_ = 0;
