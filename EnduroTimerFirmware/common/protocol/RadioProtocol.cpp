@@ -16,6 +16,8 @@ String RadioProtocol::typeToString(RadioMessageType type) {
     case RadioMessageType::Finish: return "FINISH";
     case RadioMessageType::FinishAck: return "FINISH_ACK";
     case RadioMessageType::Status: return "STATUS";
+    case RadioMessageType::Hello: return "HELLO";
+    case RadioMessageType::HelloAck: return "HELLO_ACK";
     case RadioMessageType::StartStatus: return "START_STATUS";
     default: return "UNKNOWN";
   }
@@ -28,6 +30,8 @@ RadioMessageType RadioProtocol::typeFromString(const String& type) {
   if (type == "FINISH") return RadioMessageType::Finish;
   if (type == "FINISH_ACK") return RadioMessageType::FinishAck;
   if (type == "STATUS") return RadioMessageType::Status;
+  if (type == "HELLO") return RadioMessageType::Hello;
+  if (type == "HELLO_ACK") return RadioMessageType::HelloAck;
   if (type == "START_STATUS") return RadioMessageType::StartStatus;
   return RadioMessageType::Unknown;
 }
@@ -46,11 +50,17 @@ bool RadioProtocol::serialize(const RadioMessage& message, String& output) {
       doc["version"] = message.version;
       doc["ver"] = message.version;
     }
+    if (message.bootId.length() > 0) {
+      doc["bootId"] = message.bootId;
+      doc["bid"] = message.bootId;
+    }
+    if (message.role.length() > 0) doc["role"] = message.role;
     if (message.uptimeMs > 0) doc["up"] = message.uptimeMs;
     if (message.timestampMs > 0) doc["ts"] = message.timestampMs;
     if (message.heartbeat > 0) doc["hb"] = message.heartbeat;
-    if (message.runId.length() > 0) doc["rid"] = message.runId;
-    if (message.riderName.length() > 0) doc["rn"] = message.riderName;
+    if (message.runId.length() > 0) { doc["rid"] = message.runId; doc["activeRunId"] = message.runId; }
+    if (message.riderName.length() > 0) { doc["rn"] = message.riderName; doc["riderName"] = message.riderName; }
+    if (message.trailName.length() > 0) { doc["tn"] = message.trailName; doc["trailName"] = message.trailName; }
     if (message.elapsedMs > 0) doc["el"] = message.elapsedMs;
     if (message.startLinkActive || message.startPacketCount > 0 || message.hasStartRssi || message.hasStartSnr) {
       doc["sl"] = message.startLinkActive;
@@ -73,6 +83,8 @@ bool RadioProtocol::serialize(const RadioMessage& message, String& output) {
   if (message.trailName.length() > 0) doc["trailName"] = message.trailName;
   if (message.state.length() > 0) doc["state"] = message.state;
   if (message.version.length() > 0) doc["version"] = message.version;
+  if (message.bootId.length() > 0) doc["bootId"] = message.bootId;
+  if (message.role.length() > 0) doc["role"] = message.role;
   if (message.source.length() > 0) doc["source"] = message.source;
   if (message.timestampMs > 0) doc["timestampMs"] = message.timestampMs;
   if (message.uptimeMs > 0) doc["uptimeMs"] = message.uptimeMs;
@@ -112,6 +124,9 @@ bool RadioProtocol::deserialize(const String& input, RadioMessage& output, Strin
   output.source = doc["source"] | "";
   output.version = doc["version"] | "";
   if (output.version.length() == 0) output.version = doc["ver"] | "";
+  output.bootId = doc["bootId"] | "";
+  if (output.bootId.length() == 0) output.bootId = doc["bid"] | "";
+  output.role = doc["role"] | "";
   output.beamClear = doc["beamClear"] | true;
   output.buttonReady = doc["buttonReady"] | false;
   output.timestampMs = doc["timestampMs"] | 0;

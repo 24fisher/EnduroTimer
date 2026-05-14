@@ -24,5 +24,6 @@ private:
   String runId_;
   uint32_t localArmedAtMs_ = 0;
   uint32_t startTimestampMs_ = 0;
+  int lastRawState_ = HIGH;
   ButtonDebouncer button_;
 };

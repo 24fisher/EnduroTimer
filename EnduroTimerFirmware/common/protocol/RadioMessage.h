@@ -10,6 +10,8 @@ enum class RadioMessageType {
   Finish,
   FinishAck,
   Status,
+  Hello,
+  HelloAck,
   StartStatus
 };
 
@@ -22,6 +24,8 @@ struct RadioMessage {
   String trailName;
   String state;
   String version;
+  String bootId;
+  String role;
   String source;
   bool beamClear = true;
   bool buttonReady = false;

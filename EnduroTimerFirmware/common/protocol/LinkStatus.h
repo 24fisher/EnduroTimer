@@ -2,7 +2,9 @@
 
 #include <Arduino.h>
 
-static constexpr uint32_t LINK_TIMEOUT_MS = 15000UL;
+static constexpr uint32_t LINK_HEARTBEAT_INTERVAL_MS = 5000UL;
+static constexpr uint32_t LINK_TIMEOUT_MS = 25000UL;
+static constexpr uint32_t LINK_DISCOVERY_INTERVAL_MS = 1000UL;
 
 struct LinkStatus {
   bool hasEverReceived = false;
@@ -11,7 +13,11 @@ struct LinkStatus {
   float lastSnr = 0.0F;
   String lastPacketType = "";
   String lastStationId = "";
+  String remoteBootId = "";
   uint32_t packetCount = 0;
+  uint32_t remoteRebootCount = 0;
+  uint32_t lastBootIdChangeMs = 0;
+  bool remoteRebootDetected = false;
 };
 
 inline bool isLinkActive(const LinkStatus& link) {
@@ -28,7 +34,8 @@ inline String linkSignalText(const LinkStatus& link) {
   return String(link.lastRssi) + " dBm";
 }
 
-inline void updateLinkStatus(LinkStatus& link, const String& stationId, const String& packetType, int packetRssi, float packetSnr) {
+inline bool updateLinkStatus(LinkStatus& link, const String& stationId, const String& packetType, const String& bootId, int packetRssi, float packetSnr) {
+  bool rebootDetected = false;
   link.hasEverReceived = true;
   link.lastPacketMs = millis();
   link.lastRssi = packetRssi;
@@ -36,4 +43,13 @@ inline void updateLinkStatus(LinkStatus& link, const String& stationId, const St
   link.lastPacketType = packetType;
   link.lastStationId = stationId;
   link.packetCount += 1;
+  link.remoteRebootDetected = false;
+  if (bootId.length() > 0 && link.remoteBootId.length() > 0 && link.remoteBootId != bootId) {
+    rebootDetected = true;
+    link.remoteRebootDetected = true;
+    link.remoteRebootCount += 1;
+    link.lastBootIdChangeMs = millis();
+  }
+  if (bootId.length() > 0) link.remoteBootId = bootId;
+  return rebootDetected;
 }

@@ -7,6 +7,7 @@ enum class FinishRunState {
   Idle,
   WaitFinish,
   FinishSent,
+  AckTimeout,
   Error
 };
 
@@ -17,6 +18,7 @@ public:
   void markFinishSent(uint32_t finishTimestampMs);
   void ackFinish();
   void fail();
+  void ackTimeout();
 
   FinishRunState state() const { return state_; }
   bool canFinish() const { return state_ == FinishRunState::WaitFinish; }
