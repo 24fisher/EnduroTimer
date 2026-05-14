@@ -7,6 +7,7 @@ enum class RadioMessageType {
   Ping,
   Pong,
   RunStart,
+  RunStartAck,
   Finish,
   FinishAck,
   Status,

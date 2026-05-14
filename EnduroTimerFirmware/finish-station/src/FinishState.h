@@ -5,7 +5,7 @@
 enum class FinishRunState {
   Boot,
   Idle,
-  WaitFinish,
+  Riding,
   FinishSent,
   AckTimeout,
   Error
@@ -21,7 +21,8 @@ public:
   void ackTimeout();
 
   FinishRunState state() const { return state_; }
-  bool canFinish() const { return state_ == FinishRunState::WaitFinish; }
+  bool isRiding() const { return state_ == FinishRunState::Riding; }
+  bool canFinish() const { return isRiding(); }
   String stateText() const;
   const String& runId() const { return runId_; }
   const String& riderName() const { return riderName_; }

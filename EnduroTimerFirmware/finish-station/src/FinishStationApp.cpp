@@ -28,7 +28,7 @@ void FinishStationApp::begin() {
   finishBootCounter += 1;
 
   Serial.println("Firmware: EnduroTimer FinishStation");
-  Serial.println("Version: " FIRMWARE_VERSION);
+  Serial.println("Version: v" FIRMWARE_VERSION);
   Serial.println("Build: " __DATE__ " " __TIME__);
   Serial.println("Board/role: Heltec WiFi LoRa 32 V3 / FinishStation");
   bootId_ = makeBootId("finish");
@@ -70,13 +70,15 @@ void FinishStationApp::loop() {
   if (sensor_.update(now, finishTimestampMs)) {
     (void)finishTimestampMs;
     Serial.println("FINISH button debounced short press");
+    Serial.printf("Finish button state=%s canFinish=%d activeRunId=%s\n", state_.stateText().c_str(), state_.canFinish() ? 1 : 0, state_.runId().c_str());
     handleFinishButton(now);
   }
 
-
+  bool prioritySentThisCycle = false;
   if (state_.state() == FinishRunState::FinishSent && finishAttempts_ < FINISH_MAX_RETRY_ATTEMPTS &&
       now - lastFinishSendMs_ >= FINISH_RETRY_INTERVAL_MS) {
     sendFinish();
+    prioritySentThisCycle = true;
   }
 
   if (state_.state() == FinishRunState::FinishSent && finishAttempts_ >= FINISH_MAX_RETRY_ATTEMPTS &&
@@ -85,14 +87,23 @@ void FinishStationApp::loop() {
     state_.ackTimeout();
   }
 
-  if (discoveryActive() && now - lastDiscoverySentMs_ >= LINK_DISCOVERY_INTERVAL_MS && (lastFinishSendMs_ == 0 || now > lastFinishSendMs_)) {
-    sendHello(now);
-    lastDiscoverySentMs_ = now;
+  const bool priorityPending = prioritySentThisCycle || priorityTxPending(now);
+  if (discoveryActive() && now - lastDiscoverySentMs_ >= LINK_DISCOVERY_INTERVAL_MS) {
+    if (priorityPending) {
+      Serial.println("TX deferred HELLO because priority message pending");
+    } else {
+      sendHello(now);
+      lastDiscoverySentMs_ = now;
+    }
   }
 
-  if (now - lastStatusMs_ >= StatusIntervalMs && (lastFinishSendMs_ == 0 || now > lastFinishSendMs_)) {
-    sendStatus(now);
-    lastStatusMs_ = now;
+  if (now - lastStatusMs_ >= StatusIntervalMs) {
+    if (priorityPending) {
+      Serial.println("TX deferred STATUS because priority message pending");
+    } else {
+      sendStatus(now);
+      lastStatusMs_ = now;
+    }
   }
 
 #if ENABLE_OLED
@@ -142,7 +153,7 @@ void FinishStationApp::updateLed(uint32_t nowMs) {
     case FinishRunState::Idle:
       mode = LedMode::ReadySlowBlink;
       break;
-    case FinishRunState::WaitFinish:
+    case FinishRunState::Riding:
       mode = LedMode::RidingSolid;
       break;
     case FinishRunState::FinishSent:
@@ -184,6 +195,7 @@ void FinishStationApp::pollRadio() {
       return;
     }
     lastPacket_ = RadioProtocol::typeToString(message.type);
+    Serial.printf("LORA RX raw=%s\n", lastLoRaRaw_.c_str());
     Serial.printf("LORA RX type=%s rssi=%d snr=%.1f raw=%s\n", lastPacket_.c_str(), lastRssi_, static_cast<double>(lastSnr_), lastLoRaRaw_.c_str());
     if (message.type == RadioMessageType::Unknown) {
       Serial.printf("LORA unknown type=%s raw=%s\n", lastPacket_.c_str(), payload.c_str());
@@ -233,8 +245,8 @@ bool FinishStationApp::sendRadio(const RadioMessage& message, int* resultCode) {
 
 void FinishStationApp::restoreRadioReceiveMode() {
 #if ENABLE_LORA
-  // This firmware uses polling receive(), so the next pollRadio() call explicitly
-  // re-enters RX after the short blocking transmit.
+  yield();
+  delay(1);
 #endif
 }
 
@@ -304,7 +316,33 @@ void FinishStationApp::sendHelloAck(uint32_t nowMs) {
 }
 
 bool FinishStationApp::discoveryActive() const {
-  return !isLinkActive(startLink_);
+  const bool activeRun = state_.isRiding() || state_.state() == FinishRunState::FinishSent || state_.state() == FinishRunState::AckTimeout;
+  return !activeRun && !isLinkActive(startLink_);
+}
+
+bool FinishStationApp::priorityTxPending(uint32_t nowMs) const {
+  const bool priorityTxRecently = lastPriorityTxMs_ > 0 && nowMs - lastPriorityTxMs_ < 2UL;
+  return priorityTxRecently ||
+         (state_.state() == FinishRunState::FinishSent &&
+          (finishAttempts_ < FINISH_MAX_RETRY_ATTEMPTS || nowMs - lastFinishSendMs_ < FINISH_RETRY_INTERVAL_MS));
+}
+
+void FinishStationApp::sendRunStartAck(const String& runId) {
+  RadioMessage message;
+  message.type = RadioMessageType::RunStartAck;
+  message.messageId = RadioProtocol::makeMessageId("run-start-ack");
+  message.stationId = "finish";
+  message.version = FIRMWARE_VERSION;
+  message.bootId = bootId_;
+  message.runId = runId;
+  message.state = state_.stateText();
+  message.timestampMs = clock_.nowMs();
+  Serial.printf("TX priority RUN_START_ACK runId=%s\n", runId.c_str());
+  lastPriorityTxMs_ = clock_.nowMs();
+  if (sendRadio(message)) {
+    lastRunStartAckRunId_ = runId;
+    Serial.printf("RUN_START_ACK sent runId=%s\n", runId.c_str());
+  }
 }
 
 void FinishStationApp::acceptFinishButton(uint32_t nowMs) {
@@ -326,7 +364,8 @@ void FinishStationApp::acceptFinishButton(uint32_t nowMs) {
 }
 
 void FinishStationApp::handleFinishButton(uint32_t nowMs) {
-  if (state_.state() == FinishRunState::WaitFinish) {
+  Serial.printf("current finish state=%s canFinish=%s active runId=%s\n", state_.stateText().c_str(), state_.canFinish() ? "true" : "false", state_.runId().c_str());
+  if (state_.canFinish()) {
     acceptFinishButton(nowMs);
     return;
   }
@@ -357,6 +396,7 @@ void FinishStationApp::sendFinish() {
   message.source = "BUTTON_STUB";
   finishAttempts_ += 1;
   lastFinishSendMs_ = clock_.nowMs();
+  lastPriorityTxMs_ = lastFinishSendMs_;
   Serial.printf("FINISH sent attempt=%u/%u\n", finishAttempts_, FINISH_MAX_RETRY_ATTEMPTS);
   if (sendRadio(message)) {
     Serial.printf("[FinishStation] FINISH sent: run=%s attempt=%u/%u\n", state_.runId().c_str(),
@@ -415,7 +455,11 @@ void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
 
   if (message.type == RadioMessageType::Hello && message.stationId == "start") {
     lastHelloReceivedMs_ = millis();
-    sendHelloAck(millis());
+    if (priorityTxPending(millis())) {
+      Serial.println("TX deferred HELLO_ACK because priority message pending");
+    } else {
+      sendHelloAck(millis());
+    }
     return;
   }
 
@@ -425,19 +469,26 @@ void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
   }
 
   if (message.type == RadioMessageType::RunStart && message.stationId == "start") {
-    Serial.printf("RUN_START received runId=%s rider=%s\n", message.runId.c_str(), message.riderName.c_str());
-    const uint32_t localStartMs = millis();
-    state_.startRun(message.runId, message.riderName, message.trailName, message.startTimestampMs, localStartMs);
-    Serial.println("Finish state -> Riding");
-    Serial.printf("localRunStartReceivedMillis=%lu\n", static_cast<unsigned long>(localStartMs));
-    sensor_.arm(message.runId, message.startTimestampMs);
-    finishAttempts_ = 0;
-    manualResendCount_ = 0;
-    lastFinishSendMs_ = 0;
-    finishLineCrossedUntilMs_ = 0;
-    showNoRunUntilMs_ = 0;
-    showAckOkUntilMs_ = 0;
-    buzzer_.beep("RUN_START");
+    const bool duplicate = state_.runId() == message.runId && message.runId.length() > 0;
+    Serial.printf("RUN_START received runId=%s stationId=%s\n", message.runId.c_str(), message.stationId.c_str());
+    Serial.printf("RUN_START duplicate? %s\n", duplicate ? "yes" : "no");
+    if (!duplicate) {
+      const uint32_t localStartMs = millis();
+      state_.startRun(message.runId, message.riderName, message.trailName, message.startTimestampMs, localStartMs);
+      Serial.println("Finish state -> Riding");
+      Serial.printf("localRunStartReceivedMillis=%lu\n", static_cast<unsigned long>(localStartMs));
+      sensor_.arm(message.runId, message.startTimestampMs);
+      finishAttempts_ = 0;
+      manualResendCount_ = 0;
+      lastFinishSendMs_ = 0;
+      finishLineCrossedUntilMs_ = 0;
+      showNoRunUntilMs_ = 0;
+      showAckOkUntilMs_ = 0;
+      buzzer_.beep("RUN_START");
+    } else {
+      Serial.printf("Duplicate RUN_START received, ACK resent runId=%s\n", message.runId.c_str());
+    }
+    sendRunStartAck(message.runId);
     return;
   }
 
@@ -488,7 +539,7 @@ void FinishStationApp::updateDisplay() {
     return;
   }
 
-  if (state_.state() == FinishRunState::WaitFinish) {
+  if (state_.isRiding()) {
     String anim = String("RIDING ");
     for (uint8_t i = 0; i < ridingAnimationFrame(); ++i) anim += " ";
     anim += ">";

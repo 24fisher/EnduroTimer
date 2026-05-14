@@ -11,7 +11,7 @@ void FinishState::startRun(const String& runId, const String& riderName, const S
   startTimestampMs_ = startTimestampMs;
   localRunStartReceivedMillis_ = localReceivedMs;
   finishTimestampMs_ = 0;
-  state_ = FinishRunState::WaitFinish;
+  state_ = FinishRunState::Riding;
 }
 
 void FinishState::markFinishSent(uint32_t finishTimestampMs) {
@@ -46,7 +46,7 @@ String FinishState::stateText() const {
   switch (state_) {
     case FinishRunState::Boot: return "Boot";
     case FinishRunState::Idle: return "Idle";
-    case FinishRunState::WaitFinish: return "Riding";
+    case FinishRunState::Riding: return "Riding";
     case FinishRunState::FinishSent: return "FinishSent";
     case FinishRunState::AckTimeout: return "AckTimeout";
     case FinishRunState::Error: return "Error";

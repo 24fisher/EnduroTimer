@@ -76,6 +76,8 @@ private:
   bool sendRadio(const RadioMessage& message, int* resultCode = nullptr);
   void restoreRadioReceiveMode();
   void sendRunStart(const RunRecord& run);
+  void retryRunStartAck(uint32_t nowMs);
+  bool priorityTxPending() const;
   void sendFinishAck(const String& runId);
   void sendStatus(uint32_t nowMs);
   void sendHello(uint32_t nowMs);
@@ -130,6 +132,12 @@ private:
   uint32_t lastDiscoverySentMs_ = 0;
   uint32_t lastHelloReceivedMs_ = 0;
   uint32_t lastPriorityTxMs_ = 0;
+  bool pendingRunStartAck_ = false;
+  bool runStartAckReceived_ = false;
+  bool runStartAckTimedOut_ = false;
+  uint8_t runStartAckAttempts_ = 0;
+  uint32_t lastRunStartSendMs_ = 0;
+  uint32_t lastRunStartAckMs_ = 0;
   uint32_t lastAnyPacketMs_ = 0;
   String finishState_ = "Unknown";
   String bootId_;
