@@ -58,9 +58,13 @@ void StartStationApp::loop() {
 #if ENABLE_LORA
   pollRadio();
 #endif
-  if (finishOnlineState_ && lastFinishSeenMs_ > 0 && now - lastFinishSeenMs_ > FinishOfflineTimeoutMs) {
-    finishOnlineState_ = false;
-    Serial.printf("FINISH OFFLINE lastSeenAgo=%lu\n", static_cast<unsigned long>(now - lastFinishSeenMs_));
+  if (lastFinishSeenMs_ > 0 && now - lastFinishSeenMs_ > FinishOfflineTimeoutMs) {
+    hasFinishSignal_ = false;
+    hasFinishReportedStartSignal_ = false;
+    if (finishOnlineState_) {
+      finishOnlineState_ = false;
+      Serial.printf("FINISH NO SIGNAL lastSeenAgo=%lu\n", static_cast<unsigned long>(now - lastFinishSeenMs_));
+    }
   }
   updateButton(now);
   updateLed(now);
@@ -135,6 +139,7 @@ String StartStationApp::statusJson() const {
   doc["loraOk"] = radioReady_;
   doc["finishStationOnline"] = finishOnline();
   doc["finishLastSeenAgoMs"] = lastFinishSeenMs_ > 0 ? finishLastSeenAgoMs() : 0;
+  doc["finishLastStatusMs"] = finishLastStatusMs_;
   doc["finishHeartbeatCount"] = finishHeartbeatCount_;
   doc["finishState"] = finishState_;
   doc["finishHasError"] = finishState_ == "Error";
@@ -153,13 +158,16 @@ String StartStationApp::statusJson() const {
   if (hasFinishReportedStartSignal_) {
     doc["finishReportedStartRssi"] = finishReportedStartRssi_;
     doc["finishReportedStartSnr"] = finishReportedStartSnr_;
+    doc["finishReportedStartLastSeenAgoMs"] = finishReportedStartLastSeenAgoMs_;
   } else {
     doc["finishReportedStartRssi"] = nullptr;
     doc["finishReportedStartSnr"] = nullptr;
+    doc["finishReportedStartLastSeenAgoMs"] = nullptr;
   }
   doc["lastPacketType"] = lastFinishPacketType_;
   doc["lastLoRaPacketType"] = lastFinishPacketType_;
   doc["lastLoRaRaw"] = lastLoRaRaw_;
+  doc["lastLoRaRawShort"] = lastLoRaRaw_;
   doc["currentRunId"] = current.runId;
   RiderRecord selectedRider = selectRider();
   TrailRecord selectedTrail = selectTrail();
@@ -199,8 +207,10 @@ String StartStationApp::runsJson() const {
     item["resultFormatted"] = run.resultFormatted;
     item["status"] = run.status;
     item["finishSource"] = run.finishSource;
+    item["source"] = run.finishSource;
   }
 
+  Serial.printf("GET /api/runs count=%u\n", static_cast<unsigned>(state_.runs().size()));
   String output;
   serializeJson(doc, output);
   return output;
@@ -292,10 +302,14 @@ void StartStationApp::pollRadio() {
     RadioMessage message;
     String error;
     if (!RadioProtocol::deserialize(payload, message, &error)) {
-      Serial.printf("parse failed: %s raw=%s\n", error.c_str(), payload.c_str());
+      lastFinishPacketType_ = "PARSE_FAILED";
+      Serial.printf("LoRa parse failed raw=%s error=%s\n", payload.c_str(), error.c_str());
       return;
     }
     lastFinishPacketType_ = RadioProtocol::typeToString(message.type);
+    if (message.type == RadioMessageType::Unknown) {
+      Serial.printf("LoRa unknown type=%s raw=%s\n", lastFinishPacketType_.c_str(), payload.c_str());
+    }
     handleRadioMessage(message);
   }
 #else
@@ -349,7 +363,7 @@ void StartStationApp::sendFinishAck(const String& runId) {
 void StartStationApp::handleRadioMessage(const RadioMessage& message) {
   if (message.type == RadioMessageType::Status) {
     lastFinishSeenMs_ = millis();
-    Serial.printf("STATUS received from finish heartbeat=%lu rssi=%d snr=%.1f\n", static_cast<unsigned long>(message.heartbeat), finishRssi_, static_cast<double>(finishSnr_));
+    Serial.printf("STATUS received heartbeat=%lu rssi=%d snr=%.1f\n", static_cast<unsigned long>(message.heartbeat), finishRssi_, static_cast<double>(finishSnr_));
     if (!finishOnlineState_) {
       finishOnlineState_ = true;
       Serial.println("FINISH ONLINE");
@@ -357,20 +371,24 @@ void StartStationApp::handleRadioMessage(const RadioMessage& message) {
     finishLastStatusMs_ = message.timestampMs > 0 ? message.timestampMs : message.uptimeMs;
     finishHeartbeatCount_ = message.heartbeat;
     if (message.state.length() > 0) finishState_ = message.state;
-    if (message.hasStartRssi && message.hasStartSnr) {
+    if (message.hasStartRssi && message.hasStartSnr && message.startLastSeenAgoMs <= FinishOfflineTimeoutMs) {
       finishReportedStartRssi_ = message.startRssi;
       finishReportedStartSnr_ = message.startSnr;
+      finishReportedStartLastSeenAgoMs_ = message.startLastSeenAgoMs;
       hasFinishReportedStartSignal_ = true;
+    } else {
+      hasFinishReportedStartSignal_ = false;
     }
     return;
   }
 
   if (message.type == RadioMessageType::Finish) {
-    Serial.printf("[StartStation] FINISH received: run=%s finish=%lu source=%s\n", message.runId.c_str(),
+    Serial.printf("FINISH received runId=%s finish=%lu source=%s\n", message.runId.c_str(),
                   static_cast<unsigned long>(message.finishTimestampMs), message.source.c_str());
     RunRecord completed;
     if (state_.completeRun(message.runId, message.finishTimestampMs, message.source, completed)) {
-      Serial.printf("[StartStation] result calculated: %s\n", completed.resultFormatted.c_str());
+      Serial.printf("result calculated resultMs=%lu formatted=%s\n", static_cast<unsigned long>(completed.resultMs), completed.resultFormatted.c_str());
+      Serial.printf("run saved to recentRuns count=%u\n", static_cast<unsigned>(state_.runs().size()));
       appendRunCsv(completed);
 #if ENABLE_OLED
       if (!display_.testPatternOnly()) {
@@ -407,8 +425,7 @@ void StartStationApp::updateCountdownDisplay(uint32_t nowMs) {
   if (text.length() == 0 || text == lastCountdownText_) return;
 
   lastCountdownText_ = text;
-  Serial.printf("COUNTDOWN %s\n", text.c_str());
-  Serial.printf("COUNTDOWN step=%s at ms=%lu\n", text.c_str(), static_cast<unsigned long>(nowMs));
+  Serial.printf("COUNTDOWN step=%s time=%lu\n", text.c_str(), static_cast<unsigned long>(nowMs));
 #if ENABLE_OLED
   if (!display_.testPatternOnly()) {
     display_.showCountdown(text, "START");
@@ -422,7 +439,7 @@ void StartStationApp::updateDisplay() {
   const RunRecord& last = state_.lastRun();
   const String runShort = current.runId.length() > 0 ? current.runId.substring(max(0, static_cast<int>(current.runId.length()) - 6)) : "-";
   const String lastResult = last.resultFormatted.length() > 0 ? last.resultFormatted : "-";
-  const String fin = finishOnline() ? String("FIN: OK ") + (hasFinishSignal_ ? String(finishRssi_) : String("--")) : String("FIN: OFF");
+  const String fin = finishOnline() && hasFinishSignal_ ? String("FIN:") + String(finishRssi_) + "dBm" : String("FIN: NO SIGNAL");
 
   if (state_.state() == StartRunState::Countdown) {
     display_.showCountdown(state_.countdownText(millis()), "START");
@@ -540,7 +557,7 @@ void StartStationApp::ensureDefaults() {
   saveSettings();
 }
 
-void StartStationApp::saveRiders() const {
+bool StartStationApp::saveRiders() {
   JsonDocument doc;
   JsonArray array = doc.to<JsonArray>();
   for (const RiderRecord& rider : riders_) {
@@ -551,11 +568,22 @@ void StartStationApp::saveRiders() const {
     item["createdAtMs"] = rider.createdAtMs;
   }
   File file = LittleFS.open("/riders.json", "w");
-  serializeJson(doc, file);
+  if (!file) {
+    Serial.println("rider add failed: LittleFS open /riders.json failed");
+    return false;
+  }
+  if (serializeJson(doc, file) == 0) {
+    Serial.println("rider add failed: LittleFS write /riders.json failed");
+    file.close();
+    return false;
+  }
   file.close();
+  loadRiders();
+  Serial.printf("riders saved count=%u\n", static_cast<unsigned>(riders_.size()));
+  return true;
 }
 
-void StartStationApp::saveTrails() const {
+bool StartStationApp::saveTrails() {
   JsonDocument doc;
   JsonArray array = doc.to<JsonArray>();
   for (const TrailRecord& trail : trails_) {
@@ -566,20 +594,42 @@ void StartStationApp::saveTrails() const {
     item["createdAtMs"] = trail.createdAtMs;
   }
   File file = LittleFS.open("/trails.json", "w");
-  serializeJson(doc, file);
+  if (!file) {
+    Serial.println("trail add failed: LittleFS open /trails.json failed");
+    return false;
+  }
+  if (serializeJson(doc, file) == 0) {
+    Serial.println("trail add failed: LittleFS write /trails.json failed");
+    file.close();
+    return false;
+  }
   file.close();
+  loadTrails();
+  Serial.printf("trails saved count=%u\n", static_cast<unsigned>(trails_.size()));
+  return true;
 }
 
-void StartStationApp::saveSettings() const {
+bool StartStationApp::saveSettings() {
   JsonDocument doc;
   doc["selectedRiderId"] = settings_.selectedRiderId;
   doc["selectedTrailId"] = settings_.selectedTrailId;
   File file = LittleFS.open("/settings.json", "w");
-  serializeJson(doc, file);
+  if (!file) {
+    Serial.println("settings save failed: LittleFS open /settings.json failed");
+    return false;
+  }
+  if (serializeJson(doc, file) == 0) {
+    Serial.println("settings save failed: LittleFS write /settings.json failed");
+    file.close();
+    return false;
+  }
   file.close();
+  return true;
 }
 
 String StartStationApp::ridersJson() const {
+  Serial.println("GET /api/riders");
+  Serial.printf("riders count=%u\n", static_cast<unsigned>(riders_.size()));
   JsonDocument doc;
   JsonArray array = doc.to<JsonArray>();
   for (const RiderRecord& rider : riders_) {
@@ -620,12 +670,17 @@ String StartStationApp::settingsJson() const {
   return output;
 }
 
-bool StartStationApp::addRider(const String& displayName, String& error) {
-  if (displayName.length() == 0) { error = "displayName is required"; return false; }
-  riders_.push_back({makeEntityId("r"), displayName, true, millis()});
-  if (settings_.selectedRiderId.length() == 0) settings_.selectedRiderId = riders_.back().id;
-  saveRiders();
-  saveSettings();
+bool StartStationApp::addRider(const String& displayName, String& error, RiderRecord* addedRider) {
+  String name = displayName;
+  name.trim();
+  Serial.printf("rider add request name=%s\n", name.c_str());
+  if (name.length() == 0) { error = "Rider name is required"; Serial.printf("rider add failed: %s\n", error.c_str()); return false; }
+  RiderRecord newRider{makeEntityId("r"), name, true, millis()};
+  riders_.push_back(newRider);
+  if (settings_.selectedRiderId.length() == 0) settings_.selectedRiderId = newRider.id;
+  if (!saveRiders()) { error = "Failed to save riders"; return false; }
+  if (addedRider != nullptr) *addedRider = newRider;
+  if (!saveSettings()) { error = "Failed to save settings"; Serial.printf("rider add failed: %s\n", error.c_str()); return false; }
   return true;
 }
 
@@ -641,11 +696,18 @@ bool StartStationApp::deactivateRider(const String& riderId, String& error) {
   return false;
 }
 
-bool StartStationApp::addTrail(const String& displayName, String& error) {
-  if (displayName.length() == 0) { error = "displayName is required"; return false; }
-  trails_.push_back({makeEntityId("t"), displayName, true, millis()});
-  if (settings_.selectedTrailId.length() == 0) settings_.selectedTrailId = trails_.back().id;
-  saveTrails(); saveSettings(); return true;
+bool StartStationApp::addTrail(const String& displayName, String& error, TrailRecord* addedTrail) {
+  String name = displayName;
+  name.trim();
+  Serial.printf("trail add request name=%s\n", name.c_str());
+  if (name.length() == 0) { error = "Trail name is required"; Serial.printf("trail add failed: %s\n", error.c_str()); return false; }
+  TrailRecord newTrail{makeEntityId("t"), name, true, millis()};
+  trails_.push_back(newTrail);
+  settings_.selectedTrailId = newTrail.id;
+  if (!saveTrails()) { error = "Failed to save trails"; return false; }
+  if (addedTrail != nullptr) *addedTrail = newTrail;
+  if (!saveSettings()) { error = "Failed to save settings"; Serial.printf("trail add failed: %s\n", error.c_str()); return false; }
+  return true;
 }
 
 bool StartStationApp::deactivateTrail(const String& trailId, String& error) {
@@ -705,10 +767,13 @@ String StartStationApp::escapeCsv(const String& value) const {
   return String("\"") + out + "\"";
 }
 
-void StartStationApp::appendRunCsv(const RunRecord& run) const {
+bool StartStationApp::appendRunCsv(const RunRecord& run) const {
   const bool exists = LittleFS.exists("/runs.csv");
   File file = LittleFS.open("/runs.csv", "a");
-  if (!file) return;
+  if (!file) {
+    Serial.println("runs.csv append FAIL open");
+    return false;
+  }
   if (!exists || file.size() == 0) {
     file.write(0xEF); file.write(0xBB); file.write(0xBF);
     file.println("RunId;Rider;Trail;StartMs;FinishMs;ResultMs;Result;Status;Source");
@@ -723,6 +788,8 @@ void StartStationApp::appendRunCsv(const RunRecord& run) const {
   file.print(run.status); file.print(';');
   file.println(run.finishSource);
   file.close();
+  Serial.println("runs.csv append OK");
+  return true;
 }
 
 String StartStationApp::runsCsv() const {

@@ -52,6 +52,13 @@ private:
   RunRecord currentRun_;
   RunRecord lastRun_;
   std::vector<RunRecord> runs_;
-  uint32_t countdownStartedMs_ = 0;
+  static constexpr uint8_t CountdownStepCount = 4;
+  String countdownStepText(uint8_t index) const;
+  uint32_t countdownStepDurationMs(uint8_t index) const;
+
+  bool countdownActive_ = false;
+  uint8_t countdownStepIndex_ = 0;
+  uint32_t countdownStepStartedMs_ = 0;
+  String countdownText_;
   uint32_t finishedAtMs_ = 0;
 };

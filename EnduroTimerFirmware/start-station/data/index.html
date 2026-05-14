@@ -15,8 +15,8 @@
 
     <section class="grid">
       <article class="card metric"><span>StartStation status</span><strong id="serviceFlags">—</strong><small>OLED / Wi-Fi / Web / LoRa</small></article>
-      <article class="card metric"><span>Finish station</span><strong id="finishOnline">—</strong><small id="finishState">state: —</small></article>
-      <article class="card metric"><span>Finish RSSI/SNR</span><strong id="loraStats">—</strong><small id="reverseLoraStats">reported Start RSSI/SNR: —</small><small id="lastPacket">packet: —</small></article>
+      <article class="card metric"><span>Связь / Finish station</span><strong id="finishOnline">—</strong><small id="finishState">state: —</small></article>
+      <article class="card metric"><span>Radio signal</span><strong id="loraStats">—</strong><small id="reverseLoraStats">reported Start RSSI/SNR: —</small><small id="lastPacket">packet: —</small></article>
       <article class="card metric"><span>Timer</span><strong id="runTimer">00:00</strong><small id="countdown">—</small></article>
       <article class="card metric"><span>Last result</span><strong id="lastResult">—</strong><small id="lastSource">—</small></article>
     </section>
@@ -30,7 +30,7 @@
         <p class="muted">Старт заезда — только кнопкой на верхнем терминале.</p>
         <p class="muted">Финиш — кнопкой на нижнем терминале.</p>
       </div>
-      <div class="buttons"><button id="resetBtn" class="secondary">Reset system</button><a class="button secondary" href="/api/export/runs.csv">Download CSV</a></div>
+      <div class="buttons"><button id="resetBtn" class="secondary">Reset system</button><a class="button secondary" href="/api/export/runs.csv">Скачать CSV</a></div>
       <p id="message" class="message"></p>
     </section>
 
@@ -38,7 +38,7 @@
       <article class="card">
         <h2>Riders</h2>
         <label>Selected rider <select id="selectedRider"></select></label>
-        <div class="inline"><input id="riderInput" placeholder="Display name"><button id="addRiderBtn">Добавить</button></div>
+        <div class="inline"><input id="riderInput" placeholder="Display name"><button id="addRiderBtn">Добавить райдера</button></div><p id="ridersError" class="message error"></p>
         <div class="table-wrap"><table><thead><tr><th>Name</th><th>Active</th><th>Actions</th></tr></thead><tbody id="ridersBody"></tbody></table></div>
       </article>
       <article class="card">
@@ -50,7 +50,7 @@
     </section>
 
     <section class="card">
-      <h2>Recent runs in RAM</h2>
+      <h2>Results / Recent finished runs</h2><p id="runsError" class="message error"></p>
       <div class="table-wrap"><table><thead><tr><th>Run ID</th><th>Rider</th><th>Trail</th><th>Result</th><th>Status</th><th>Source</th></tr></thead><tbody id="runsBody"><tr><td colspan="6">No runs yet</td></tr></tbody></table></div>
     </section>
   </main>

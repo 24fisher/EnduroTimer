@@ -95,32 +95,70 @@ bool WebServerController::begin() {
   server_.on("/api/settings", HTTP_GET, [this]() { sendJson(200, app_.settingsJson()); });
 
   server_.on("/api/riders/add", HTTP_POST, [this]() {
+    Serial.println("POST /api/riders/add");
+    const String body = server_.arg("plain");
     JsonDocument doc;
-    deserializeJson(doc, server_.arg("plain"));
+    DeserializationError jsonError = deserializeJson(doc, body);
+    if (body.length() == 0 || jsonError) {
+      Serial.printf("rider add failed: invalid payload error=%s\n", jsonError.c_str());
+      sendError(400, "Invalid rider payload");
+      return;
+    }
     String error;
-    if (!app_.addRider(doc["displayName"] | "", error)) { sendError(400, error); return; }
-    sendJson(200, String("{\"ok\":true}"));
+    const String displayName = doc["displayName"] | "";
+    RiderRecord added;
+    if (!app_.addRider(displayName, error, &added)) { sendError(400, error); return; }
+    JsonDocument out;
+    out["ok"] = true;
+    JsonObject rider = out["rider"].to<JsonObject>();
+    rider["riderId"] = added.id;
+    rider["displayName"] = added.displayName;
+    rider["isActive"] = added.isActive;
+    rider["createdAtMs"] = added.createdAtMs;
+    String output;
+    serializeJson(out, output);
+    sendJson(200, output);
   });
 
   server_.on("/api/riders/deactivate", HTTP_POST, [this]() {
     JsonDocument doc;
-    deserializeJson(doc, server_.arg("plain"));
+    DeserializationError jsonError = deserializeJson(doc, server_.arg("plain"));
+    if (jsonError) { sendError(400, "Invalid rider payload"); return; }
     String error;
     if (!app_.deactivateRider(doc["riderId"] | "", error)) { sendError(404, error); return; }
     sendJson(200, String("{\"ok\":true}"));
   });
 
   server_.on("/api/trails/add", HTTP_POST, [this]() {
+    Serial.println("POST /api/trails/add");
+    const String body = server_.arg("plain");
     JsonDocument doc;
-    deserializeJson(doc, server_.arg("plain"));
+    DeserializationError jsonError = deserializeJson(doc, body);
+    if (body.length() == 0 || jsonError) {
+      Serial.printf("trail add failed: invalid payload error=%s\n", jsonError.c_str());
+      sendError(400, "Invalid trail payload");
+      return;
+    }
     String error;
-    if (!app_.addTrail(doc["displayName"] | "", error)) { sendError(400, error); return; }
-    sendJson(200, String("{\"ok\":true}"));
+    const String displayName = doc["displayName"] | "";
+    TrailRecord added;
+    if (!app_.addTrail(displayName, error, &added)) { sendError(400, error); return; }
+    JsonDocument out;
+    out["ok"] = true;
+    JsonObject trail = out["trail"].to<JsonObject>();
+    trail["trailId"] = added.id;
+    trail["displayName"] = added.displayName;
+    trail["isActive"] = added.isActive;
+    trail["createdAtMs"] = added.createdAtMs;
+    String output;
+    serializeJson(out, output);
+    sendJson(200, output);
   });
 
   server_.on("/api/trails/deactivate", HTTP_POST, [this]() {
     JsonDocument doc;
-    deserializeJson(doc, server_.arg("plain"));
+    DeserializationError jsonError = deserializeJson(doc, server_.arg("plain"));
+    if (jsonError) { sendError(400, "Invalid trail payload"); return; }
     String error;
     if (!app_.deactivateTrail(doc["trailId"] | "", error)) { sendError(404, error); return; }
     sendJson(200, String("{\"ok\":true}"));
@@ -128,7 +166,8 @@ bool WebServerController::begin() {
 
   server_.on("/api/settings", HTTP_POST, [this]() {
     JsonDocument doc;
-    deserializeJson(doc, server_.arg("plain"));
+    DeserializationError jsonError = deserializeJson(doc, server_.arg("plain"));
+    if (jsonError) { sendError(400, "Invalid settings payload"); return; }
     String error;
     if (!app_.updateSettings(doc["selectedRiderId"] | "", doc["selectedTrailId"] | "", error)) { sendError(400, error); return; }
     sendJson(200, String("{\"ok\":true}"));

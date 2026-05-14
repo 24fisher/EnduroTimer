@@ -17,14 +17,20 @@ bool StartState::startCountdown(const String& riderId, const String& riderName, 
   currentRun_.trailId = trailId;
   currentRun_.trailName = trailName.length() > 0 ? trailName : String("Трасса по умолчанию");
   currentRun_.status = "Countdown";
-  countdownStartedMs_ = millis();
+  countdownActive_ = true;
+  countdownStepIndex_ = 0;
+  countdownStepStartedMs_ = millis();
+  countdownText_ = countdownStepText(countdownStepIndex_);
   state_ = StartRunState::Countdown;
   return true;
 }
 
 void StartState::resetActiveRun() {
   currentRun_ = RunRecord{};
-  countdownStartedMs_ = 0;
+  countdownActive_ = false;
+  countdownStepIndex_ = 0;
+  countdownStepStartedMs_ = 0;
+  countdownText_ = "";
   state_ = StartRunState::Ready;
 }
 
@@ -33,17 +39,24 @@ void StartState::setError() {
 }
 
 bool StartState::updateCountdown(uint32_t nowMs, RunRecord& runToStart) {
-  if (state_ != StartRunState::Countdown) return false;
+  if (state_ != StartRunState::Countdown || !countdownActive_) return false;
 
-  if (nowMs - countdownStartedMs_ >= 3700UL) {
-    currentRun_.startTimestampMs = nowMs;
-    currentRun_.status = "Riding";
-    state_ = StartRunState::Riding;
-    runToStart = currentRun_;
-    return true;
+  if (nowMs - countdownStepStartedMs_ < countdownStepDurationMs(countdownStepIndex_)) return false;
+
+  countdownStepIndex_ += 1;
+  if (countdownStepIndex_ < CountdownStepCount) {
+    countdownStepStartedMs_ = nowMs;
+    countdownText_ = countdownStepText(countdownStepIndex_);
+    return false;
   }
 
-  return false;
+  countdownActive_ = false;
+  countdownText_ = "";
+  currentRun_.startTimestampMs = nowMs;
+  currentRun_.status = "Riding";
+  state_ = StartRunState::Riding;
+  runToStart = currentRun_;
+  return true;
 }
 
 bool StartState::completeRun(const String& runId, uint32_t finishTimestampMs, const String& source, RunRecord& completedRun) {
@@ -87,13 +100,24 @@ String StartState::stateText() const {
 String StartState::countdownText(uint32_t nowMs) const {
   if (state_ != StartRunState::Countdown) return "";
 
-  const uint32_t elapsed = nowMs - countdownStartedMs_;
-  if (elapsed < 1000UL) return "3";
-  if (elapsed < 2000UL) return "2";
-  if (elapsed < 3000UL) return "1";
-  return "GO";
+  (void)nowMs;
+  return countdownText_;
 }
 
 String StartState::makeRunId() const {
   return "RUN-" + String(millis(), HEX);
+}
+
+String StartState::countdownStepText(uint8_t index) const {
+  switch (index) {
+    case 0: return "3";
+    case 1: return "2";
+    case 2: return "1";
+    case 3: return "GO";
+    default: return "";
+  }
+}
+
+uint32_t StartState::countdownStepDurationMs(uint8_t index) const {
+  return index == 3 ? 700UL : 1000UL;
 }
