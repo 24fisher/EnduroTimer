@@ -22,6 +22,8 @@ private:
   bool sendRadio(const RadioMessage& message);
   void sendStatus();
   void sendFinish();
+  void resendFinishFromButton(uint32_t nowMs);
+  uint8_t ridingAnimationFrame() const;
   void handleRadioMessage(const RadioMessage& message);
   void updateDisplay();
   void logHeartbeat(uint32_t nowMs);
@@ -35,14 +37,19 @@ private:
   bool oledReady_ = false;
   bool radioReady_ = false;
   uint32_t lastStatusMs_ = 0;
+  uint32_t lastAnyPacketMs_ = 0;
   uint32_t lastDisplayMs_ = 0;
   uint32_t lastFinishSendMs_ = 0;
   uint32_t heartbeatCounter_ = 0;
   uint32_t lastLedMs_ = 0;
   uint32_t lastHeartbeatMs_ = 0;
   uint8_t finishAttempts_ = 0;
+  uint8_t manualResendCount_ = 0;
   bool ledOn_ = false;
   String lastPacket_ = "-";
+  String lastLoRaRaw_ = "-";
+  int lastRssi_ = 0;
+  float lastSnr_ = 0.0F;
   int startRssi_ = 0;
   float startSnr_ = 0.0F;
   bool hasStartSignal_ = false;

@@ -72,6 +72,10 @@ private:
   bool sendRadio(const RadioMessage& message);
   void sendRunStart(const RunRecord& run);
   void sendFinishAck(const String& runId);
+  void sendStatus(uint32_t nowMs);
+  String finishSignalText() const;
+  String finishReportedStartSignalText() const;
+  uint8_t ridingAnimationFrame() const;
   void handleRadioMessage(const RadioMessage& message);
   bool finishOnline() const;
   uint32_t finishLastSeenAgoMs() const;
@@ -109,6 +113,9 @@ private:
   uint32_t lastFinishSeenMs_ = 0;
   uint32_t finishLastStatusMs_ = 0;
   uint32_t finishHeartbeatCount_ = 0;
+  uint32_t startHeartbeatCount_ = 0;
+  uint32_t lastStatusSendMs_ = 0;
+  uint32_t lastAnyPacketMs_ = 0;
   String finishState_ = "UNKNOWN";
   int finishRssi_ = 0;
   float finishSnr_ = 0.0F;
@@ -119,6 +126,8 @@ private:
   bool hasFinishReportedStartSignal_ = false;
   String lastFinishPacketType_ = "-";
   String lastLoRaRaw_ = "-";
+  int lastRssi_ = 0;
+  float lastSnr_ = 0.0F;
   bool finishOnlineState_ = false;
   ButtonDebouncer startButton_;
   String lastCountdownText_;

@@ -14,7 +14,8 @@ static constexpr int LORA_NSS = 8;
 static constexpr int LORA_DIO1 = 14;
 static constexpr int LORA_RST = 12;
 static constexpr int LORA_BUSY = 13;
-static constexpr uint8_t MaxFinishAttempts = 5;
+static constexpr uint8_t FINISH_MAX_RETRY_ATTEMPTS = 15;
+static constexpr uint32_t FINISH_RETRY_INTERVAL_MS = 1000UL;
 static constexpr uint32_t StatusIntervalMs = 1000UL;
 static constexpr uint32_t DisplayRefreshMs = 200UL;
 static constexpr uint32_t StartSignalTimeoutMs = 10000UL;
@@ -68,6 +69,7 @@ void FinishStationApp::loop() {
     if (state_.canFinish()) {
       state_.markFinishSent(finishTimestampMs);
       finishAttempts_ = 0;
+      manualResendCount_ = 0;
       lastFinishSendMs_ = 0;
       finishLineCrossedUntilMs_ = now + 2000UL;
       Serial.printf("Finish accepted runId=%s\n", state_.runId().c_str());
@@ -83,22 +85,22 @@ void FinishStationApp::loop() {
 #if ENABLE_OLED
       if (!display_.testPatternOnly()) display_.showLines({"FINISH TERMINAL", "NO ACTIVE RUN"});
 #endif
-    } else if (state_.state() == FinishRunState::FinishSent) {
-      Serial.println("FINISH button ignored: already sent");
+    } else if (state_.state() == FinishRunState::FinishSent || state_.state() == FinishRunState::Error) {
+      resendFinishFromButton(now);
     } else {
       Serial.printf("button ignored: state=%s\n", state_.stateText().c_str());
     }
   }
 
 
-  if (state_.state() == FinishRunState::FinishSent && finishAttempts_ < MaxFinishAttempts &&
-      now - lastFinishSendMs_ >= 1000UL) {
+  if (state_.state() == FinishRunState::FinishSent && finishAttempts_ < FINISH_MAX_RETRY_ATTEMPTS &&
+      now - lastFinishSendMs_ >= FINISH_RETRY_INTERVAL_MS) {
     sendFinish();
   }
 
-  if (state_.state() == FinishRunState::FinishSent && finishAttempts_ >= MaxFinishAttempts &&
-      now - lastFinishSendMs_ >= 1000UL) {
-    Serial.println("FINISH_ACK timeout.");
+  if (state_.state() == FinishRunState::FinishSent && finishAttempts_ >= FINISH_MAX_RETRY_ATTEMPTS &&
+      now - lastFinishSendMs_ >= FINISH_RETRY_INTERVAL_MS) {
+    Serial.printf("FINISH_ACK timeout: sent %u/%u.\n", finishAttempts_, FINISH_MAX_RETRY_ATTEMPTS);
     state_.fail();
   }
 
@@ -174,18 +176,32 @@ void FinishStationApp::pollRadio() {
   String payload;
   const int rxState = radio.receive(payload, 0);
   if (rxState == RADIOLIB_ERR_NONE) {
-    Serial.printf("LoRa RX raw: %s\n", payload.c_str());
+    lastAnyPacketMs_ = millis();
+    lastLoRaRaw_ = payload;
+    if (lastLoRaRaw_.length() > 96) lastLoRaRaw_ = lastLoRaRaw_.substring(0, 96);
+    lastRssi_ = static_cast<int>(radio.getRSSI());
+    lastSnr_ = radio.getSNR();
     RadioMessage message;
     String error;
     if (!RadioProtocol::deserialize(payload, message, &error)) {
-      Serial.printf("LoRa parse failed raw=%s error=%s\n", payload.c_str(), error.c_str());
+      lastPacket_ = "PARSE_FAILED";
+      Serial.printf("LORA parse failed raw=%s error=%s\n", payload.c_str(), error.c_str());
       return;
     }
-    startRssi_ = static_cast<int>(radio.getRSSI());
-    startSnr_ = radio.getSNR();
-    startLastSeenMs_ = millis();
-    hasStartSignal_ = true;
     lastPacket_ = RadioProtocol::typeToString(message.type);
+    Serial.printf("LORA RX type=%s rssi=%d snr=%.1f raw=%s\n", lastPacket_.c_str(), lastRssi_, static_cast<double>(lastSnr_), lastLoRaRaw_.c_str());
+    if (message.type == RadioMessageType::Unknown) {
+      Serial.printf("LORA unknown type=%s raw=%s\n", lastPacket_.c_str(), payload.c_str());
+    }
+    if (message.stationId.length() == 0) {
+      Serial.printf("LORA missing stationId raw=%s\n", payload.c_str());
+    }
+    if (message.stationId == "start") {
+      startRssi_ = lastRssi_;
+      startSnr_ = lastSnr_;
+      startLastSeenMs_ = millis();
+      hasStartSignal_ = true;
+    }
     handleRadioMessage(message);
   }
 #else
@@ -248,22 +264,52 @@ void FinishStationApp::sendFinish() {
   RadioMessage message;
   message.type = RadioMessageType::Finish;
   message.messageId = RadioProtocol::makeMessageId("finish");
+  message.stationId = "finish";
   message.runId = state_.runId();
   message.finishTimestampMs = state_.finishTimestampMs();
   message.source = "BUTTON_STUB";
   finishAttempts_ += 1;
   lastFinishSendMs_ = clock_.nowMs();
-  Serial.printf("FINISH sent attempt=%u\n", finishAttempts_);
+  Serial.printf("FINISH sent attempt=%u/%u\n", finishAttempts_, FINISH_MAX_RETRY_ATTEMPTS);
   if (sendRadio(message)) {
     Serial.printf("[FinishStation] FINISH sent: run=%s attempt=%u/%u\n", state_.runId().c_str(),
-                  finishAttempts_, MaxFinishAttempts);
+                  finishAttempts_, FINISH_MAX_RETRY_ATTEMPTS);
   } else {
     Serial.printf("[FinishStation] FINISH send failed: run=%s attempt=%u/%u\n", state_.runId().c_str(),
-                  finishAttempts_, MaxFinishAttempts);
+                  finishAttempts_, FINISH_MAX_RETRY_ATTEMPTS);
   }
 }
 
+void FinishStationApp::resendFinishFromButton(uint32_t nowMs) {
+  if (state_.runId().length() == 0 || state_.finishTimestampMs() == 0) {
+    Serial.println("FINISH button ignored: no saved finish to resend");
+    showNoRunUntilMs_ = nowMs + 1500UL;
+    return;
+  }
+  const bool resendAfterTimeout = state_.state() == FinishRunState::Error;
+  if (resendAfterTimeout) {
+    finishAttempts_ = 0;
+    state_.markFinishSent(state_.finishTimestampMs());
+    Serial.println("FINISH button short press: resend after ACK timeout");
+  } else {
+    manualResendCount_ += 1;
+    Serial.printf("FINISH button short press: manual resend attempt=%u\n", finishAttempts_ + 1);
+  }
+  finishLineCrossedUntilMs_ = 0;
+  sendFinish();
+#if ENABLE_OLED
+  if (!display_.testPatternOnly()) {
+    display_.showLines({"FINISH TERMINAL", resendAfterTimeout ? "RESEND FINISH" : "FINISH RESENT", "Sent: " + String(finishAttempts_) + "/" + String(FINISH_MAX_RETRY_ATTEMPTS)});
+  }
+#endif
+}
+
 void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
+  if (message.type == RadioMessageType::Status && message.stationId == "start") {
+    Serial.printf("START STATUS received heartbeat=%lu rssi=%d snr=%.1f\n", static_cast<unsigned long>(message.heartbeat), startRssi_, static_cast<double>(startSnr_));
+    return;
+  }
+
   if (message.type == RadioMessageType::RunStart) {
     Serial.printf("RUN_START received runId=%s start=%lu\n", message.runId.c_str(),
                   static_cast<unsigned long>(message.startTimestampMs));
@@ -273,6 +319,7 @@ void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
     Serial.printf("Finish timer started localMs=%lu\n", static_cast<unsigned long>(localStartMs));
     sensor_.arm(message.runId, message.startTimestampMs);
     finishAttempts_ = 0;
+    manualResendCount_ = 0;
     buzzer_.beep("RUN_START");
     return;
   }
@@ -282,6 +329,7 @@ void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
     sensor_.reset();
     state_.ackFinish();
     finishAttempts_ = 0;
+    manualResendCount_ = 0;
     showAckOkUntilMs_ = millis() + 1500UL;
 #if ENABLE_OLED
     if (!display_.testPatternOnly()) {
@@ -294,7 +342,7 @@ void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
 void FinishStationApp::updateDisplay() {
   const String runShort = state_.runId().length() > 0 ? state_.runId().substring(max(0, static_cast<int>(state_.runId().length()) - 6)) : "-";
   const bool startOnline = hasStartSignal_ && startLastSeenMs_ > 0 && millis() - startLastSeenMs_ <= StartSignalTimeoutMs;
-  const String startSignal = startOnline ? String("START:") + String(startRssi_) + "dBm" : String("START:NO SIGNAL");
+  const String startSignal = startOnline ? String("START:") + String(startRssi_) + "dBm" : String("START:NO SIG");
 
   if (finishLineCrossedUntilMs_ > millis()) {
     display_.showFinishLineCrossed();
@@ -312,17 +360,20 @@ void FinishStationApp::updateDisplay() {
   }
 
   if (state_.state() == FinishRunState::Error) {
-    display_.showLines({"FINISH TERMINAL", "ERROR", "ACK TIMEOUT", "Sent: " + String(finishAttempts_) + "/5"});
+    display_.showLines({"FINISH TERMINAL", "ACK TIMEOUT", "PRESS BTN RESEND", "Sent: " + String(finishAttempts_) + "/" + String(FINISH_MAX_RETRY_ATTEMPTS)});
     return;
   }
 
   if (state_.state() == FinishRunState::WaitFinish) {
-    display_.showLines({"FINISH TERMINAL", "RIDING", "Rider: " + toDisplayText(state_.riderName(), 16), "Timer: " + formatDurationMs(state_.elapsedMs(millis())).substring(0, 5), "Btn: FINISH", startSignal});
+    String anim = String("RIDING ");
+    for (uint8_t i = 0; i < ridingAnimationFrame(); ++i) anim += " ";
+    anim += ">";
+    display_.showLines({"FINISH TERMINAL", anim, "Rider: " + toDisplayText(state_.riderName(), 16), "Time: " + formatDurationMs(state_.elapsedMs(millis())).substring(0, 5), startSignal});
     return;
   }
 
   if (state_.state() == FinishRunState::FinishSent) {
-    display_.showLines({"FINISH TERMINAL", "FINISH SENT", "Sent: " + String(finishAttempts_) + "/5", startSignal});
+    display_.showLines({"FINISH TERMINAL", "FINISH SENT", "Sent: " + String(finishAttempts_) + "/" + String(FINISH_MAX_RETRY_ATTEMPTS), startSignal});
     return;
   }
 
@@ -332,6 +383,10 @@ void FinishStationApp::updateDisplay() {
     "State: IDLE",
     startSignal,
   });
+}
+
+uint8_t FinishStationApp::ridingAnimationFrame() const {
+  return static_cast<uint8_t>((millis() / 250UL) % 10UL);
 }
 
 void FinishStationApp::logHeartbeat(uint32_t nowMs) {
