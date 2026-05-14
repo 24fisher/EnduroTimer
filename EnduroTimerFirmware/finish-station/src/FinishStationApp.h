@@ -12,6 +12,7 @@
 #include "LinkStatus.h"
 #include "LedIndicator.h"
 #include "TimeUtils.h"
+#include "RaceClock.h"
 
 class FinishStationApp {
 public:
@@ -30,6 +31,10 @@ private:
   void sendHello(uint32_t nowMs);
   void sendHelloAck(uint32_t nowMs);
   void sendRunStartAck(const String& runId);
+  void sendSyncRequest(uint32_t nowMs);
+  void sendSyncPong(const RadioMessage& ping);
+  void sendSyncAck(const RadioMessage& apply);
+  void enterSyncReady(uint32_t nowMs);
   bool discoveryActive() const;
   bool priorityTxPending(uint32_t nowMs) const;
   void acceptFinishButton(uint32_t nowMs);
@@ -44,6 +49,7 @@ private:
   String makeBootId(const char* stationId) const;
 
   ClockService clock_;
+  RaceClock raceClock_;
   BatteryService battery_;
   OledDisplay display_;
   BuzzerStub buzzer_;
@@ -81,6 +87,11 @@ private:
   float lastSnr_ = 0.0F;
   LinkStatus startLink_;
   String startState_ = "Unknown";
+  bool syncReady_ = false;
+  uint32_t syncReadyUntilMs_ = 0;
+  uint32_t syncAccuracyMs_ = 0;
+  uint32_t lastSyncMs_ = 0;
+  String syncStatusText_ = "SYNC REQUIRED";
   uint32_t showNoRunUntilMs_ = 0;
   uint32_t showAckOkUntilMs_ = 0;
   uint32_t finishLineCrossedUntilMs_ = 0;

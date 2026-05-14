@@ -1,4 +1,4 @@
-console.log('EnduroTimer UI loaded');
+console.log("EnduroTimer UI loaded v0.09");
 const $ = (id) => document.getElementById(id);
 let consecutiveFetchErrors = 0;
 let riders = [];
@@ -81,6 +81,14 @@ function renderStatus(status) {
   const finishBat = status.finishBatteryAvailable ? `${status.finishBatteryPercent}% / ${Number(status.finishBatteryVoltage).toFixed(2)}V` : 'USB/--';
   $('debugStartBattery').textContent = startBat;
   $('debugFinishBattery').textContent = finishBat;
+  if ($('uiLoaded')) $('uiLoaded').textContent = 'yes';
+  if ($('raceClockState')) $('raceClockState').textContent = status.raceClockSynced ? 'SYNCED' : 'NOT SYNCED';
+  if ($('raceClockState')) $('raceClockState').className = status.raceClockSynced ? 'online' : 'offline';
+  if ($('syncAccuracy')) $('syncAccuracy').textContent = status.syncAccuracyMs === undefined ? '—' : `${status.syncAccuracyMs} ms`;
+  if ($('finishOffset')) $('finishOffset').textContent = status.finishRaceClockOffsetMs === undefined ? `${status.raceClockOffsetMs || 0} ms` : `${status.finishRaceClockOffsetMs} ms`;
+  if ($('raceClockNow')) $('raceClockNow').textContent = status.raceClockNowMs || '—';
+  if ($('lastSync')) $('lastSync').textContent = ageText(status.lastSyncAgoMs);
+  if ($('remoteBootId')) $('remoteBootId').textContent = status.remoteBootId || status.finishBootId || '—';
   $('riderName').textContent = status.currentRiderName || 'Test Rider';
   $('trailName').textContent = status.currentTrailName || 'Default trail';
   $('selectedTrailName').textContent = status.selectedTrailName || status.currentTrailName || 'Default trail';
@@ -196,6 +204,7 @@ async function addTrail() {
     input.value = '';
     await refreshCatalogs();
     settings = await api('/api/settings');
+    await refreshStatus();
     $('trailsMessage').textContent = 'Трасса добавлена';
     $('trailsMessage').className = 'message ok';
   } catch (error) {
@@ -207,8 +216,12 @@ async function addTrail() {
 
 function bindUi() {
   $('resetBtn').addEventListener('click', async () => { try { await api('/api/system/reset', { method: 'POST' }); showMessage('Active run reset.'); refresh(); } catch (e) { showMessage(e.message, true); } });
-  $('addRiderButton').addEventListener('click', addRider);
-  $('addTrailButton').addEventListener('click', addTrail);
+  const addRiderButton = $('addRiderButton');
+  if (!addRiderButton) console.error('addRiderButton not found');
+  else addRiderButton.addEventListener('click', addRider);
+  const addTrailButton = $('addTrailButton');
+  if (!addTrailButton) console.error('addTrailButton not found');
+  else addTrailButton.addEventListener('click', addTrail);
   $('selectedRider').addEventListener('change', saveSettings);
   $('selectedTrail').addEventListener('change', saveSettings);
   $('syncTimeBtn').addEventListener('click', async () => { try { await syncBrowserTime(true); } catch (e) { showMessage(e.message, true); } });

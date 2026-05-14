@@ -56,6 +56,11 @@ String RadioProtocol::typeToString(RadioMessageType type) {
     case RadioMessageType::Hello: return "HELLO";
     case RadioMessageType::HelloAck: return "HELLO_ACK";
     case RadioMessageType::StartStatus: return "START_STATUS";
+    case RadioMessageType::SyncRequest: return "SYNC_REQUEST";
+    case RadioMessageType::SyncPing: return "SYNC_PING";
+    case RadioMessageType::SyncPong: return "SYNC_PONG";
+    case RadioMessageType::SyncApply: return "SYNC_APPLY";
+    case RadioMessageType::SyncAck: return "SYNC_ACK";
     default: return "UNKNOWN";
   }
 }
@@ -71,6 +76,11 @@ RadioMessageType RadioProtocol::typeFromString(const String& type) {
   if (type == "HELLO") return RadioMessageType::Hello;
   if (type == "HELLO_ACK") return RadioMessageType::HelloAck;
   if (type == "START_STATUS") return RadioMessageType::StartStatus;
+  if (type == "SYNC_REQUEST") return RadioMessageType::SyncRequest;
+  if (type == "SYNC_PING") return RadioMessageType::SyncPing;
+  if (type == "SYNC_PONG") return RadioMessageType::SyncPong;
+  if (type == "SYNC_APPLY") return RadioMessageType::SyncApply;
+  if (type == "SYNC_ACK") return RadioMessageType::SyncAck;
   return RadioMessageType::Unknown;
 }
 
@@ -78,7 +88,14 @@ bool RadioProtocol::serializeCompactStatus(const RadioMessage& message, String& 
   JsonDocument doc;
   doc["t"] = "S";
   doc["sid"] = compactStationId(message.stationId);
+  if (message.version.length() > 0) doc["ver"] = message.version;
+  if (message.bootId.length() > 0) doc["bid"] = message.bootId;
   if (message.state.length() > 0) doc["st"] = compactState(message.state);
+  if (message.raceClockSynced) doc["rcs"] = true;
+  if (message.raceClockNowMs > 0) doc["rcn"] = message.raceClockNowMs;
+  if (message.syncAccuracyMs > 0) doc["sacc"] = message.syncAccuracyMs;
+  if (message.offsetToMasterMs != 0) doc["off"] = message.offsetToMasterMs;
+  if (message.hasBatteryVoltage) { doc["bv"] = message.batteryVoltage; doc["bp"] = message.batteryPercent; }
   if (message.heartbeat > 0) doc["hb"] = message.heartbeat;
   if (message.uptimeMs > 0) doc["up"] = message.uptimeMs / 1000UL;
   if (message.hasStartRssi) doc["sr"] = message.startRssi;
@@ -95,6 +112,8 @@ bool RadioProtocol::serializeEmergencyStatus(const RadioMessage& message, String
   JsonDocument doc;
   doc["t"] = "S";
   doc["sid"] = compactStationId(message.stationId);
+  if (message.version.length() > 0) doc["ver"] = message.version;
+  if (message.bootId.length() > 0) doc["bid"] = message.bootId;
   if (message.heartbeat > 0) doc["hb"] = message.heartbeat;
 
   output = "";
@@ -123,6 +142,19 @@ bool RadioProtocol::serialize(const RadioMessage& message, String& output) {
   if (message.uptimeMs > 0) doc["uptimeMs"] = message.uptimeMs;
   if (message.heartbeat > 0) doc["heartbeat"] = message.heartbeat;
   if (message.startTimestampMs > 0) doc["startTimestampMs"] = message.startTimestampMs;
+  if (message.raceStartTimeMs > 0) doc["raceStartTimeMs"] = message.raceStartTimeMs;
+  if (message.finishRaceTimeMs > 0) doc["finishRaceTimeMs"] = message.finishRaceTimeMs;
+  if (message.timingSource.length() > 0) doc["timingSource"] = message.timingSource;
+  if (message.syncId.length() > 0) doc["syncId"] = message.syncId;
+  if (message.t1StartRaceMs > 0) doc["t1StartRaceMs"] = message.t1StartRaceMs;
+  if (message.t2FinishLocalMs > 0) doc["t2FinishLocalMs"] = message.t2FinishLocalMs;
+  if (message.t3FinishLocalMs > 0) doc["t3FinishLocalMs"] = message.t3FinishLocalMs;
+  if (message.offsetToMasterMs != 0) doc["offsetToMasterMs"] = message.offsetToMasterMs;
+  if (message.roundTripMs > 0) doc["roundTripMs"] = message.roundTripMs;
+  if (message.networkDelayMs > 0) doc["networkDelayMs"] = message.networkDelayMs;
+  if (message.syncAccuracyMs > 0) doc["syncAccuracyMs"] = message.syncAccuracyMs;
+  if (message.raceClockSynced) doc["raceClockSynced"] = true;
+  if (message.raceClockNowMs > 0) doc["raceClockNowMs"] = message.raceClockNowMs;
   if (message.finishTimestampMs > 0) doc["finishTimestampMs"] = message.finishTimestampMs;
   if (message.elapsedMs > 0) doc["elapsedMs"] = message.elapsedMs;
   if (message.resultMs > 0) doc["resultMs"] = message.resultMs;
@@ -176,6 +208,23 @@ bool RadioProtocol::deserialize(const String& input, RadioMessage& output, Strin
   output.heartbeat = doc["heartbeat"] | 0;
   if (output.heartbeat == 0) output.heartbeat = doc["hb"] | 0;
   output.startTimestampMs = doc["startTimestampMs"] | 0;
+  output.raceStartTimeMs = doc["raceStartTimeMs"] | 0;
+  output.finishRaceTimeMs = doc["finishRaceTimeMs"] | 0;
+  output.timingSource = doc["timingSource"] | "";
+  output.syncId = doc["syncId"] | "";
+  output.t1StartRaceMs = doc["t1StartRaceMs"] | 0;
+  output.t2FinishLocalMs = doc["t2FinishLocalMs"] | 0;
+  output.t3FinishLocalMs = doc["t3FinishLocalMs"] | 0;
+  output.offsetToMasterMs = doc["offsetToMasterMs"] | 0;
+  if (output.offsetToMasterMs == 0) output.offsetToMasterMs = doc["off"] | 0;
+  output.roundTripMs = doc["roundTripMs"] | 0;
+  output.networkDelayMs = doc["networkDelayMs"] | 0;
+  output.syncAccuracyMs = doc["syncAccuracyMs"] | 0;
+  if (output.syncAccuracyMs == 0) output.syncAccuracyMs = doc["sacc"] | 0;
+  output.raceClockSynced = doc["raceClockSynced"] | false;
+  if (!output.raceClockSynced) output.raceClockSynced = doc["rcs"] | false;
+  output.raceClockNowMs = doc["raceClockNowMs"] | 0;
+  if (output.raceClockNowMs == 0) output.raceClockNowMs = doc["rcn"] | 0;
   output.localRunStartReceivedMillis = doc["localRunStartReceivedMillis"] | 0;
   output.finishLocalElapsedMs = doc["finishLocalElapsedMs"] | 0;
   output.remoteStartTimestampMs = doc["remoteStartTimestampMs"] | 0;

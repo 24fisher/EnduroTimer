@@ -4,11 +4,11 @@ void FinishState::begin() {
   state_ = FinishRunState::Idle;
 }
 
-void FinishState::startRun(const String& runId, const String& riderName, const String& trailName, uint32_t startTimestampMs, uint32_t localReceivedMs) {
+void FinishState::startRun(const String& runId, const String& riderName, const String& trailName, uint32_t raceStartTimeMs, uint32_t localReceivedMs) {
   runId_ = runId;
   riderName_ = riderName.length() > 0 ? riderName : String("Test Rider");
   trailName_ = trailName;
-  startTimestampMs_ = startTimestampMs;
+  startTimestampMs_ = raceStartTimeMs;
   localRunStartReceivedMillis_ = localReceivedMs;
   finishTimestampMs_ = 0;
   state_ = FinishRunState::Riding;
@@ -38,8 +38,8 @@ void FinishState::ackTimeout() {
 }
 
 uint32_t FinishState::elapsedMs(uint32_t nowMs) const {
-  if (localRunStartReceivedMillis_ == 0 || state_ == FinishRunState::Idle) return 0;
-  return nowMs - localRunStartReceivedMillis_;
+  if (startTimestampMs_ == 0 || state_ == FinishRunState::Idle) return 0;
+  return nowMs >= startTimestampMs_ ? nowMs - startTimestampMs_ : 0;
 }
 
 String FinishState::stateText() const {

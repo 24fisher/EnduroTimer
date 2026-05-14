@@ -24,9 +24,12 @@ struct RunRecord {
   uint64_t startedAtEpochMs = 0;
   String startedAtText;
   uint32_t startTimestampMs = 0;
+  uint32_t raceStartTimeMs = 0;
+  uint32_t finishRaceTimeMs = 0;
   uint32_t finishTimestampMs = 0;
   uint32_t resultMs = 0;
   String resultFormatted;
+  uint32_t syncAccuracyMs = 0;
   String timingSource;
   String timingNote;
   String finishSource;
@@ -40,7 +43,9 @@ public:
   void resetActiveRun();
   void setError();
   bool updateCountdown(uint32_t nowMs, RunRecord& runToStart);
+  void setRaceStartTime(uint32_t raceStartTimeMs, uint32_t syncAccuracyMs);
   bool completeRun(const String& runId, uint32_t finishTimestampMs, const String& source, RunRecord& completedRun);
+  bool completeRunSynced(const String& runId, uint32_t finishRaceTimeMs, uint32_t resultMs, const String& source, uint32_t syncAccuracyMs, RunRecord& completedRun);
   void tickAutoReady(uint32_t nowMs);
 
   StartRunState state() const { return state_; }
