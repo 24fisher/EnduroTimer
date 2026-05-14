@@ -20,8 +20,9 @@ private:
   void beginRadio();
   void updateLed(uint32_t nowMs);
   void pollRadio();
-  bool sendRadio(const RadioMessage& message);
-  void sendStatus();
+  bool sendRadio(const RadioMessage& message, int* resultCode = nullptr);
+  void restoreRadioReceiveMode();
+  void sendStatus(uint32_t nowMs);
   void sendFinish();
   void resendFinishFromButton(uint32_t nowMs);
   uint8_t ridingAnimationFrame() const;
@@ -39,10 +40,12 @@ private:
   bool oledReady_ = false;
   bool radioReady_ = false;
   uint32_t lastStatusMs_ = 0;
+  uint32_t lastStatusSentOkMs_ = 0;
   uint32_t lastAnyPacketMs_ = 0;
   uint32_t lastDisplayMs_ = 0;
   uint32_t lastFinishSendMs_ = 0;
   uint32_t heartbeatCounter_ = 0;
+  uint32_t startHeartbeatCount_ = 0;
   uint32_t lastLedMs_ = 0;
   uint32_t lastHeartbeatMs_ = 0;
   uint8_t finishAttempts_ = 0;

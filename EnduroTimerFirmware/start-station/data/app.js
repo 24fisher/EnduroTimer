@@ -51,6 +51,17 @@ function renderStatus(status) {
   const reverseSignal = status.finishReportedStartLinkActive ? (status.finishReportedStartSignalText || signalText(status.finishReportedStartRssi, status.finishReportedStartSnr)) : 'NO SIGNAL';
   $('reverseLoraStats').textContent = `Сигнал старта по данным финиша: ${reverseSignal} · age: ${ageText(status.finishReportedStartLastSeenAgoMs)} · пакетов: ${status.finishReportedStartPacketCount || 0}`;
   $('lastPacket').textContent = `Последний пакет: ${status.finishLastPacketType || status.lastLoRaPacketType || status.lastPacketType || '—'} · raw: ${status.lastLoRaRawShort || '—'}`;
+  const finishLastPacketType = status.finishLastPacketType || status.lastLoRaPacketType || status.lastPacketType || '—';
+  $('debugStartHb').textContent = status.startHeartbeatCount || 0;
+  $('debugFinishHb').textContent = status.finishHeartbeatCount || 0;
+  $('debugLastPacket').textContent = finishLastPacketType;
+  $('debugFinishAge').textContent = ageText(lastSeen);
+  $('debugFinishRssi').textContent = status.finishRssi === null || status.finishRssi === undefined ? '—' : `${Number(status.finishRssi).toFixed(0)} dBm`;
+  $('debugFinishSnr').textContent = status.finishSnr === null || status.finishSnr === undefined ? '—' : `${Number(status.finishSnr).toFixed(1)} dB`;
+  $('debugSignal').textContent = finishSignal;
+  $('debugStartStatusAge').textContent = ageText(status.lastStartStatusSentAgoMs);
+  $('debugReverseSignal').textContent = reverseSignal;
+  $('debugReverseAge').textContent = ageText(status.finishReportedStartLastSeenAgoMs);
   $('countdown').textContent = status.countdownText ? `Countdown: ${status.countdownText}` : 'Countdown: —';
   $('runTimer').textContent = status.currentRunElapsedFormatted || '00:00';
   $('lastResult').textContent = status.lastResultFormatted || '—';

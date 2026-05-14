@@ -56,9 +56,11 @@ Signal display rules:
 - `FIN:-72dBm` means StartStation is currently hearing packets from FinishStation.
 - `START:-33dBm` means FinishStation is currently hearing packets from StartStation.
 - StartStation sends a `STATUS` heartbeat with `stationId: "start"` every 1000 ms, so FinishStation can show StartStation signal while idle.
-- FinishStation sends a `STATUS` heartbeat with `stationId: "finish"` every 1000 ms in all states: `Idle`, externally displayed `Riding`, `FinishSent`, and `Error` / ACK timeout.
+- FinishStation sends a `STATUS` heartbeat with `stationId: "finish"` every 1000 ms in all states: `Idle`, externally displayed `Riding`, `FinishSent`, and `Error` / ACK timeout. FINISH retry packets keep priority; if a retry and STATUS would be transmitted in the same millisecond, STATUS is deferred to the next loop.
 - Any valid packet from the opposite station updates link status, not only `STATUS`. StartStation updates the FinishStation link from `STATUS`, `FINISH`, and any other valid `stationId: "finish"` packet. FinishStation updates the StartStation link from `STATUS`, `RUN_START`, `FINISH_ACK`, and any other valid `stationId: "start"` packet.
-- Every received LoRa packet logs `LORA RX type=... rssi=... snr=... raw=...`; valid opposite-station packets also log `LORA RX from=... type=... rssi=... snr=... age=0 count=...`. JSON parse failures, missing `stationId`, and unknown `type` are logged explicitly.
+- Every received LoRa packet logs `LORA RX type=... rssi=... snr=... raw=...`; valid opposite-station packets also log `LORA RX from=... type=... rssi=... snr=... age=0 count=...`. JSON parse failures, missing `stationId`, and unknown `type` are logged explicitly with the raw packet.
+- After every LoRa TX (`STATUS`, `RUN_START`, `FINISH`, or `FINISH_ACK`), the current firmware uses polling receive, so the next `pollRadio()` call explicitly re-enters receive/listen mode after the short blocking transmit. To avoid STATUS log spam, Serial prints `LoRa TX STATUS ok` and `LoRa RX mode restored` for every fifth STATUS heartbeat and prints the TX/RX-restore diagnostics for non-STATUS packets.
+- `STATUS payload len=...` is logged for every fifth STATUS heartbeat and whenever a STATUS payload exceeds 200 bytes. STATUS packets are serialized in a compact JSON form to keep the LoRa payload small while remaining accepted by the same deserializer.
 - FinishStation includes its reported StartStation link fields (`startLinkActive`, `startRssi`, `startSnr`, `startLastSeenAgoMs`, and `startPacketCount`) in `STATUS`, so StartStation can show both radio directions in `/api/status`.
 
 ## Riders, trails, settings, and results
@@ -161,6 +163,11 @@ Returns current status, for example:
   "finishPacketCount": 42,
   "finishLastPacketType": "STATUS",
   "finishHeartbeatCount": 42,
+  "startHeartbeatCount": 43,
+  "lastStartStatusSentAgoMs": 500,
+  "finishActiveRunId": "RUN-...",
+  "finishRiderName": "Test Rider",
+  "finishElapsedMs": 12345,
   "finishRssi": -72,
   "finishSnr": 8.5,
   "finishReportedStartLinkActive": true,
@@ -212,6 +219,7 @@ The LittleFS Web UI shows:
 - FinishStation signal, state, heartbeat, last packet age, packet count, and last packet type. Missing radio packets are shown as `NO SIGNAL`, not `OFF`.
 - Signal from FinishStation (`Signal from finish: -72 dBm`) and signal reported by FinishStation from StartStation (`Signal reported by finish from start: -33 dBm`) with reverse-link age and packet count.
 - Last LoRa packet type and raw packet preview.
+- A dedicated **LoRa debug** block: Start heartbeat sent, Finish heartbeat received, last packet from Finish, last seen age, Finish RSSI/SNR, active signal text, last Start STATUS sent age, Finish-reported Start signal, and Finish-reported Start last-seen age. If signal appears only after a `FINISH`, use this block to verify whether STATUS heartbeat TX/RX is running and whether the last packet type changes back to `STATUS`.
 - Countdown and current run timer.
 - Current rider and current trail.
 - Visible riders and trails sections, including select, add, deactivate, and per-section error messages. Empty rider/trail add forms show `Введите имя райдера` or `Введите название трассы`.
@@ -237,26 +245,21 @@ The UI polls `/api/status` once per second, `/api/runs` every two seconds, and r
 }
 ```
 
-FinishStation `STATUS` includes state, active run, timer, button readiness, and reverse signal diagnostics:
+`STATUS` is sent once per second by both stations and does not require a run ID. It is compact on the radio link to keep the LoRa payload below the practical 200-byte target. The deserializer also accepts the older verbose field names.
+
+StartStation example:
 
 ```json
-{
-  "type": "STATUS",
-  "stationId": "finish",
-  "state": "Riding",
-  "uptimeMs": 123456,
-  "heartbeat": 42,
-  "activeRunId": "RUN-...",
-  "riderName": "Test Rider",
-  "elapsedMs": 12345,
-  "startLinkActive": true,
-  "startRssi": -70,
-  "startSnr": 8.5,
-  "startLastSeenAgoMs": 250,
-  "startPacketCount": 12,
-  "buttonReady": true
-}
+{"t":"S","mid":"start-status-...","sid":"start","st":"Ready","up":123456,"ts":123456,"hb":43,"rid":"RUN-...","rn":"Test Rider","el":12345}
 ```
+
+FinishStation example with reverse-link diagnostics:
+
+```json
+{"t":"S","mid":"finish-status-...","sid":"finish","st":"Idle","up":123456,"ts":123456,"hb":42,"rid":"RUN-...","rn":"Test Rider","el":12345,"sl":true,"sp":12,"sla":250,"sr":-70,"ss":8.5}
+```
+
+Compact fields map to the readable form as follows: `t:S` = `type:STATUS`, `sid` = `stationId`, `st` = `state`, `up` = `uptimeMs`, `ts` = `timestampMs`, `hb` = `heartbeat`, `rid` = `activeRunId/runId`, `rn` = `riderName`, `el` = `elapsedMs`, `sl/sp/sla/sr/ss` = FinishStation's reported StartStation link active, packet count, last-seen age, RSSI, and SNR.
 
 FinishStation sends and retries `FINISH` once per second until `FINISH_ACK` or 15 attempts. A short FinishStation button press in `FinishSent` immediately resends the same saved `FINISH`; a short press after ACK timeout resets attempts to 1 and resends the last `FINISH` without changing the saved finish timestamp:
 
@@ -310,7 +313,7 @@ START TERMINAL
 FIN:-72dBm
 Rider: Test Rider
 Trail: Default trail
-Last: 00:20.1
+PKT:STATUS
 ```
 
 StartStation Countdown uses immediate rendering on every countdown text change and is not throttled by the normal status screen refresh:
@@ -327,9 +330,9 @@ StartStation Riding includes a non-blocking moving `>` animation updated from `m
 ```text
 START TERMINAL
 RIDING >
-Rider: Test Rider
 Time: 00:12
 FIN:-72dBm
+PKT:STATUS
 ```
 
 StartStation Finished:
@@ -348,6 +351,7 @@ FINISH TERMINAL
 LoRa: OK
 State: IDLE
 START:-70dBm
+PKT:STATUS
 ```
 
 FinishStation Riding also shows the moving `>` animation:
@@ -355,9 +359,9 @@ FinishStation Riding also shows the moving `>` animation:
 ```text
 FINISH TERMINAL
 RIDING >
-Rider: Test Rider
 Time: 00:12
 START:-70dBm
+PKT:STATUS
 ```
 
 FinishStation finish-line overlay appears immediately after an accepted finish button press while retries and ACK handling continue in the background:
@@ -375,6 +379,7 @@ FINISH TERMINAL
 FINISH SENT
 Sent: x/15
 START:-70dBm
+PKT:STATUS
 ```
 
 FinishStation ACK:
@@ -417,11 +422,12 @@ If files are still missing, the fallback page at `http://192.168.4.1/` should ap
 
 1. Check that `ENABLE_LORA=1` is present for both `start_station` and `finish_station` in `platformio.ini`.
 2. Check that both boards use `LORA_FREQUENCY_MHZ=868.0`.
-3. Watch FinishStation Serial for `STATUS sent heartbeat=5 state=...` every fifth heartbeat. STATUS is still sent every second.
-4. Watch StartStation Serial for `LORA RX from=finish type=STATUS ... age=0 count=...`, `STATUS received heartbeat=... state=... rssi=... snr=...`, and the five-second `LINK finish active=... age=...` diagnostic.
-5. Watch FinishStation Serial for `LORA RX from=start type=STATUS ... age=0 count=...`, `START STATUS received heartbeat=... state=... rssi=... snr=...`, and the five-second `LINK start active=... age=...` diagnostic; this confirms StartStation heartbeat packets are reaching FinishStation in Idle.
-6. If packet parsing fails, inspect `LORA parse failed raw=... error=...` on Serial.
-7. Check that antennas are connected to both boards.
+3. Watch FinishStation Serial for `FINISH STATUS sent hb=5 state=...` every fifth heartbeat. STATUS is still sent every second.
+4. Watch StartStation Serial for `LORA RX from=finish type=STATUS ... age=0 count=...`, `STATUS RX from=finish hb=... rssi=...`, and the five-second `START LINK DEBUG:` diagnostic.
+5. Watch FinishStation Serial for `LORA RX from=start type=STATUS ... age=0 count=...`, `STATUS RX from=start hb=... rssi=...`, and the five-second `FINISH LINK DEBUG:` diagnostic; this confirms StartStation heartbeat packets are reaching FinishStation in Idle.
+6. In the Web UI **LoRa debug** block, check that heartbeat sent and heartbeat received keep increasing, last packet type regularly returns to `STATUS`, and last-seen age stays near one second.
+7. If packet parsing fails, inspect `LORA parse failed raw=... error=...` on Serial.
+8. Check that antennas are connected to both boards.
 
 ### Rider/trail Add button does nothing
 

@@ -100,8 +100,8 @@ void FinishStationApp::loop() {
     state_.fail();
   }
 
-  if (now - lastStatusMs_ >= StatusIntervalMs) {
-    sendStatus();
+  if (now - lastStatusMs_ >= StatusIntervalMs && (lastFinishSendMs_ == 0 || now > lastFinishSendMs_)) {
+    sendStatus(now);
     lastStatusMs_ = now;
   }
 
@@ -202,25 +202,44 @@ void FinishStationApp::pollRadio() {
 #endif
 }
 
-bool FinishStationApp::sendRadio(const RadioMessage& message) {
+bool FinishStationApp::sendRadio(const RadioMessage& message, int* resultCode) {
 #if ENABLE_LORA
-  if (!radioReady_) return false;
+  if (!radioReady_) {
+    if (resultCode != nullptr) *resultCode = -999;
+    return false;
+  }
 
   String payload;
   RadioProtocol::serialize(message, payload);
+  if (message.type == RadioMessageType::Status && (message.heartbeat == 0 || message.heartbeat % 5 == 0 || payload.length() > 200)) {
+    Serial.printf("STATUS payload len=%u\n", static_cast<unsigned>(payload.length()));
+  }
   const int result = radio.transmit(payload);
+  if (resultCode != nullptr) *resultCode = result;
+  restoreRadioReceiveMode();
+  const bool logTxMode = message.type != RadioMessageType::Status || message.heartbeat == 0 || message.heartbeat % 5 == 0;
+  if (logTxMode) Serial.println("LoRa RX mode restored");
   if (result != RADIOLIB_ERR_NONE) {
     Serial.printf("[FinishStation] LoRa TX failed: %d\n", result);
     return false;
   }
+  if (logTxMode) Serial.printf("LoRa TX %s ok\n", RadioProtocol::typeToString(message.type).c_str());
   return true;
 #else
   (void)message;
+  if (resultCode != nullptr) *resultCode = -1;
   return false;
 #endif
 }
 
-void FinishStationApp::sendStatus() {
+void FinishStationApp::restoreRadioReceiveMode() {
+#if ENABLE_LORA
+  // This firmware uses polling receive(), so the next pollRadio() call explicitly
+  // re-enters RX after the short blocking transmit.
+#endif
+}
+
+void FinishStationApp::sendStatus(uint32_t nowMs) {
   RadioMessage message;
   message.type = RadioMessageType::Status;
   message.messageId = RadioProtocol::makeMessageId("finish-status");
@@ -229,13 +248,13 @@ void FinishStationApp::sendStatus() {
   message.source = "FinishStation";
   message.beamClear = true;
   message.buttonReady = true;
-  message.timestampMs = clock_.nowMs();
-  message.uptimeMs = message.timestampMs;
+  message.timestampMs = nowMs;
+  message.uptimeMs = nowMs;
   message.heartbeat = heartbeatCounter_ + 1;
   if (state_.runId().length() > 0) message.runId = state_.runId();
   if (state_.riderName().length() > 0) message.riderName = state_.riderName();
   if (state_.trailName().length() > 0) message.trailName = state_.trailName();
-  message.elapsedMs = state_.elapsedMs(clock_.nowMs());
+  message.elapsedMs = state_.elapsedMs(nowMs);
   message.startLinkActive = isLinkActive(startLink_);
   message.startPacketCount = startLink_.packetCount;
   if (message.startLinkActive) {
@@ -245,13 +264,15 @@ void FinishStationApp::sendStatus() {
     message.startSnr = startLink_.lastSnr;
     message.startLastSeenAgoMs = linkAgeMs(startLink_);
   }
-  if (sendRadio(message)) {
+  int resultCode = 0;
+  if (sendRadio(message, &resultCode)) {
     heartbeatCounter_ += 1;
+    lastStatusSentOkMs_ = nowMs;
     if (heartbeatCounter_ % 5 == 0) {
-      Serial.printf("STATUS sent heartbeat=%lu state=%s\n", static_cast<unsigned long>(heartbeatCounter_), message.state.c_str());
+      Serial.printf("FINISH STATUS sent hb=%lu state=%s\n", static_cast<unsigned long>(heartbeatCounter_), message.state.c_str());
     }
   } else {
-    Serial.println("STATUS send failed code=-1");
+    Serial.printf("FINISH STATUS send failed code=%d\n", resultCode);
   }
 }
 
@@ -310,7 +331,10 @@ void FinishStationApp::updateStartLink(const RadioMessage& message, int packetRs
 
 void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
   if (message.type == RadioMessageType::Status && message.stationId == "start") {
-    Serial.printf("START STATUS received heartbeat=%lu state=%s rssi=%d snr=%.1f\n", static_cast<unsigned long>(message.heartbeat), message.state.c_str(), startLink_.lastRssi, static_cast<double>(startLink_.lastSnr));
+    startHeartbeatCount_ = message.heartbeat;
+    if (message.heartbeat == 0 || message.heartbeat % 5 == 0) {
+      Serial.printf("STATUS RX from=start hb=%lu rssi=%d\n", static_cast<unsigned long>(message.heartbeat), startLink_.lastRssi);
+    }
     return;
   }
 
@@ -347,6 +371,7 @@ void FinishStationApp::updateDisplay() {
   const String runShort = state_.runId().length() > 0 ? state_.runId().substring(max(0, static_cast<int>(state_.runId().length()) - 6)) : "-";
   const bool startOnline = isLinkActive(startLink_);
   const String startSignal = startOnline ? String("START:") + String(startLink_.lastRssi) + "dBm" : String("START:NO SIG");
+  const String linkDebug = startLink_.lastPacketType.length() > 0 ? String("PKT:") + startLink_.lastPacketType : String("HB:") + String(startHeartbeatCount_);
 
   if (finishLineCrossedUntilMs_ > millis()) {
     display_.showFinishLineCrossed();
@@ -372,12 +397,12 @@ void FinishStationApp::updateDisplay() {
     String anim = String("RIDING ");
     for (uint8_t i = 0; i < ridingAnimationFrame(); ++i) anim += " ";
     anim += ">";
-    display_.showLines({"FINISH TERMINAL", anim, "Rider: " + toDisplayText(state_.riderName(), 16), "Time: " + formatDurationMs(state_.elapsedMs(millis())).substring(0, 5), startSignal});
+    display_.showLines({"FINISH TERMINAL", anim, "Time: " + formatDurationMs(state_.elapsedMs(millis())).substring(0, 5), startSignal, linkDebug});
     return;
   }
 
   if (state_.state() == FinishRunState::FinishSent) {
-    display_.showLines({"FINISH TERMINAL", "FINISH SENT", "Sent: " + String(finishAttempts_) + "/" + String(FINISH_MAX_RETRY_ATTEMPTS), startSignal});
+    display_.showLines({"FINISH TERMINAL", "FINISH SENT", "Sent: " + String(finishAttempts_) + "/" + String(FINISH_MAX_RETRY_ATTEMPTS), startSignal, linkDebug});
     return;
   }
 
@@ -386,6 +411,7 @@ void FinishStationApp::updateDisplay() {
     String("LoRa: ") + (radioReady_ ? "OK" : "FAIL"),
     "State: IDLE",
     startSignal,
+    linkDebug,
   });
 }
 
@@ -401,9 +427,9 @@ void FinishStationApp::logHeartbeat(uint32_t nowMs) {
   Serial.printf("FINISH alive state=%s uptime=%lu heap=%lu minHeap=%lu buttonRaw=%d buttonPressed=%s\n", heartbeatState.c_str(),
                 static_cast<unsigned long>(nowMs), static_cast<unsigned long>(ESP.getFreeHeap()),
                 static_cast<unsigned long>(ESP.getMinFreeHeap()), sensor_.buttonRaw(), sensor_.buttonPressed() ? "true" : "false");
-  Serial.printf("LINK start active=%d age=%lu rssi=%d snr=%.1f lastType=%s count=%lu\n",
-                isLinkActive(startLink_) ? 1 : 0, static_cast<unsigned long>(linkAgeMs(startLink_)),
-                startLink_.lastRssi, static_cast<double>(startLink_.lastSnr),
-                startLink_.lastPacketType.c_str(), static_cast<unsigned long>(startLink_.packetCount));
+  Serial.printf("FINISH LINK DEBUG:\n  finishHbSent=%lu\n  startActive=%d\n  startAge=%lu\n  startRssi=%d\n  startLastType=%s\n  startHbReceived=%lu\n",
+                static_cast<unsigned long>(heartbeatCounter_), isLinkActive(startLink_) ? 1 : 0,
+                static_cast<unsigned long>(linkAgeMs(startLink_)), startLink_.lastRssi,
+                startLink_.lastPacketType.c_str(), static_cast<unsigned long>(startHeartbeatCount_));
   lastHeartbeatMs_ = nowMs;
 }

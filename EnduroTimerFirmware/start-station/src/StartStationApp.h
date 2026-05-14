@@ -70,7 +70,8 @@ private:
   void updateButton(uint32_t nowMs);
   void updateLed(uint32_t nowMs);
   void pollRadio();
-  bool sendRadio(const RadioMessage& message);
+  bool sendRadio(const RadioMessage& message, int* resultCode = nullptr);
+  void restoreRadioReceiveMode();
   void sendRunStart(const RunRecord& run);
   void sendFinishAck(const String& runId);
   void sendStatus(uint32_t nowMs);
@@ -117,8 +118,13 @@ private:
   uint32_t finishHeartbeatCount_ = 0;
   uint32_t startHeartbeatCount_ = 0;
   uint32_t lastStatusSendMs_ = 0;
+  uint32_t lastStatusSentOkMs_ = 0;
+  uint32_t lastPriorityTxMs_ = 0;
   uint32_t lastAnyPacketMs_ = 0;
   String finishState_ = "Unknown";
+  String finishActiveRunId_;
+  String finishRiderName_;
+  uint32_t finishElapsedMs_ = 0;
   int finishReportedStartRssi_ = 0;
   float finishReportedStartSnr_ = 0.0F;
   uint32_t finishReportedStartLastSeenAgoMs_ = 0;
