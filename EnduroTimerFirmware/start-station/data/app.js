@@ -38,12 +38,14 @@ function renderStatus(status) {
   $('finishState').className = status.finishHasError ? 'offline' : status.finishState === 'FinishSent' ? 'pending' : '';
   $('loraStats').textContent = signalText(status.finishRssi, status.finishSnr);
   $('reverseLoraStats').textContent = `reported Start RSSI/SNR: ${signalText(status.finishReportedStartRssi, status.finishReportedStartSnr)}`;
+  $('lastPacket').textContent = `packet: ${status.lastLoRaPacketType || status.lastPacketType || '—'}`;
   $('countdown').textContent = status.countdownText ? `Countdown: ${status.countdownText}` : 'Countdown: —';
   $('runTimer').textContent = status.currentRunElapsedFormatted || '00:00';
   $('lastResult').textContent = status.lastResultFormatted || '—';
   $('lastSource').textContent = status.lastFinishSource || '—';
   $('riderName').textContent = status.currentRiderName || 'Test Rider';
-  $('trailName').textContent = status.currentTrailName || 'Трасса по умолчанию';
+  $('trailName').textContent = status.currentTrailName || 'Default trail';
+  $('selectedTrailName').textContent = status.selectedTrailName || status.currentTrailName || 'Default trail';
   $('runId').textContent = status.currentRunId || '—';
 }
 
@@ -56,10 +58,10 @@ function renderRuns(runs) {
 function renderCatalogs() {
   const activeRiders = riders.filter((r) => r.isActive);
   $('selectedRider').innerHTML = activeRiders.map((r) => `<option value="${r.riderId}" ${settings.selectedRiderId === r.riderId ? 'selected' : ''}>${r.displayName}</option>`).join('');
-  $('ridersBody').innerHTML = riders.map((r) => `<tr><td>${r.displayName}</td><td>${r.isActive ? 'Yes' : 'No'}</td><td>${r.isActive ? `<button data-rider="${r.riderId}" class="secondary deactivate-rider">Deactivate</button>` : '—'}</td></tr>`).join('');
+  $('ridersBody').innerHTML = riders.length ? riders.map((r) => `<tr><td>${r.displayName}</td><td>${r.isActive ? 'Yes' : 'No'}</td><td>${r.isActive ? `<button data-rider="${r.riderId}" class="secondary deactivate-rider">Deactivate</button>` : '—'}</td></tr>`).join('') : '<tr><td colspan="3">No riders</td></tr>';
   const activeTrails = trails.filter((t) => t.isActive);
   $('selectedTrail').innerHTML = activeTrails.map((t) => `<option value="${t.trailId}" ${settings.selectedTrailId === t.trailId ? 'selected' : ''}>${t.displayName}</option>`).join('');
-  $('trailsBody').innerHTML = trails.map((t) => `<tr><td>${t.displayName}</td><td>${t.isActive ? 'Yes' : 'No'}</td><td>${t.isActive ? `<button data-trail="${t.trailId}" class="secondary deactivate-trail">Deactivate</button>` : '—'}</td></tr>`).join('');
+  $('trailsBody').innerHTML = trails.length ? trails.map((t) => `<tr><td>${t.displayName}</td><td>${t.isActive ? 'Yes' : 'No'}</td><td>${t.isActive ? `<button data-trail="${t.trailId}" class="secondary deactivate-trail">Deactivate</button>` : '—'}</td></tr>`).join('') : '<tr><td colspan="3">No trails</td></tr>';
 }
 
 async function saveSettings() {
@@ -69,8 +71,18 @@ async function saveSettings() {
 
 async function refresh() {
   try {
-    const [status, runs, ridersData, trailsData, settingsData] = await Promise.all([api('/api/status'), api('/api/runs'), api('/api/riders'), api('/api/trails'), api('/api/settings')]);
-    riders = ridersData; trails = trailsData; settings = settingsData;
+    const [status, runs, ridersData, settingsData] = await Promise.all([api('/api/status'), api('/api/runs'), api('/api/riders'), api('/api/settings')]);
+    let trailsData = trails;
+    try {
+      trailsData = await api('/api/trails');
+      $('trailsError').textContent = '';
+    } catch (trailError) {
+      $('trailsError').textContent = 'Не удалось загрузить трассы';
+      showMessage('Не удалось загрузить трассы', true);
+    }
+    riders = ridersData;
+    trails = trailsData;
+    settings = settingsData;
     renderStatus(status); renderRuns(runs); renderCatalogs();
     if (consecutiveFetchErrors > 0) showMessage('Web connection restored.');
     consecutiveFetchErrors = 0;
@@ -79,6 +91,7 @@ async function refresh() {
     if (consecutiveFetchErrors > 5) showMessage('Нет связи с верхним терминалом', true);
   }
 }
+
 
 $('resetBtn').addEventListener('click', async () => { try { await api('/api/system/reset', { method: 'POST' }); showMessage('Active run reset.'); refresh(); } catch (e) { showMessage(e.message, true); } });
 $('addRiderBtn').addEventListener('click', async () => { try { await api('/api/riders/add', { method: 'POST', body: JSON.stringify({ displayName: $('riderInput').value }) }); $('riderInput').value = ''; refresh(); } catch (e) { showMessage(e.message, true); } });

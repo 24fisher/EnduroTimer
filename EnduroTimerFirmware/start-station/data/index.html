@@ -16,7 +16,7 @@
     <section class="grid">
       <article class="card metric"><span>StartStation status</span><strong id="serviceFlags">—</strong><small>OLED / Wi-Fi / Web / LoRa</small></article>
       <article class="card metric"><span>Finish station</span><strong id="finishOnline">—</strong><small id="finishState">state: —</small></article>
-      <article class="card metric"><span>Finish RSSI/SNR</span><strong id="loraStats">—</strong><small id="reverseLoraStats">reported Start RSSI/SNR: —</small></article>
+      <article class="card metric"><span>Finish RSSI/SNR</span><strong id="loraStats">—</strong><small id="reverseLoraStats">reported Start RSSI/SNR: —</small><small id="lastPacket">packet: —</small></article>
       <article class="card metric"><span>Timer</span><strong id="runTimer">00:00</strong><small id="countdown">—</small></article>
       <article class="card metric"><span>Last result</span><strong id="lastResult">—</strong><small id="lastSource">—</small></article>
     </section>
@@ -25,7 +25,7 @@
       <div>
         <h2>Current run</h2>
         <p>Rider: <strong id="riderName">Test Rider</strong></p>
-        <p>Trail: <strong id="trailName">Трасса по умолчанию</strong></p>
+        <p>Current trail: <strong id="trailName">Default trail</strong></p><p>Текущая трасса: <strong id="selectedTrailName">Default trail</strong></p>
         <p>Current run: <code id="runId">—</code></p>
         <p class="muted">Старт заезда — только кнопкой на верхнем терминале.</p>
         <p class="muted">Финиш — кнопкой на нижнем терминале.</p>
@@ -42,9 +42,9 @@
         <div class="table-wrap"><table><thead><tr><th>Name</th><th>Active</th><th>Actions</th></tr></thead><tbody id="ridersBody"></tbody></table></div>
       </article>
       <article class="card">
-        <h2>Trails</h2>
-        <label>Selected trail <select id="selectedTrail"></select></label>
-        <div class="inline"><input id="trailInput" placeholder="Trail name"><button id="addTrailBtn">Добавить</button></div>
+        <h2>Трассы</h2>
+        <label>Selected trail / текущая трасса <select id="selectedTrail"></select></label>
+        <div class="inline"><input id="trailInput" placeholder="Trail name"><button id="addTrailBtn">Добавить трассу</button></div><p id="trailsError" class="message error"></p>
         <div class="table-wrap"><table><thead><tr><th>Name</th><th>Active</th><th>Actions</th></tr></thead><tbody id="trailsBody"></tbody></table></div>
       </article>
     </section>
