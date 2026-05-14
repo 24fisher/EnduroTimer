@@ -15,7 +15,8 @@ public:
   void showBoot(const String& role);
   void showBootScreen(const String& role);
   void showStatus(const String& line1, const String& line2 = String(), const String& line3 = String(), const String& line4 = String());
-  void showCountdown(const String& text);
+  void showCountdown(const String& text, const String& role = String("START"));
+  void showFinishLineCrossed();
   void showResult(const String& result, const String& detail = String());
 
 private:

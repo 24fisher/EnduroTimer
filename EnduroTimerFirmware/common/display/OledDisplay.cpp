@@ -293,7 +293,7 @@ void OledDisplay::showBoot(const String& role) {
 
 void OledDisplay::showBootScreen(const String& role) {
   if (testPatternOnly()) return;
-  showLines({"ENDURO TIMER", role.length() > 0 ? role : String("START"), "READY", "UP: " + String(millis() / 1000UL) + "s"});
+  showLines({"ENDURO TIMER", role.length() > 0 ? role : String("START TERMINAL"), "READY", "UP: " + String(millis() / 1000UL) + "s"});
 }
 
 void OledDisplay::showStatus(const String& line1, const String& line2, const String& line3, const String& line4) {
@@ -306,16 +306,23 @@ void OledDisplay::showStatus(const String& line1, const String& line2, const Str
   showLines({visibleLine1, visibleLine2, visibleLine3, visibleLine4});
 }
 
-void OledDisplay::showCountdown(const String& text) {
+void OledDisplay::showCountdown(const String& text, const String& role) {
   if (!initialized_ || u8g2 == nullptr || testPatternOnly()) return;
 
   u8g2->clearBuffer();
+  u8g2->setFont(u8g2_font_6x10_tf);
+  u8g2->drawStr(0, 9, role.length() > 0 ? role.c_str() : "START");
   u8g2->setFont(u8g2_font_logisoso46_tf);
   const int16_t width = u8g2->getStrWidth(text.c_str());
   int16_t x = (128 - width) / 2;
   if (x < 0) x = 0;
-  u8g2->drawStr(x, 56, text.c_str());
+  u8g2->drawStr(x, 60, text.c_str());
   u8g2->sendBuffer();
+}
+
+void OledDisplay::showFinishLineCrossed() {
+  if (testPatternOnly()) return;
+  showLines({"FINISH TERMINAL", "FINISH LINE", "CROSSED"});
 }
 
 void OledDisplay::showResult(const String& result, const String& detail) {

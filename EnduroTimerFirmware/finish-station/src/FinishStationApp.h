@@ -48,4 +48,5 @@ private:
   bool hasStartSignal_ = false;
   uint32_t showNoRunUntilMs_ = 0;
   uint32_t showAckOkUntilMs_ = 0;
+  uint32_t finishLineCrossedUntilMs_ = 0;
 };

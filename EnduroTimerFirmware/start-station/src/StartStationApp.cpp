@@ -7,6 +7,7 @@
 #include <esp_system.h>
 
 #include "RadioProtocol.h"
+#include "DisplayText.h"
 
 #ifndef LORA_FREQUENCY_MHZ
 #define LORA_FREQUENCY_MHZ 868.0
@@ -38,7 +39,7 @@ void StartStationApp::begin() {
   oledReady_ = display_.begin();
   Serial.println(oledReady_ ? "[BOOT] OLED OK" : "[BOOT] OLED FAIL");
   if (oledReady_) {
-    display_.showBootScreen("START");
+    display_.showBootScreen("START TERMINAL");
   }
 #else
   Serial.println("[BOOT] OLED init skipped (ENABLE_OLED=0)");
@@ -157,9 +158,13 @@ String StartStationApp::statusJson() const {
     doc["finishReportedStartSnr"] = nullptr;
   }
   doc["lastPacketType"] = lastFinishPacketType_;
+  doc["lastLoRaPacketType"] = lastFinishPacketType_;
+  doc["lastLoRaRaw"] = lastLoRaRaw_;
   doc["currentRunId"] = current.runId;
   RiderRecord selectedRider = selectRider();
   TrailRecord selectedTrail = selectTrail();
+  doc["selectedTrailId"] = selectedTrail.id;
+  doc["selectedTrailName"] = selectedTrail.displayName;
   doc["currentRiderName"] = current.riderName.length() > 0 ? current.riderName : selectedRider.displayName;
   doc["currentTrailName"] = current.trailName.length() > 0 ? current.trailName : selectedTrail.displayName;
   uint32_t elapsedMs = (state_.state() == StartRunState::Riding && current.startTimestampMs > 0) ? millis() - current.startTimestampMs : 0;
@@ -209,8 +214,11 @@ void StartStationApp::beginRadio() {
   const int state = radio.begin(LORA_FREQUENCY_MHZ);
   radioReady_ = state == RADIOLIB_ERR_NONE;
   if (!radioReady_) {
-    Serial.printf("LoRa FAIL (%d)\n", state);
+    Serial.printf("LoRa FAIL code=%d\n", state);
     Serial.println("[BOOT] LoRa FAIL");
+#if ENABLE_OLED
+    if (!display_.testPatternOnly()) display_.showLines({"START TERMINAL", "LoRa FAIL", "code=" + String(state)});
+#endif
     return;
   }
 
@@ -218,7 +226,7 @@ void StartStationApp::beginRadio() {
   radio.setSpreadingFactor(7);
   radio.setCodingRate(5);
   radio.setOutputPower(14);
-  Serial.println("LoRa OK");
+  Serial.printf("LoRa OK freq=%.1f\n", static_cast<double>(LORA_FREQUENCY_MHZ));
   Serial.println("[BOOT] LoRa OK");
 #else
   Serial.println("[BOOT] LoRa init skipped (ENABLE_LORA=0)");
@@ -275,13 +283,16 @@ void StartStationApp::pollRadio() {
   String payload;
   const int state = radio.receive(payload, 0);
   if (state == RADIOLIB_ERR_NONE) {
+    lastLoRaRaw_ = payload;
+    if (lastLoRaRaw_.length() > 96) lastLoRaRaw_ = lastLoRaRaw_.substring(0, 96);
+    Serial.printf("LoRa RX raw: %s\n", payload.c_str());
     finishRssi_ = static_cast<int>(radio.getRSSI());
     finishSnr_ = radio.getSNR();
     hasFinishSignal_ = true;
     RadioMessage message;
     String error;
     if (!RadioProtocol::deserialize(payload, message, &error)) {
-      Serial.printf("[StartStation] invalid packet: %s payload=%s\n", error.c_str(), payload.c_str());
+      Serial.printf("parse failed: %s raw=%s\n", error.c_str(), payload.c_str());
       return;
     }
     lastFinishPacketType_ = RadioProtocol::typeToString(message.type);
@@ -338,6 +349,7 @@ void StartStationApp::sendFinishAck(const String& runId) {
 void StartStationApp::handleRadioMessage(const RadioMessage& message) {
   if (message.type == RadioMessageType::Status) {
     lastFinishSeenMs_ = millis();
+    Serial.printf("STATUS received from finish heartbeat=%lu rssi=%d snr=%.1f\n", static_cast<unsigned long>(message.heartbeat), finishRssi_, static_cast<double>(finishSnr_));
     if (!finishOnlineState_) {
       finishOnlineState_ = true;
       Serial.println("FINISH ONLINE");
@@ -396,9 +408,11 @@ void StartStationApp::updateCountdownDisplay(uint32_t nowMs) {
 
   lastCountdownText_ = text;
   Serial.printf("COUNTDOWN %s\n", text.c_str());
+  Serial.printf("COUNTDOWN step=%s at ms=%lu\n", text.c_str(), static_cast<unsigned long>(nowMs));
 #if ENABLE_OLED
   if (!display_.testPatternOnly()) {
-    display_.showCountdown(text);
+    display_.showCountdown(text, "START");
+    Serial.printf("OLED countdown rendered step=%s at ms=%lu\n", text.c_str(), static_cast<unsigned long>(millis()));
   }
 #endif
 }
@@ -408,31 +422,30 @@ void StartStationApp::updateDisplay() {
   const RunRecord& last = state_.lastRun();
   const String runShort = current.runId.length() > 0 ? current.runId.substring(max(0, static_cast<int>(current.runId.length()) - 6)) : "-";
   const String lastResult = last.resultFormatted.length() > 0 ? last.resultFormatted : "-";
-  const String fin = String("FIN: ") + (finishOnline() ? "OK" : "OFF") + (hasFinishSignal_ ? String(" ") + String(finishRssi_) : String(""));
+  const String fin = finishOnline() ? String("FIN: OK ") + (hasFinishSignal_ ? String(finishRssi_) : String("--")) : String("FIN: OFF");
 
   if (state_.state() == StartRunState::Countdown) {
-    display_.showCountdown(state_.countdownText(millis()));
+    display_.showCountdown(state_.countdownText(millis()), "START");
     return;
   }
 
   if (state_.state() == StartRunState::Finished) {
-    display_.showLines({"FINISHED", last.riderName.substring(0, 18), lastResult, "Finish: " + last.finishSource});
+    display_.showLines({"START TERMINAL", "FINISHED", toDisplayText(last.riderName, 16), lastResult, "Finish: " + last.finishSource});
     return;
   }
 
   if (state_.state() == StartRunState::Riding) {
-    display_.showLines({"RIDING", current.riderName.substring(0, 18), formatDurationMs(millis() - current.startTimestampMs).substring(0, 5), fin});
+    display_.showLines({"START TERMINAL", "RIDING", formatDurationMs(millis() - current.startTimestampMs).substring(0, 5), fin});
     return;
   }
 
   RiderRecord rider = selectRider();
   TrailRecord trail = selectTrail();
   display_.showLines({
-    "ENDURO TIMER",
-    "START",
+    "START TERMINAL",
     fin,
-    "Rider: " + rider.displayName.substring(0, 12),
-    "Trail: " + trail.displayName.substring(0, 12),
+    "Rider: " + toDisplayText(rider.displayName, 16),
+    "Trail: " + toDisplayText(trail.displayName, 16),
     "Last: " + lastResult,
   });
 }
@@ -514,7 +527,7 @@ void StartStationApp::ensureDefaults() {
   }
   bool changedTrails = false;
   if (trails_.empty()) {
-    trails_.push_back({"t001", "Трасса по умолчанию", true, millis()});
+    trails_.push_back({"t001", "Default trail", true, millis()});
     settings_.selectedTrailId = "t001";
     changedTrails = true;
   }
@@ -582,6 +595,8 @@ String StartStationApp::ridersJson() const {
 }
 
 String StartStationApp::trailsJson() const {
+  Serial.println("GET /api/trails");
+  Serial.printf("trails count=%u\n", static_cast<unsigned>(trails_.size()));
   JsonDocument doc;
   JsonArray array = doc.to<JsonArray>();
   for (const TrailRecord& trail : trails_) {
@@ -677,7 +692,7 @@ TrailRecord StartStationApp::selectTrail() const {
   TrailRecord trail;
   if (findActiveTrail(settings_.selectedTrailId, trail)) return trail;
   for (const TrailRecord& item : trails_) if (item.isActive) return item;
-  return {"t-default", "Трасса по умолчанию", true, millis()};
+  return {"t-default", "Default trail", true, millis()};
 }
 
 String StartStationApp::makeEntityId(const char* prefix) const {

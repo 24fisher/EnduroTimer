@@ -16,6 +16,7 @@ public:
   bool update(uint32_t nowMs) {
     const int reading = digitalRead(pin_);
     if (reading != lastReading_) {
+      Serial.printf("button raw pressed transition pin=%u raw=%d pressed=%s at ms=%lu\n", pin_, reading, reading == LOW ? "true" : "false", static_cast<unsigned long>(nowMs));
       lastReading_ = reading;
       lastChangeMs_ = nowMs;
     }
@@ -24,10 +25,16 @@ public:
 
     const int previousStableState = stableState_;
     stableState_ = reading;
-    return previousStableState == HIGH && stableState_ == LOW;
+    if (previousStableState == HIGH && stableState_ == LOW) {
+      Serial.printf("debounced short press pin=%u at ms=%lu\n", pin_, static_cast<unsigned long>(nowMs));
+      return true;
+    }
+    return false;
   }
 
   bool pressed() const { return stableState_ == LOW; }
+  int rawState() const { return lastReading_; }
+  bool rawPressed() const { return lastReading_ == LOW; }
   uint8_t pin() const { return pin_; }
 
 private:

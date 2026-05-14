@@ -16,6 +16,8 @@ public:
   bool update(uint32_t nowMs, uint32_t& finishTimestampMs);
   uint32_t elapsedMs(uint32_t nowMs) const;
   bool armed() const { return armed_; }
+  bool buttonPressed() const { return button_.pressed(); }
+  int buttonRaw() const { return button_.rawState(); }
 
 private:
   bool armed_ = false;

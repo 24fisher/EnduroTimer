@@ -76,7 +76,7 @@ Run selection rules for the physical start button:
 3. If no active rider exists, use `Test Rider`.
 4. Use `selectedTrailId` if it points to an active trail.
 5. Otherwise use the first active trail.
-6. If no trail exists, create/use `Трасса по умолчанию`.
+6. If no trail exists, create/use `Default trail`.
 
 Every finished run stores:
 
@@ -161,7 +161,10 @@ Returns current status, for example:
   "finishReportedStartSnr": 9.2,
   "currentRunId": "RUN-...",
   "currentRiderName": "Test Rider",
-  "currentTrailName": "Трасса по умолчанию",
+  "currentTrailName": "Default trail",
+  "selectedTrailId": "t001",
+  "selectedTrailName": "Default trail",
+  "lastLoRaPacketType": "STATUS",
   "currentRunElapsedMs": 12345,
   "currentRunElapsedFormatted": "00:12",
   "countdownText": "",
@@ -196,14 +199,15 @@ The LittleFS Web UI shows:
 - StartStation service flags and state.
 - FinishStation online/offline, state, heartbeat, and last seen age.
 - Finish RSSI/SNR and Finish-reported Start RSSI/SNR.
+- Last LoRa packet type.
 - Countdown and current run timer.
-- Selected rider and trail.
-- Rider and trail management tables.
+- Current rider and current trail.
+- Visible riders and trails sections, including trail select, add, and deactivate controls.
 - Reset system button.
 - CSV download link.
 - Recent results table with Rider, Trail, Result, Status, Source, and Run ID.
 
-The UI polls once per second. It does not show a hard error for a single failed fetch; after more than five consecutive failures it shows `Нет связи с верхним терминалом`.
+The UI polls once per second. If `/api/trails` fails, it shows `Не удалось загрузить трассы` but keeps the rest of the UI visible. It does not show a hard connection error for a single failed status fetch; after more than five consecutive failures it shows `Нет связи с верхним терминалом`.
 
 ## LoRa protocol
 
@@ -215,7 +219,7 @@ The UI polls once per second. It does not show a hard error for a single failed 
   "messageId": "...",
   "runId": "...",
   "riderName": "Test Rider",
-  "trailName": "Трасса по умолчанию",
+  "trailName": "Default trail",
   "startTimestampMs": 123456789
 }
 ```
@@ -285,26 +289,27 @@ StartStation replies to a matching active run with `FINISH_ACK`. Duplicate `FINI
 StartStation Ready:
 
 ```text
-ENDURO TIMER
-START
+START TERMINAL
 FIN: OK -72
 Rider: Test Rider
-Trail: Трасса
+Trail: Default trail
 Last: 00:20.1
 ```
 
-StartStation Countdown:
+StartStation Countdown uses immediate rendering on every countdown text change and is not throttled by the normal status screen refresh:
 
 ```text
+START
 3 / 2 / 1 / GO
-Rider name
 ```
+
+The countdown state machine is millis-based: `3` for 1000 ms, `2` for 1000 ms, `1` for 1000 ms, and `GO` for about 700 ms. Serial logs include `COUNTDOWN step=... at ms=...` and `OLED countdown rendered step=... at ms=...`.
 
 StartStation Riding:
 
 ```text
+START TERMINAL
 RIDING
-Test Rider
 00:12
 FIN: OK -72
 ```
@@ -312,6 +317,7 @@ FIN: OK -72
 StartStation Finished:
 
 ```text
+START TERMINAL
 FINISHED
 Test Rider
 00:20.123
@@ -320,25 +326,35 @@ Test Rider
 FinishStation Idle:
 
 ```text
-FINISH
+FINISH TERMINAL
 LoRa: OK
-ST RSSI: -70
-IDLE
+State: IDLE
+ST: -70
 ```
 
 FinishStation Riding:
 
 ```text
+FINISH TERMINAL
 RIDING
-Test Rider
-00:12
+Rider: Test Rider
+Timer: 00:12
 Btn: FINISH
 ST: -70
+```
+
+FinishStation finish-line overlay appears immediately after an accepted finish button press while retries and ACK handling continue in the background:
+
+```text
+FINISH TERMINAL
+FINISH LINE
+CROSSED
 ```
 
 FinishStation FinishSent:
 
 ```text
+FINISH TERMINAL
 FINISH SENT
 Sent: x/5
 ST: -70
@@ -347,9 +363,12 @@ ST: -70
 FinishStation ACK:
 
 ```text
+FINISH TERMINAL
 ACK OK
 IDLE
 ```
+
+OLED text is ASCII-safe. UTF-8 Cyrillic names remain unchanged in Web UI, JSON, and CSV, but OLED strings are transliterated and limited to short display widths; for example, `Лесной СУ 1` becomes `Lesnoy SU 1`.
 
 ## Troubleshooting
 
@@ -377,13 +396,40 @@ pio run -e start_station -t uploadfs
 
 If files are still missing, the fallback page at `http://192.168.4.1/` should appear and show the uploadfs command.
 
-### FinishStation is offline
+### FinishStation is always offline / `FIN: OFF`
 
-- Check that the upper board was flashed with `start_station` and the lower board with `finish_station`.
-- Check that LoRa is enabled on both environments.
-- Check that both boards use `LORA_FREQUENCY_MHZ=868.0`.
-- Attach antennas to both boards.
-- Review Serial logs for LoRa begin result codes and TX errors.
+1. Check that `ENABLE_LORA=1` is present for both `start_station` and `finish_station` in `platformio.ini`.
+2. Check that both boards use `LORA_FREQUENCY_MHZ=868.0`.
+3. Watch FinishStation Serial for `STATUS sent heartbeat=... state=...` once per second.
+4. Watch StartStation Serial for `STATUS received from finish heartbeat=... rssi=... snr=...`.
+5. If packet parsing fails, inspect `LoRa RX raw: ...` and `parse failed: ...` on Serial.
+6. Check that antennas are connected to both boards.
+
+### Finish button does not react
+
+1. Check that `FINISH_BUTTON_PIN=0` is used for the temporary BOOT-button finish input.
+2. Watch Serial for `button raw pressed transition` and `debounced short press` logs.
+3. Watch the one-second FinishStation heartbeat fields `buttonRaw=...` and `buttonPressed=...`.
+4. Confirm FinishStation state is externally shown as `Riding` (`WaitFinish` internally is accepted too). Finish presses in Idle are ignored and briefly show `NO ACTIVE RUN`.
+
+### Countdown updates slowly
+
+The StartStation countdown must use its immediate OLED render path, not only the regular status refresh. Serial should show `COUNTDOWN step=3/2/1/GO at ms=...` and `OLED countdown rendered step=... at ms=...` for each transition.
+
+### Cyrillic looks wrong on OLED
+
+The OLED uses ASCII transliteration/sanitization only for display. Web UI, JSON storage, and CSV export keep the original UTF-8 text.
+
+### Finish-line message is missing
+
+When the finish button is accepted on FinishStation, the OLED should immediately show:
+
+```text
+FINISH LINE
+CROSSED
+```
+
+The overlay is held for about two seconds without blocking FINISH packet sends or ACK processing.
 
 ## Intentional limitations
 

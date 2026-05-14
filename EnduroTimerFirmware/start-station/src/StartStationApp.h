@@ -117,6 +117,7 @@ private:
   float finishReportedStartSnr_ = 0.0F;
   bool hasFinishReportedStartSignal_ = false;
   String lastFinishPacketType_ = "-";
+  String lastLoRaRaw_ = "-";
   bool finishOnlineState_ = false;
   ButtonDebouncer startButton_;
   String lastCountdownText_;
