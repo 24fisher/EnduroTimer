@@ -42,21 +42,24 @@ The current Heltec V3 OLED configuration is fixed in `platformio.ini`:
 - Buttons use debounced short press events with `INPUT_PULLUP`; one press creates one start or finish event.
 - Countdown, timers, finish retries, OLED refresh, WebServer handling, and LoRa polling are all millis-based and should not block the main loop.
 - Runtime init failures for OLED, Wi-Fi, LittleFS, Web, or LoRa are logged and exposed in `/api/status`; they do not stop the loop or restart the ESP32.
-- Serial diagnostics and one-second `START alive` / `FINISH alive` heartbeats are intentionally kept.
+- Serial diagnostics and periodic `START alive` / `FINISH alive` heartbeats are intentionally kept; link detail logs are rate-limited to five seconds.
 
-## FinishStation online status and LoRa signal
+## Link status and LoRa signal
 
-FinishStation sends `STATUS` every 1000 ms in all states: `Idle`, externally displayed `Riding`, `FinishSent`, and `Error` / ACK timeout. StartStation also sends a `STATUS` heartbeat with `stationId: "start"` every 1000 ms, so FinishStation can show StartStation signal even while idle.
+Both stations use one source of truth for radio link state: the timestamp of the last valid packet received from the opposite station. RSSI/SNR and packet age are updated together in the shared `LinkStatus` model.
 
 Signal display rules:
 
-- `NO SIGNAL` means no valid packet from the other station has been received for more than 10 seconds.
+- `NO SIGNAL` means no valid packet from the other station has been received for more than 15 seconds.
+- RSSI without an active link should not happen in normal UI/API output: if a fresh packet updates RSSI, it also updates the last-packet timestamp and the link is active until it becomes stale.
+- Signal and station state are separate. A stale link displays `NO SIGNAL`; the station state is reported as `Unknown` in the API while the last known state remains available for diagnostics.
 - `FIN:-72dBm` means StartStation is currently hearing packets from FinishStation.
 - `START:-33dBm` means FinishStation is currently hearing packets from StartStation.
-- StartStation updates the FinishStation signal from any valid `stationId: "finish"` packet, including both `STATUS` and `FINISH`.
-- FinishStation updates the StartStation signal from any valid `stationId: "start"` packet, including `STATUS`, `RUN_START`, and `FINISH_ACK`.
-- Every received LoRa packet logs `LORA RX type=... rssi=... snr=... raw=...`; JSON parse failures, missing `stationId`, and unknown `type` are logged explicitly.
-- FinishStation includes its reported StartStation RSSI/SNR and `startLastSeenAgoMs` in `STATUS`, so StartStation can show both directions in `/api/status`.
+- StartStation sends a `STATUS` heartbeat with `stationId: "start"` every 1000 ms, so FinishStation can show StartStation signal while idle.
+- FinishStation sends a `STATUS` heartbeat with `stationId: "finish"` every 1000 ms in all states: `Idle`, externally displayed `Riding`, `FinishSent`, and `Error` / ACK timeout.
+- Any valid packet from the opposite station updates link status, not only `STATUS`. StartStation updates the FinishStation link from `STATUS`, `FINISH`, and any other valid `stationId: "finish"` packet. FinishStation updates the StartStation link from `STATUS`, `RUN_START`, `FINISH_ACK`, and any other valid `stationId: "start"` packet.
+- Every received LoRa packet logs `LORA RX type=... rssi=... snr=... raw=...`; valid opposite-station packets also log `LORA RX from=... type=... rssi=... snr=... age=0 count=...`. JSON parse failures, missing `stationId`, and unknown `type` are logged explicitly.
+- FinishStation includes its reported StartStation link fields (`startLinkActive`, `startRssi`, `startSnr`, `startLastSeenAgoMs`, and `startPacketCount`) in `STATUS`, so StartStation can show both radio directions in `/api/status`.
 
 ## Riders, trails, settings, and results
 
@@ -149,16 +152,23 @@ Returns current status, for example:
   "wifiOk": true,
   "webOk": true,
   "loraOk": true,
+  "finishLinkActive": true,
   "finishStationOnline": true,
   "finishSignalText": "-72 dBm",
   "finishState": "Riding",
+  "finishLastKnownState": "Riding",
   "finishLastSeenAgoMs": 1200,
+  "finishPacketCount": 42,
+  "finishLastPacketType": "STATUS",
   "finishHeartbeatCount": 42,
   "finishRssi": -72,
   "finishSnr": 8.5,
+  "finishReportedStartLinkActive": true,
   "finishReportedStartSignalText": "-69 dBm",
   "finishReportedStartRssi": -69,
   "finishReportedStartSnr": 9.2,
+  "finishReportedStartLastSeenAgoMs": 250,
+  "finishReportedStartPacketCount": 12,
   "currentRunId": "RUN-...",
   "currentRiderName": "Test Rider",
   "currentTrailName": "Default trail",
@@ -199,9 +209,9 @@ Returns current status, for example:
 The LittleFS Web UI shows:
 
 - StartStation service flags and state.
-- FinishStation signal, state, heartbeat, and last seen age. Missing radio packets are shown as `NO SIGNAL`, not `OFF`.
-- Signal from FinishStation (`Signal from finish: -72 dBm`) and signal reported by FinishStation from StartStation (`Signal reported by finish from start: -33 dBm`).
-- Last LoRa packet type.
+- FinishStation signal, state, heartbeat, last packet age, packet count, and last packet type. Missing radio packets are shown as `NO SIGNAL`, not `OFF`.
+- Signal from FinishStation (`Signal from finish: -72 dBm`) and signal reported by FinishStation from StartStation (`Signal reported by finish from start: -33 dBm`) with reverse-link age and packet count.
+- Last LoRa packet type and raw packet preview.
 - Countdown and current run timer.
 - Current rider and current trail.
 - Visible riders and trails sections, including select, add, deactivate, and per-section error messages. Empty rider/trail add forms show `Введите имя райдера` or `Введите название трассы`.
@@ -239,9 +249,11 @@ FinishStation `STATUS` includes state, active run, timer, button readiness, and 
   "activeRunId": "RUN-...",
   "riderName": "Test Rider",
   "elapsedMs": 12345,
+  "startLinkActive": true,
   "startRssi": -70,
   "startSnr": 8.5,
   "startLastSeenAgoMs": 250,
+  "startPacketCount": 12,
   "buttonReady": true
 }
 ```
@@ -281,7 +293,7 @@ StartStation replies to a matching active run with `FINISH_ACK`. Duplicate `FINI
    - password: `endurotimer`
 6. Open `http://192.168.4.1`.
 7. Add/select a rider and trail if desired.
-8. Wait until the Web UI shows Finish online.
+8. Wait until the Web UI shows the Finish signal as an RSSI value instead of `NO SIGNAL`.
 9. Press the StartStation physical button.
 10. FinishStation should show `RIDING`, the rider name, timer, and `Btn: FINISH`.
 11. Press the FinishStation physical button.
@@ -406,8 +418,8 @@ If files are still missing, the fallback page at `http://192.168.4.1/` should ap
 1. Check that `ENABLE_LORA=1` is present for both `start_station` and `finish_station` in `platformio.ini`.
 2. Check that both boards use `LORA_FREQUENCY_MHZ=868.0`.
 3. Watch FinishStation Serial for `STATUS sent heartbeat=5 state=...` every fifth heartbeat. STATUS is still sent every second.
-4. Watch StartStation Serial for `LORA RX type=STATUS ...` and `STATUS received heartbeat=... state=... rssi=... snr=...`.
-5. Watch FinishStation Serial for `START STATUS received heartbeat=... rssi=... snr=...`; this confirms StartStation heartbeat packets are reaching FinishStation in Idle.
+4. Watch StartStation Serial for `LORA RX from=finish type=STATUS ... age=0 count=...`, `STATUS received heartbeat=... state=... rssi=... snr=...`, and the five-second `LINK finish active=... age=...` diagnostic.
+5. Watch FinishStation Serial for `LORA RX from=start type=STATUS ... age=0 count=...`, `START STATUS received heartbeat=... state=... rssi=... snr=...`, and the five-second `LINK start active=... age=...` diagnostic; this confirms StartStation heartbeat packets are reaching FinishStation in Idle.
 6. If packet parsing fails, inspect `LORA parse failed raw=... error=...` on Serial.
 7. Check that antennas are connected to both boards.
 
@@ -457,4 +469,4 @@ Do not add these to the current smoke test:
 - RFID
 - C# backend integration
 
-Serial diagnostics and one-second heartbeats are intentionally kept on both roles.
+Serial diagnostics and STATUS heartbeats are intentionally kept on both roles.

@@ -32,18 +32,25 @@ function signalText(rssi, snr) {
   return rssi === null || rssi === undefined ? 'NO SIGNAL' : `${Number(rssi).toFixed(0)} dBm${snr === null || snr === undefined ? '' : ` / ${Number(snr).toFixed(1)} dB`}`;
 }
 
+function ageText(ageMs) {
+  return ageMs === null || ageMs === undefined || ageMs === 0 ? '—' : `${ageMs} ms`;
+}
+
 function renderStatus(status) {
   $('stateBadge').textContent = status.countdownText || status.state;
   $('stateBadge').className = `badge state-${String(status.state).toLowerCase()}`;
   $('serviceFlags').innerHTML = `OLED <span class="${status.oledOk ? 'online' : 'offline'}">${status.oledOk ? 'OK' : 'FAIL'}</span> · Wi-Fi <span class="${status.wifiOk ? 'online' : 'offline'}">${status.wifiOk ? 'OK' : 'FAIL'}</span> · Web <span class="${status.webOk ? 'online' : 'offline'}">${status.webOk ? 'OK' : 'FAIL'}</span> · LoRa <span class="${status.loraOk ? 'online' : 'offline'}">${status.loraOk ? 'OK' : 'FAIL'}</span>`;
   const lastSeen = Number(status.finishLastSeenAgoMs || 0);
-  $('finishOnline').textContent = `Финиш: ${status.finishSignalText || (status.finishStationOnline ? signalText(status.finishRssi, null) : 'NO SIGNAL')}`;
-  $('finishOnline').className = status.finishStationOnline ? 'online' : 'offline';
-  $('finishState').textContent = `state: ${finishStateLabel(status)} · heartbeat: ${status.finishHeartbeatCount || 0} · last seen: ${lastSeen || '—'} ms`;
+  const finishLinkActive = Boolean(status.finishLinkActive ?? status.finishStationOnline);
+  const finishSignal = finishLinkActive ? (status.finishSignalText || signalText(status.finishRssi, status.finishSnr)) : 'NO SIGNAL';
+  $('finishOnline').textContent = `Финишный терминал · Сигнал: ${finishSignal}`;
+  $('finishOnline').className = finishLinkActive ? 'online' : 'offline';
+  $('finishState').textContent = `Состояние: ${finishStateLabel(status)} · heartbeat: ${status.finishHeartbeatCount || 0} · последний пакет назад: ${ageText(lastSeen)}`;
   $('finishState').className = status.finishHasError ? 'offline' : status.finishState === 'FinishSent' ? 'pending' : '';
-  $('loraStats').textContent = `Signal from finish: ${signalText(status.finishRssi, status.finishSnr)}`;
-  $('reverseLoraStats').textContent = `Старт по данным финиша: ${status.finishReportedStartSignalText || signalText(status.finishReportedStartRssi, status.finishReportedStartSnr)}${status.finishReportedStartLastSeenAgoMs ? ` (${status.finishReportedStartLastSeenAgoMs} ms ago)` : ''}`;
-  $('lastPacket').textContent = `packet: ${status.lastLoRaPacketType || status.lastPacketType || '—'} · raw: ${status.lastLoRaRawShort || '—'}`;
+  $('loraStats').textContent = `Сигнал финиша: ${finishSignal} · age: ${ageText(lastSeen)} · пакетов: ${status.finishPacketCount || 0}`;
+  const reverseSignal = status.finishReportedStartLinkActive ? (status.finishReportedStartSignalText || signalText(status.finishReportedStartRssi, status.finishReportedStartSnr)) : 'NO SIGNAL';
+  $('reverseLoraStats').textContent = `Сигнал старта по данным финиша: ${reverseSignal} · age: ${ageText(status.finishReportedStartLastSeenAgoMs)} · пакетов: ${status.finishReportedStartPacketCount || 0}`;
+  $('lastPacket').textContent = `Последний пакет: ${status.finishLastPacketType || status.lastLoRaPacketType || status.lastPacketType || '—'} · raw: ${status.lastLoRaRawShort || '—'}`;
   $('countdown').textContent = status.countdownText ? `Countdown: ${status.countdownText}` : 'Countdown: —';
   $('runTimer').textContent = status.currentRunElapsedFormatted || '00:00';
   $('lastResult').textContent = status.lastResultFormatted || '—';

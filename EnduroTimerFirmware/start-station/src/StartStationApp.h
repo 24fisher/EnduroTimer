@@ -9,6 +9,7 @@
 #include "BuzzerStub.h"
 #include "OledDisplay.h"
 #include "RadioMessage.h"
+#include "LinkStatus.h"
 #include "StartState.h"
 #include "TimeUtils.h"
 
@@ -75,6 +76,7 @@ private:
   void sendStatus(uint32_t nowMs);
   String finishSignalText() const;
   String finishReportedStartSignalText() const;
+  void updateFinishLink(const RadioMessage& message, int packetRssi, float packetSnr);
   uint8_t ridingAnimationFrame() const;
   void handleRadioMessage(const RadioMessage& message);
   bool finishOnline() const;
@@ -110,25 +112,23 @@ private:
   IPAddress wifiIp_;
   String wifiMac_ = "-";
   uint32_t lastDisplayMs_ = 0;
-  uint32_t lastFinishSeenMs_ = 0;
+  LinkStatus finishLink_;
   uint32_t finishLastStatusMs_ = 0;
   uint32_t finishHeartbeatCount_ = 0;
   uint32_t startHeartbeatCount_ = 0;
   uint32_t lastStatusSendMs_ = 0;
   uint32_t lastAnyPacketMs_ = 0;
-  String finishState_ = "UNKNOWN";
-  int finishRssi_ = 0;
-  float finishSnr_ = 0.0F;
-  bool hasFinishSignal_ = false;
+  String finishState_ = "Unknown";
   int finishReportedStartRssi_ = 0;
   float finishReportedStartSnr_ = 0.0F;
   uint32_t finishReportedStartLastSeenAgoMs_ = 0;
   bool hasFinishReportedStartSignal_ = false;
+  bool finishReportedStartLinkActive_ = false;
+  uint32_t finishReportedStartPacketCount_ = 0;
   String lastFinishPacketType_ = "-";
   String lastLoRaRaw_ = "-";
   int lastRssi_ = 0;
   float lastSnr_ = 0.0F;
-  bool finishOnlineState_ = false;
   ButtonDebouncer startButton_;
   String lastCountdownText_;
   uint32_t lastLedMs_ = 0;

@@ -18,7 +18,6 @@ static constexpr uint8_t FINISH_MAX_RETRY_ATTEMPTS = 15;
 static constexpr uint32_t FINISH_RETRY_INTERVAL_MS = 1000UL;
 static constexpr uint32_t StatusIntervalMs = 1000UL;
 static constexpr uint32_t DisplayRefreshMs = 200UL;
-static constexpr uint32_t StartSignalTimeoutMs = 10000UL;
 RTC_DATA_ATTR static uint32_t finishBootCounter = 0;
 #if ENABLE_LORA
 static SX1262 radio = new Module(LORA_NSS, LORA_DIO1, LORA_RST, LORA_BUSY);
@@ -59,9 +58,6 @@ void FinishStationApp::loop() {
 #if ENABLE_LORA
   pollRadio();
 #endif
-  if (startLastSeenMs_ > 0 && now - startLastSeenMs_ > StartSignalTimeoutMs) {
-    hasStartSignal_ = false;
-  }
   updateLed(now);
 
   uint32_t finishTimestampMs = 0;
@@ -196,11 +192,8 @@ void FinishStationApp::pollRadio() {
     if (message.stationId.length() == 0) {
       Serial.printf("LORA missing stationId raw=%s\n", payload.c_str());
     }
-    if (message.stationId == "start") {
-      startRssi_ = lastRssi_;
-      startSnr_ = lastSnr_;
-      startLastSeenMs_ = millis();
-      hasStartSignal_ = true;
+    if (message.stationId == "start" && message.type != RadioMessageType::Unknown) {
+      updateStartLink(message, lastRssi_, lastSnr_);
     }
     handleRadioMessage(message);
   }
@@ -243,12 +236,14 @@ void FinishStationApp::sendStatus() {
   if (state_.riderName().length() > 0) message.riderName = state_.riderName();
   if (state_.trailName().length() > 0) message.trailName = state_.trailName();
   message.elapsedMs = state_.elapsedMs(clock_.nowMs());
-  if (hasStartSignal_ && startLastSeenMs_ > 0 && clock_.nowMs() - startLastSeenMs_ <= StartSignalTimeoutMs) {
+  message.startLinkActive = isLinkActive(startLink_);
+  message.startPacketCount = startLink_.packetCount;
+  if (message.startLinkActive) {
     message.hasStartRssi = true;
-    message.startRssi = startRssi_;
+    message.startRssi = startLink_.lastRssi;
     message.hasStartSnr = true;
-    message.startSnr = startSnr_;
-    message.startLastSeenAgoMs = clock_.nowMs() - startLastSeenMs_;
+    message.startSnr = startLink_.lastSnr;
+    message.startLastSeenAgoMs = linkAgeMs(startLink_);
   }
   if (sendRadio(message)) {
     heartbeatCounter_ += 1;
@@ -304,9 +299,18 @@ void FinishStationApp::resendFinishFromButton(uint32_t nowMs) {
 #endif
 }
 
+void FinishStationApp::updateStartLink(const RadioMessage& message, int packetRssi, float packetSnr) {
+  const String packetType = RadioProtocol::typeToString(message.type);
+  updateLinkStatus(startLink_, message.stationId, packetType, packetRssi, packetSnr);
+  if (message.state.length() > 0) startState_ = message.state;
+  Serial.printf("LORA RX from=%s type=%s rssi=%d snr=%.1f age=0 count=%lu\n",
+                message.stationId.c_str(), packetType.c_str(), packetRssi, static_cast<double>(packetSnr),
+                static_cast<unsigned long>(startLink_.packetCount));
+}
+
 void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
   if (message.type == RadioMessageType::Status && message.stationId == "start") {
-    Serial.printf("START STATUS received heartbeat=%lu rssi=%d snr=%.1f\n", static_cast<unsigned long>(message.heartbeat), startRssi_, static_cast<double>(startSnr_));
+    Serial.printf("START STATUS received heartbeat=%lu state=%s rssi=%d snr=%.1f\n", static_cast<unsigned long>(message.heartbeat), message.state.c_str(), startLink_.lastRssi, static_cast<double>(startLink_.lastSnr));
     return;
   }
 
@@ -341,8 +345,8 @@ void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
 
 void FinishStationApp::updateDisplay() {
   const String runShort = state_.runId().length() > 0 ? state_.runId().substring(max(0, static_cast<int>(state_.runId().length()) - 6)) : "-";
-  const bool startOnline = hasStartSignal_ && startLastSeenMs_ > 0 && millis() - startLastSeenMs_ <= StartSignalTimeoutMs;
-  const String startSignal = startOnline ? String("START:") + String(startRssi_) + "dBm" : String("START:NO SIG");
+  const bool startOnline = isLinkActive(startLink_);
+  const String startSignal = startOnline ? String("START:") + String(startLink_.lastRssi) + "dBm" : String("START:NO SIG");
 
   if (finishLineCrossedUntilMs_ > millis()) {
     display_.showFinishLineCrossed();
@@ -379,7 +383,7 @@ void FinishStationApp::updateDisplay() {
 
   display_.showLines({
     "FINISH TERMINAL",
-    String("LoRa: ") + (radioReady_ ? "OK" : "NO SIGNAL"),
+    String("LoRa: ") + (radioReady_ ? "OK" : "FAIL"),
     "State: IDLE",
     startSignal,
   });
@@ -390,12 +394,16 @@ uint8_t FinishStationApp::ridingAnimationFrame() const {
 }
 
 void FinishStationApp::logHeartbeat(uint32_t nowMs) {
-  if (nowMs - lastHeartbeatMs_ < 1000UL) return;
+  if (nowMs - lastHeartbeatMs_ < 5000UL) return;
 
   String heartbeatState = state_.stateText();
   heartbeatState.toUpperCase();
   Serial.printf("FINISH alive state=%s uptime=%lu heap=%lu minHeap=%lu buttonRaw=%d buttonPressed=%s\n", heartbeatState.c_str(),
                 static_cast<unsigned long>(nowMs), static_cast<unsigned long>(ESP.getFreeHeap()),
                 static_cast<unsigned long>(ESP.getMinFreeHeap()), sensor_.buttonRaw(), sensor_.buttonPressed() ? "true" : "false");
+  Serial.printf("LINK start active=%d age=%lu rssi=%d snr=%.1f lastType=%s count=%lu\n",
+                isLinkActive(startLink_) ? 1 : 0, static_cast<unsigned long>(linkAgeMs(startLink_)),
+                startLink_.lastRssi, static_cast<double>(startLink_.lastSnr),
+                startLink_.lastPacketType.c_str(), static_cast<unsigned long>(startLink_.packetCount));
   lastHeartbeatMs_ = nowMs;
 }

@@ -9,7 +9,8 @@ enum class RadioMessageType {
   RunStart,
   Finish,
   FinishAck,
-  Status
+  Status,
+  StartStatus
 };
 
 struct RadioMessage {
@@ -36,4 +37,6 @@ struct RadioMessage {
   bool hasStartSnr = false;
   float startSnr = 0.0F;
   uint32_t startLastSeenAgoMs = 0;
+  bool startLinkActive = false;
+  uint32_t startPacketCount = 0;
 };
