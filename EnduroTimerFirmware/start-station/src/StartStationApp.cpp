@@ -8,6 +8,7 @@
 
 #include "RadioProtocol.h"
 #include "DisplayText.h"
+#include "BuildConfig.h"
 
 #ifndef LORA_FREQUENCY_MHZ
 #define LORA_FREQUENCY_MHZ 868.0
@@ -29,6 +30,8 @@ void StartStationApp::begin() {
   startBootCounter += 1;
 
   Serial.println("Firmware: EnduroTimer StartStation");
+  Serial.println("Version: " FIRMWARE_VERSION);
+  Serial.println("Build: " __DATE__ " " __TIME__);
   Serial.println("Board/role: Heltec WiFi LoRa 32 V3 / StartStation");
   Serial.printf("Boot counter: %lu\n", static_cast<unsigned long>(startBootCounter));
   Serial.printf("Chip: %s rev %u cores=%u efuseMac=%llX\n", ESP.getChipModel(), ESP.getChipRevision(), ESP.getChipCores(), ESP.getEfuseMac());
@@ -39,7 +42,7 @@ void StartStationApp::begin() {
   oledReady_ = display_.begin();
   Serial.println(oledReady_ ? "[BOOT] OLED OK" : "[BOOT] OLED FAIL");
   if (oledReady_) {
-    display_.showBootScreen("START TERMINAL");
+    display_.showBootScreen(startHeader());
   }
 #else
   Serial.println("[BOOT] OLED init skipped (ENABLE_OLED=0)");
@@ -49,6 +52,7 @@ void StartStationApp::begin() {
   configureButton();
   Serial.println("[BOOT] Button OK");
   buzzer_.begin();
+  led_.begin();
   state_.begin();
   loadStorage();
 }
@@ -131,6 +135,9 @@ String StartStationApp::statusJson() const {
   const RunRecord& last = state_.lastRun();
 
   doc["device"] = "StartStation";
+  doc["firmwareVersion"] = FIRMWARE_VERSION;
+  doc["buildDate"] = __DATE__;
+  doc["buildTime"] = __TIME__;
   doc["state"] = state_.stateText();
   doc["oledOk"] = oledReady_;
   doc["wifiOk"] = wifiApStarted_;
@@ -146,6 +153,7 @@ String StartStationApp::statusJson() const {
   doc["finishLastPacketType"] = finishLink_.lastPacketType;
   doc["finishLastStatusMs"] = finishLastStatusMs_;
   doc["finishHeartbeatCount"] = finishHeartbeatCount_;
+  if (finishFirmwareVersion_.length() > 0) doc["finishFirmwareVersion"] = finishFirmwareVersion_; else doc["finishFirmwareVersion"] = nullptr;
   doc["finishActiveRunId"] = finishActiveRunId_;
   doc["finishRiderName"] = finishRiderName_;
   doc["finishElapsedMs"] = finishElapsedMs_;
@@ -247,7 +255,7 @@ void StartStationApp::beginRadio() {
     Serial.printf("LoRa FAIL code=%d\n", state);
     Serial.println("[BOOT] LoRa FAIL");
 #if ENABLE_OLED
-    if (!display_.testPatternOnly()) display_.showLines({"START TERMINAL", "LoRa FAIL", "code=" + String(state)});
+    if (!display_.testPatternOnly()) display_.showLines({startHeader(), "LoRa FAIL", "code=" + String(state)});
 #endif
     return;
   }
@@ -286,24 +294,34 @@ void StartStationApp::updateButton(uint32_t nowMs) {
 }
 
 void StartStationApp::updateLed(uint32_t nowMs) {
-#ifdef LED_BUILTIN
-  static bool configured = false;
-  if (!configured) {
-    pinMode(LED_BUILTIN, OUTPUT);
-    configured = true;
-  }
-  uint32_t interval = 1000UL;
-  if (state_.state() == StartRunState::Boot) interval = 120UL;
-  if (state_.state() == StartRunState::Countdown || state_.state() == StartRunState::Riding) interval = 180UL;
-  if (state_.state() == StartRunState::Error) interval = 100UL;
-  if (nowMs - lastLedMs_ >= interval) {
-    ledOn_ = !ledOn_;
-    digitalWrite(LED_BUILTIN, ledOn_ ? HIGH : LOW);
-    lastLedMs_ = nowMs;
-  }
-#else
   (void)nowMs;
-#endif
+  LedMode mode = LedMode::ReadySlowBlink;
+  switch (state_.state()) {
+    case StartRunState::Boot:
+    case StartRunState::Ready:
+    case StartRunState::Finished:
+      mode = finishOnline() || state_.state() != StartRunState::Ready ? LedMode::ReadySlowBlink : LedMode::NoSignalBlink;
+      break;
+    case StartRunState::Countdown:
+      mode = LedMode::CountdownFastBlink;
+      break;
+    case StartRunState::Riding:
+      mode = LedMode::RidingSolid;
+      break;
+    case StartRunState::Error:
+      mode = LedMode::ErrorFastBlink;
+      break;
+  }
+  led_.setMode(mode);
+  led_.update();
+}
+
+String StartStationApp::startHeader() const {
+  return String("START TERM v") + FIRMWARE_VERSION;
+}
+
+String StartStationApp::startShortHeader() const {
+  return String("START v") + FIRMWARE_VERSION;
 }
 
 void StartStationApp::pollRadio() {
@@ -415,6 +433,7 @@ void StartStationApp::sendStatus(uint32_t nowMs) {
   message.stationId = "start";
   message.messageId = RadioProtocol::makeMessageId("start-status");
   message.state = state_.stateText();
+  message.version = FIRMWARE_VERSION;
   message.uptimeMs = nowMs;
   message.timestampMs = nowMs;
   message.heartbeat = startHeartbeatCount_ + 1;
@@ -450,6 +469,7 @@ void StartStationApp::handleRadioMessage(const RadioMessage& message) {
     finishLastStatusMs_ = message.timestampMs > 0 ? message.timestampMs : message.uptimeMs;
     finishHeartbeatCount_ = message.heartbeat;
     if (message.state.length() > 0) finishState_ = message.state;
+    if (message.version.length() > 0) finishFirmwareVersion_ = message.version;
     if (message.runId.length() > 0) finishActiveRunId_ = message.runId;
     if (message.riderName.length() > 0) finishRiderName_ = message.riderName;
     finishElapsedMs_ = message.elapsedMs;
@@ -476,10 +496,11 @@ void StartStationApp::handleRadioMessage(const RadioMessage& message) {
       appendRunCsv(completed);
 #if ENABLE_OLED
       if (!display_.testPatternOnly()) {
-        display_.showLines({"FINISHED", completed.resultFormatted, "Run: " + completed.runId, "Finish: " + completed.finishSource});
+        display_.showLines({startShortHeader(), "FINISHED", completed.resultFormatted, "Run: " + completed.runId, "Finish: " + completed.finishSource});
       }
 #endif
       buzzer_.beep("FINISH");
+      led_.flash(2, 100, 120);
       sendFinishAck(message.runId);
     } else if (state_.lastRun().runId == message.runId && message.runId.length() > 0) {
       Serial.printf("Duplicate FINISH received, ACK resent runId=%s\n", message.runId.c_str());
@@ -511,7 +532,7 @@ void StartStationApp::updateCountdownDisplay(uint32_t nowMs) {
   Serial.printf("COUNTDOWN step=%s time=%lu\n", text.c_str(), static_cast<unsigned long>(nowMs));
 #if ENABLE_OLED
   if (!display_.testPatternOnly()) {
-    display_.showCountdown(text, "START");
+    display_.showCountdown(text, startShortHeader());
     Serial.printf("OLED countdown rendered step=%s at ms=%lu\n", text.c_str(), static_cast<unsigned long>(millis()));
   }
 #endif
@@ -526,12 +547,12 @@ void StartStationApp::updateDisplay() {
   const String linkDebug = finishLink_.lastPacketType.length() > 0 ? String("PKT:") + finishLink_.lastPacketType : String("HB:") + String(finishHeartbeatCount_);
 
   if (state_.state() == StartRunState::Countdown) {
-    display_.showCountdown(state_.countdownText(millis()), "START");
+    display_.showCountdown(state_.countdownText(millis()), startShortHeader());
     return;
   }
 
   if (state_.state() == StartRunState::Finished) {
-    display_.showLines({"START TERMINAL", "FINISHED", toDisplayText(last.riderName, 16), lastResult, linkDebug});
+    display_.showLines({startShortHeader(), "FINISHED", lastResult, toDisplayText(last.riderName, 16), linkDebug});
     return;
   }
 
@@ -539,14 +560,19 @@ void StartStationApp::updateDisplay() {
     String anim = String("RIDING ");
     for (uint8_t i = 0; i < ridingAnimationFrame(); ++i) anim += " ";
     anim += ">";
-    display_.showLines({"START TERMINAL", anim, "Time: " + formatDurationMs(millis() - current.startTimestampMs).substring(0, 5), fin, linkDebug});
+    display_.showLines({startHeader(), anim, "Time: " + formatDurationMs(millis() - current.startTimestampMs).substring(0, 5), fin, linkDebug});
+    return;
+  }
+
+  if (state_.state() == StartRunState::Error) {
+    display_.showLines({startHeader(), "ERROR", fin, linkDebug});
     return;
   }
 
   RiderRecord rider = selectRider();
   TrailRecord trail = selectTrail();
   display_.showLines({
-    "START TERMINAL",
+    startHeader(),
     fin,
     "Rider: " + toDisplayText(rider.displayName, 16),
     "Trail: " + toDisplayText(trail.displayName, 16),

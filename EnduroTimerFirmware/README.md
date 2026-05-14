@@ -31,6 +31,9 @@ The current Heltec V3 OLED configuration is fixed in `platformio.ini`:
 - Library: U8g2
 - `ARDUINO_USB_CDC_ON_BOOT=0`
 - `ARDUINO_USB_MODE=0`
+- `FIRMWARE_VERSION=0.01`
+- `STATUS_LED_PIN=35`
+- `STATUS_LED_ACTIVE_LEVEL=1`
 
 `OLED_TEST_PATTERN_ONLY=0` for the full smoke-test mode so application screens can update after the U8g2 boot test.
 
@@ -43,6 +46,30 @@ The current Heltec V3 OLED configuration is fixed in `platformio.ini`:
 - Countdown, timers, finish retries, OLED refresh, WebServer handling, and LoRa polling are all millis-based and should not block the main loop.
 - Runtime init failures for OLED, Wi-Fi, LittleFS, Web, or LoRa are logged and exposed in `/api/status`; they do not stop the loop or restart the ESP32.
 - Serial diagnostics and periodic `START alive` / `FINISH alive` heartbeats are intentionally kept; link detail logs are rate-limited to five seconds.
+- Bare Heltec WiFi LoRa 32 V3 boards do not include an onboard buzzer. Sound will require an external buzzer module later; this smoke-test firmware uses the onboard status LED for extra event indication.
+
+## Versioning
+
+- Firmware version is a manual semantic-like incremental string.
+- Initial version: `0.00`.
+- Each MR/iteration increments the string by `0.01` manually.
+- Current version: `0.01`.
+- The version is configured with `FIRMWARE_VERSION` and has a source fallback of `0.01`.
+- Version is shown in the OLED header, Serial boot logs, Web API status, Web UI status block, and LoRa `STATUS` payload.
+
+## Onboard LED indication
+
+Bare Heltec WiFi LoRa 32 V3 boards have no built-in buzzer. For now, the onboard LED provides additional non-audio event indication; a real buzzer is intentionally not connected by this firmware. The LED pin is configured by `STATUS_LED_PIN`, the active level by `STATUS_LED_ACTIVE_LEVEL`, and the shared `LedIndicator` service disables itself safely when no usable pin is configured.
+
+LED patterns are millis-based and do not block the main loop:
+
+- Ready slow blink
+- Countdown fast blink
+- Riding solid
+- Finish flash
+- Ack timeout fast blink
+- Error fast blink
+- No-signal blink
 
 ## Link status and LoRa signal
 
@@ -61,6 +88,7 @@ Signal display rules:
 - Every received LoRa packet logs `LORA RX type=... rssi=... snr=... raw=...`; valid opposite-station packets also log `LORA RX from=... type=... rssi=... snr=... age=0 count=...`. JSON parse failures, missing `stationId`, and unknown `type` are logged explicitly with the raw packet.
 - After every LoRa TX (`STATUS`, `RUN_START`, `FINISH`, or `FINISH_ACK`), the current firmware uses polling receive, so the next `pollRadio()` call explicitly re-enters receive/listen mode after the short blocking transmit. To avoid STATUS log spam, Serial prints `LoRa TX STATUS ok` and `LoRa RX mode restored` for every fifth STATUS heartbeat and prints the TX/RX-restore diagnostics for non-STATUS packets.
 - `STATUS payload len=...` is logged for every fifth STATUS heartbeat and whenever a STATUS payload exceeds 200 bytes. STATUS packets are serialized in a compact JSON form to keep the LoRa payload small while remaining accepted by the same deserializer.
+- StartStation and FinishStation include their `version` in every LoRa `STATUS` payload.
 - FinishStation includes its reported StartStation link fields (`startLinkActive`, `startRssi`, `startSnr`, `startLastSeenAgoMs`, and `startPacketCount`) in `STATUS`, so StartStation can show both radio directions in `/api/status`.
 
 ## Riders, trails, settings, and results
@@ -309,7 +337,7 @@ StartStation replies to a matching active run with `FINISH_ACK`. Duplicate `FINI
 StartStation Ready:
 
 ```text
-START TERMINAL
+START TERM v0.01
 FIN:-72dBm
 Rider: Test Rider
 Trail: Default trail
@@ -319,7 +347,7 @@ PKT:STATUS
 StartStation Countdown uses immediate rendering on every countdown text change and is not throttled by the normal status screen refresh:
 
 ```text
-START
+START v0.01
 3 / 2 / 1 / GO
 ```
 
@@ -328,7 +356,7 @@ The countdown state machine is millis-based and non-blocking: `3` for 1000 ms, `
 StartStation Riding includes a non-blocking moving `>` animation updated from `millis()` about every 250 ms:
 
 ```text
-START TERMINAL
+START TERM v0.01
 RIDING >
 Time: 00:12
 FIN:-72dBm
@@ -338,7 +366,7 @@ PKT:STATUS
 StartStation Finished:
 
 ```text
-START TERMINAL
+START v0.01
 FINISHED
 Test Rider
 00:20.123
@@ -347,7 +375,7 @@ Test Rider
 FinishStation Idle:
 
 ```text
-FINISH TERMINAL
+FINISH TERM v0.01
 LoRa: OK
 State: IDLE
 START:-70dBm
@@ -357,7 +385,7 @@ PKT:STATUS
 FinishStation Riding also shows the moving `>` animation:
 
 ```text
-FINISH TERMINAL
+FINISH TERM v0.01
 RIDING >
 Time: 00:12
 START:-70dBm
@@ -367,7 +395,7 @@ PKT:STATUS
 FinishStation finish-line overlay appears immediately after an accepted finish button press while retries and ACK handling continue in the background:
 
 ```text
-FINISH TERMINAL
+FINISH TERM v0.01
 FINISH LINE
 CROSSED
 ```
@@ -375,7 +403,7 @@ CROSSED
 FinishStation FinishSent:
 
 ```text
-FINISH TERMINAL
+FINISH TERM v0.01
 FINISH SENT
 Sent: x/15
 START:-70dBm
@@ -385,7 +413,7 @@ PKT:STATUS
 FinishStation ACK:
 
 ```text
-FINISH TERMINAL
+FINISH TERM v0.01
 ACK OK
 IDLE
 ```

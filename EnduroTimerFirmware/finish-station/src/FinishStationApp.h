@@ -9,6 +9,7 @@
 #include "OledDisplay.h"
 #include "RadioMessage.h"
 #include "LinkStatus.h"
+#include "LedIndicator.h"
 #include "TimeUtils.h"
 
 class FinishStationApp {
@@ -19,6 +20,7 @@ public:
 private:
   void beginRadio();
   void updateLed(uint32_t nowMs);
+  String finishHeader() const;
   void pollRadio();
   bool sendRadio(const RadioMessage& message, int* resultCode = nullptr);
   void restoreRadioReceiveMode();
@@ -34,6 +36,7 @@ private:
   ClockService clock_;
   OledDisplay display_;
   BuzzerStub buzzer_;
+  LedIndicator led_;
   FinishSensorStub sensor_;
   FinishState state_;
 
@@ -46,11 +49,9 @@ private:
   uint32_t lastFinishSendMs_ = 0;
   uint32_t heartbeatCounter_ = 0;
   uint32_t startHeartbeatCount_ = 0;
-  uint32_t lastLedMs_ = 0;
   uint32_t lastHeartbeatMs_ = 0;
   uint8_t finishAttempts_ = 0;
   uint8_t manualResendCount_ = 0;
-  bool ledOn_ = false;
   String lastPacket_ = "-";
   String lastLoRaRaw_ = "-";
   int lastRssi_ = 0;

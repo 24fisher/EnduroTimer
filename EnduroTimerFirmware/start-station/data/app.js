@@ -39,6 +39,8 @@ function ageText(ageMs) {
 function renderStatus(status) {
   $('stateBadge').textContent = status.countdownText || status.state;
   $('stateBadge').className = `badge state-${String(status.state).toLowerCase()}`;
+  const finishFirmware = status.finishFirmwareVersion ? ` · Finish firmware: ${status.finishFirmwareVersion}` : '';
+  $('firmwareVersions').textContent = `Start firmware: ${status.firmwareVersion || '—'}${finishFirmware}`;
   $('serviceFlags').innerHTML = `OLED <span class="${status.oledOk ? 'online' : 'offline'}">${status.oledOk ? 'OK' : 'FAIL'}</span> · Wi-Fi <span class="${status.wifiOk ? 'online' : 'offline'}">${status.wifiOk ? 'OK' : 'FAIL'}</span> · Web <span class="${status.webOk ? 'online' : 'offline'}">${status.webOk ? 'OK' : 'FAIL'}</span> · LoRa <span class="${status.loraOk ? 'online' : 'offline'}">${status.loraOk ? 'OK' : 'FAIL'}</span>`;
   const lastSeen = Number(status.finishLastSeenAgoMs || 0);
   const finishLinkActive = Boolean(status.finishLinkActive ?? status.finishStationOnline);
