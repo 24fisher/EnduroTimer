@@ -198,6 +198,7 @@ void FinishStationApp::pollRadio() {
     lastPacket_ = RadioProtocol::typeToString(message.type);
     Serial.printf("LORA RX raw=%s\n", lastLoRaRaw_.c_str());
     Serial.printf("LORA RX type=%s rssi=%d snr=%.1f raw=%s\n", lastPacket_.c_str(), lastRssi_, static_cast<double>(lastSnr_), lastLoRaRaw_.c_str());
+    Serial.printf("LORA parsed type=%s stationId=%s hb=%lu\n", lastPacket_.c_str(), message.stationId.c_str(), static_cast<unsigned long>(message.heartbeat));
     if (message.type == RadioMessageType::Unknown) {
       Serial.printf("LORA unknown type=%s raw=%s\n", lastPacket_.c_str(), payload.c_str());
     }
@@ -223,8 +224,15 @@ bool FinishStationApp::sendRadio(const RadioMessage& message, int* resultCode) {
 
   String payload;
   RadioProtocol::serialize(message, payload);
-  if (message.type == RadioMessageType::Status && (message.heartbeat == 0 || message.heartbeat % 5 == 0 || payload.length() > 200)) {
-    Serial.printf("STATUS payload len=%u\n", static_cast<unsigned>(payload.length()));
+  const String typeText = RadioProtocol::typeToString(message.type);
+  Serial.printf("%s payload len=%u\n", typeText.c_str(), static_cast<unsigned>(payload.length()));
+  if (payload.length() > MAX_LORA_PAYLOAD_WARN) {
+    Serial.printf("%s payload too large len=%u\n", typeText.c_str(), static_cast<unsigned>(payload.length()));
+  }
+  if (message.type == RadioMessageType::Status && payload.length() > MAX_LORA_PAYLOAD_HARD) {
+    Serial.printf("STATUS skipped: payload too large len=%u\n", static_cast<unsigned>(payload.length()));
+    RadioProtocol::serializeEmergencyStatus(message, payload);
+    Serial.printf("STATUS emergency payload len=%u\n", static_cast<unsigned>(payload.length()));
   }
   const int result = radio.transmit(payload);
   if (resultCode != nullptr) *resultCode = result;
@@ -235,7 +243,7 @@ bool FinishStationApp::sendRadio(const RadioMessage& message, int* resultCode) {
     Serial.printf("[FinishStation] LoRa TX failed: %d\n", result);
     return false;
   }
-  if (logTxMode) Serial.printf("LoRa TX %s ok\n", RadioProtocol::typeToString(message.type).c_str());
+  if (logTxMode) Serial.printf("LoRa TX %s ok\n", typeText.c_str());
   return true;
 #else
   (void)message;
@@ -254,42 +262,23 @@ void FinishStationApp::restoreRadioReceiveMode() {
 void FinishStationApp::sendStatus(uint32_t nowMs) {
   RadioMessage message;
   message.type = RadioMessageType::Status;
-  message.messageId = RadioProtocol::makeMessageId("finish-status");
   message.stationId = "finish";
   message.state = state_.stateText();
-  message.version = FIRMWARE_VERSION;
-  message.bootId = bootId_;
-  message.source = "FinishStation";
-  message.beamClear = true;
-  message.buttonReady = true;
-  message.timestampMs = nowMs;
   message.uptimeMs = nowMs;
   message.heartbeat = heartbeatCounter_ + 1;
-  if (state_.runId().length() > 0) message.runId = state_.runId();
-  if (state_.riderName().length() > 0) message.riderName = state_.riderName();
-  if (state_.trailName().length() > 0) message.trailName = state_.trailName();
-  if (lastFinishedRunId_.length() > 0 && message.runId.length() == 0) message.runId = lastFinishedRunId_;
-  if (lastResultMs_ > 0) message.resultMs = lastResultMs_;
-  if (lastResultFormatted_.length() > 0) message.resultFormatted = lastResultFormatted_;
-  message.elapsedMs = state_.elapsedMs(nowMs);
-  message.startLinkActive = isLinkActive(startLink_);
-  message.startPacketCount = startLink_.packetCount;
-  if (message.startLinkActive) {
+  if (isLinkActive(startLink_)) {
     message.hasStartRssi = true;
     message.startRssi = startLink_.lastRssi;
     message.hasStartSnr = true;
     message.startSnr = startLink_.lastSnr;
     message.startLastSeenAgoMs = linkAgeMs(startLink_);
   }
-  const BatteryStatus battery = battery_.read();
-  message.hasBatteryVoltage = battery.available;
-  message.batteryVoltage = battery.voltage;
-  message.batteryPercent = battery.percent;
-  message.startTimestampMs = remoteStartTimestampMs_;
-  message.remoteStartTimestampMs = remoteStartTimestampMs_;
-  message.localRunStartReceivedMillis = state_.localRunStartReceivedMillis();
-  message.finishLocalElapsedMs = finishLocalElapsedMs_;
-  message.finishTimestampMs = state_.finishTimestampMs();
+
+  String preview;
+  RadioProtocol::serializeCompactStatus(message, preview);
+  Serial.printf("FINISH STATUS TX compact hb=%lu len=%u\n",
+                static_cast<unsigned long>(message.heartbeat), static_cast<unsigned>(preview.length()));
+
   int resultCode = 0;
   if (sendRadio(message, &resultCode)) {
     heartbeatCounter_ += 1;
