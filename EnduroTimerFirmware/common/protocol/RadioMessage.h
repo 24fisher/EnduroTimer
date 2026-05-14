@@ -21,6 +21,7 @@ struct RadioMessage {
   String riderName;
   String trailName;
   String state;
+  String version;
   String source;
   bool beamClear = true;
   bool buttonReady = false;

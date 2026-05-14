@@ -10,6 +10,7 @@
 #include "OledDisplay.h"
 #include "RadioMessage.h"
 #include "LinkStatus.h"
+#include "LedIndicator.h"
 #include "StartState.h"
 #include "TimeUtils.h"
 
@@ -69,6 +70,8 @@ private:
   void configureButton();
   void updateButton(uint32_t nowMs);
   void updateLed(uint32_t nowMs);
+  String startHeader() const;
+  String startShortHeader() const;
   void pollRadio();
   bool sendRadio(const RadioMessage& message, int* resultCode = nullptr);
   void restoreRadioReceiveMode();
@@ -104,6 +107,7 @@ private:
   ClockService clock_;
   OledDisplay display_;
   BuzzerStub buzzer_;
+  LedIndicator led_;
   StartState state_;
 
   bool oledReady_ = false;
@@ -122,6 +126,7 @@ private:
   uint32_t lastPriorityTxMs_ = 0;
   uint32_t lastAnyPacketMs_ = 0;
   String finishState_ = "Unknown";
+  String finishFirmwareVersion_;
   String finishActiveRunId_;
   String finishRiderName_;
   uint32_t finishElapsedMs_ = 0;
@@ -137,9 +142,7 @@ private:
   float lastSnr_ = 0.0F;
   ButtonDebouncer startButton_;
   String lastCountdownText_;
-  uint32_t lastLedMs_ = 0;
   uint32_t lastHeartbeatMs_ = 0;
-  bool ledOn_ = false;
   std::vector<RiderRecord> riders_;
   std::vector<TrailRecord> trails_;
   AppSettings settings_;

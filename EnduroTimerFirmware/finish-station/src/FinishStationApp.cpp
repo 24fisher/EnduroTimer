@@ -5,6 +5,7 @@
 
 #include "RadioProtocol.h"
 #include "DisplayText.h"
+#include "BuildConfig.h"
 
 #ifndef LORA_FREQUENCY_MHZ
 #define LORA_FREQUENCY_MHZ 868.0
@@ -27,6 +28,8 @@ void FinishStationApp::begin() {
   finishBootCounter += 1;
 
   Serial.println("Firmware: EnduroTimer FinishStation");
+  Serial.println("Version: " FIRMWARE_VERSION);
+  Serial.println("Build: " __DATE__ " " __TIME__);
   Serial.println("Board/role: Heltec WiFi LoRa 32 V3 / FinishStation");
   Serial.printf("Boot counter: %lu\n", static_cast<unsigned long>(finishBootCounter));
   Serial.printf("Chip: %s rev %u cores=%u efuseMac=%llX\n", ESP.getChipModel(), ESP.getChipRevision(), ESP.getChipCores(), ESP.getEfuseMac());
@@ -37,7 +40,7 @@ void FinishStationApp::begin() {
   oledReady_ = display_.begin();
   Serial.println(oledReady_ ? "[BOOT] OLED OK" : "[BOOT] OLED FAIL");
   if (oledReady_) {
-    display_.showBootScreen("FINISH TERMINAL");
+    display_.showBootScreen(finishHeader());
   }
 #else
   Serial.println("[BOOT] OLED init skipped (ENABLE_OLED=0)");
@@ -48,6 +51,7 @@ void FinishStationApp::begin() {
   sensor_.begin();
   Serial.println("[BOOT] Finish button OK");
   buzzer_.begin();
+  led_.begin();
   beginRadio();
   state_.begin();
   Serial.println("[BOOT] State Idle");
@@ -69,9 +73,10 @@ void FinishStationApp::loop() {
       lastFinishSendMs_ = 0;
       finishLineCrossedUntilMs_ = now + 2000UL;
       Serial.printf("Finish accepted runId=%s\n", state_.runId().c_str());
+      led_.flash(2, 100, 120);
 #if ENABLE_OLED
       if (!display_.testPatternOnly()) {
-        display_.showFinishLineCrossed();
+        display_.showLines({finishHeader(), "FINISH LINE", "CROSSED"});
       }
 #endif
       sendFinish();
@@ -79,7 +84,7 @@ void FinishStationApp::loop() {
       Serial.println("FINISH button ignored: no active run");
       showNoRunUntilMs_ = now + 1500UL;
 #if ENABLE_OLED
-      if (!display_.testPatternOnly()) display_.showLines({"FINISH TERMINAL", "NO ACTIVE RUN"});
+      if (!display_.testPatternOnly()) display_.showLines({finishHeader(), "NO ACTIVE RUN"});
 #endif
     } else if (state_.state() == FinishRunState::FinishSent || state_.state() == FinishRunState::Error) {
       resendFinishFromButton(now);
@@ -127,7 +132,7 @@ void FinishStationApp::beginRadio() {
     Serial.printf("LoRa FAIL code=%d\n", initState);
     Serial.println("[BOOT] LoRa FAIL");
 #if ENABLE_OLED
-    if (!display_.testPatternOnly()) display_.showLines({"FINISH TERMINAL", "LoRa FAIL", "code=" + String(initState)});
+    if (!display_.testPatternOnly()) display_.showLines({finishHeader(), "LoRa FAIL", "code=" + String(initState)});
 #endif
     return;
   }
@@ -145,25 +150,31 @@ void FinishStationApp::beginRadio() {
 }
 
 void FinishStationApp::updateLed(uint32_t nowMs) {
-#ifdef LED_BUILTIN
-  static bool configured = false;
-  if (!configured) {
-    pinMode(LED_BUILTIN, OUTPUT);
-    configured = true;
-  }
-  uint32_t interval = 1000UL;
-  if (state_.state() == FinishRunState::Boot) interval = 120UL;
-  if (state_.state() == FinishRunState::WaitFinish || state_.state() == FinishRunState::FinishSent) interval = 180UL;
-  if (state_.state() == FinishRunState::Error) interval = 100UL;
-  if (nowMs - lastLedMs_ >= interval) {
-    ledOn_ = !ledOn_;
-    digitalWrite(LED_BUILTIN, ledOn_ ? HIGH : LOW);
-    lastLedMs_ = nowMs;
-  }
-#else
   (void)nowMs;
-#endif
+  LedMode mode = LedMode::ReadySlowBlink;
+  switch (state_.state()) {
+    case FinishRunState::Boot:
+    case FinishRunState::Idle:
+      mode = LedMode::ReadySlowBlink;
+      break;
+    case FinishRunState::WaitFinish:
+      mode = LedMode::RidingSolid;
+      break;
+    case FinishRunState::FinishSent:
+      mode = LedMode::AckTimeoutBlink;
+      break;
+    case FinishRunState::Error:
+      mode = LedMode::ErrorFastBlink;
+      break;
+  }
+  led_.setMode(mode);
+  led_.update();
 }
+
+String FinishStationApp::finishHeader() const {
+  return String("FINISH TERM v") + FIRMWARE_VERSION;
+}
+
 
 void FinishStationApp::pollRadio() {
 #if ENABLE_LORA
@@ -245,6 +256,7 @@ void FinishStationApp::sendStatus(uint32_t nowMs) {
   message.messageId = RadioProtocol::makeMessageId("finish-status");
   message.stationId = "finish";
   message.state = state_.stateText();
+  message.version = FIRMWARE_VERSION;
   message.source = "FinishStation";
   message.beamClear = true;
   message.buttonReady = true;
@@ -312,10 +324,11 @@ void FinishStationApp::resendFinishFromButton(uint32_t nowMs) {
     Serial.printf("FINISH button short press: manual resend attempt=%u\n", finishAttempts_ + 1);
   }
   finishLineCrossedUntilMs_ = 0;
+  led_.flash(3, 100, 120);
   sendFinish();
 #if ENABLE_OLED
   if (!display_.testPatternOnly()) {
-    display_.showLines({"FINISH TERMINAL", resendAfterTimeout ? "RESEND FINISH" : "FINISH RESENT", "Sent: " + String(finishAttempts_) + "/" + String(FINISH_MAX_RETRY_ATTEMPTS)});
+    display_.showLines({finishHeader(), resendAfterTimeout ? "RESEND FINISH" : "FINISH RESENT", "Sent: " + String(finishAttempts_) + "/" + String(FINISH_MAX_RETRY_ATTEMPTS)});
   }
 #endif
 }
@@ -361,7 +374,7 @@ void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
     showAckOkUntilMs_ = millis() + 1500UL;
 #if ENABLE_OLED
     if (!display_.testPatternOnly()) {
-      display_.showLines({"FINISH TERMINAL", "ACK OK", "IDLE"});
+      display_.showLines({finishHeader(), "ACK OK", "IDLE"});
     }
 #endif
   }
@@ -374,22 +387,22 @@ void FinishStationApp::updateDisplay() {
   const String linkDebug = startLink_.lastPacketType.length() > 0 ? String("PKT:") + startLink_.lastPacketType : String("HB:") + String(startHeartbeatCount_);
 
   if (finishLineCrossedUntilMs_ > millis()) {
-    display_.showFinishLineCrossed();
+    display_.showLines({finishHeader(), "FINISH LINE", "CROSSED"});
     return;
   }
 
   if (showAckOkUntilMs_ > millis()) {
-    display_.showLines({"FINISH TERMINAL", "ACK OK", "IDLE"});
+    display_.showLines({finishHeader(), "ACK OK", "IDLE"});
     return;
   }
 
   if (showNoRunUntilMs_ > millis()) {
-    display_.showLines({"FINISH TERMINAL", "NO ACTIVE RUN", "Press START"});
+    display_.showLines({finishHeader(), "NO ACTIVE RUN", "Press START"});
     return;
   }
 
   if (state_.state() == FinishRunState::Error) {
-    display_.showLines({"FINISH TERMINAL", "ACK TIMEOUT", "PRESS BTN RESEND", "Sent: " + String(finishAttempts_) + "/" + String(FINISH_MAX_RETRY_ATTEMPTS)});
+    display_.showLines({finishHeader(), "ACK TIMEOUT", "PRESS BTN RESEND", "Sent: " + String(finishAttempts_) + "/" + String(FINISH_MAX_RETRY_ATTEMPTS)});
     return;
   }
 
@@ -397,17 +410,17 @@ void FinishStationApp::updateDisplay() {
     String anim = String("RIDING ");
     for (uint8_t i = 0; i < ridingAnimationFrame(); ++i) anim += " ";
     anim += ">";
-    display_.showLines({"FINISH TERMINAL", anim, "Time: " + formatDurationMs(state_.elapsedMs(millis())).substring(0, 5), startSignal, linkDebug});
+    display_.showLines({finishHeader(), anim, "Time: " + formatDurationMs(state_.elapsedMs(millis())).substring(0, 5), startSignal, linkDebug});
     return;
   }
 
   if (state_.state() == FinishRunState::FinishSent) {
-    display_.showLines({"FINISH TERMINAL", "FINISH SENT", "Sent: " + String(finishAttempts_) + "/" + String(FINISH_MAX_RETRY_ATTEMPTS), startSignal, linkDebug});
+    display_.showLines({finishHeader(), "FINISH SENT", "Sent: " + String(finishAttempts_) + "/" + String(FINISH_MAX_RETRY_ATTEMPTS), startSignal, linkDebug});
     return;
   }
 
   display_.showLines({
-    "FINISH TERMINAL",
+    finishHeader(),
     String("LoRa: ") + (radioReady_ ? "OK" : "FAIL"),
     "State: IDLE",
     startSignal,

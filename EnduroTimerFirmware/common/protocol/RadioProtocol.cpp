@@ -36,10 +36,16 @@ bool RadioProtocol::serialize(const RadioMessage& message, String& output) {
   JsonDocument doc;
 
   if (message.type == RadioMessageType::Status) {
+    doc["type"] = "STATUS";
+    doc["stationId"] = message.stationId;
     doc["t"] = "S";
     doc["mid"] = message.messageId;
     doc["sid"] = message.stationId;
     doc["st"] = message.state;
+    if (message.version.length() > 0) {
+      doc["version"] = message.version;
+      doc["ver"] = message.version;
+    }
     if (message.uptimeMs > 0) doc["up"] = message.uptimeMs;
     if (message.timestampMs > 0) doc["ts"] = message.timestampMs;
     if (message.heartbeat > 0) doc["hb"] = message.heartbeat;
@@ -66,6 +72,7 @@ bool RadioProtocol::serialize(const RadioMessage& message, String& output) {
   if (message.riderName.length() > 0) doc["riderName"] = message.riderName;
   if (message.trailName.length() > 0) doc["trailName"] = message.trailName;
   if (message.state.length() > 0) doc["state"] = message.state;
+  if (message.version.length() > 0) doc["version"] = message.version;
   if (message.source.length() > 0) doc["source"] = message.source;
   if (message.timestampMs > 0) doc["timestampMs"] = message.timestampMs;
   if (message.uptimeMs > 0) doc["uptimeMs"] = message.uptimeMs;
@@ -103,6 +110,8 @@ bool RadioProtocol::deserialize(const String& input, RadioMessage& output, Strin
   output.state = doc["state"] | "";
   if (output.state.length() == 0) output.state = doc["st"] | "";
   output.source = doc["source"] | "";
+  output.version = doc["version"] | "";
+  if (output.version.length() == 0) output.version = doc["ver"] | "";
   output.beamClear = doc["beamClear"] | true;
   output.buttonReady = doc["buttonReady"] | false;
   output.timestampMs = doc["timestampMs"] | 0;

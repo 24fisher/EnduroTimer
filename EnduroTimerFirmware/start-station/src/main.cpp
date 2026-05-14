@@ -33,25 +33,6 @@ static bool beginWifiApOnly() {
 }
 #endif
 
-static void blinkDiagnosticLed(uint32_t nowMs) {
-#ifdef LED_BUILTIN
-  static bool configured = false;
-  static bool ledOn = false;
-  static uint32_t lastBlinkMs = 0;
-  if (!configured) {
-    pinMode(LED_BUILTIN, OUTPUT);
-    configured = true;
-  }
-  if (nowMs - lastBlinkMs >= 1000UL) {
-    ledOn = !ledOn;
-    digitalWrite(LED_BUILTIN, ledOn ? HIGH : LOW);
-    lastBlinkMs = nowMs;
-  }
-#else
-  (void)nowMs;
-#endif
-}
-
 void setup() {
   Serial.begin(115200);
   delay(1500);
@@ -90,8 +71,6 @@ void setup() {
 void loop() {
   static uint32_t lastLog = 0;
   const uint32_t now = millis();
-  blinkDiagnosticLed(now);
-
   if (now - lastLog > 1000UL) {
     lastLog = now;
     Serial.print("APP alive ms=");
@@ -105,5 +84,5 @@ void loop() {
 #if ENABLE_WIFI && ENABLE_WEB
   web.loop();
 #endif
-  delay(2);
+  yield();
 }
