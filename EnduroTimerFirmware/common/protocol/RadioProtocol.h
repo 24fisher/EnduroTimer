@@ -3,7 +3,7 @@
 #include <Arduino.h>
 #include "RadioMessage.h"
 
-static constexpr uint16_t MAX_LORA_PAYLOAD_WARN = 200;
+static constexpr uint16_t MAX_LORA_PAYLOAD_WARN = 180;
 static constexpr uint16_t MAX_LORA_PAYLOAD_HARD = 240;
 
 class RadioProtocol {

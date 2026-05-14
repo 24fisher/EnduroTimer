@@ -127,6 +127,48 @@ bool RadioProtocol::serialize(const RadioMessage& message, String& output) {
   }
 
   JsonDocument doc;
+  switch (message.type) {
+    case RadioMessageType::RunStart:
+      doc["t"] = "RS";
+      doc["sid"] = compactStationId(message.stationId);
+      if (message.runId.length() > 0) doc["rid"] = message.runId;
+      if (message.runNumber > 0) doc["rn"] = message.runNumber;
+      if (message.raceStartTimeMs > 0) doc["rs"] = message.raceStartTimeMs;
+      if (message.version.length() > 0) doc["v"] = message.version;
+      output = "";
+      return serializeJson(doc, output) > 0;
+    case RadioMessageType::RunStartAck:
+      doc["t"] = "RSA";
+      doc["sid"] = compactStationId(message.stationId);
+      if (message.runId.length() > 0) doc["rid"] = message.runId;
+      if (message.runNumber > 0) doc["rn"] = message.runNumber;
+      if (message.state.length() > 0) doc["st"] = compactState(message.state);
+      if (message.version.length() > 0) doc["v"] = message.version;
+      output = "";
+      return serializeJson(doc, output) > 0;
+    case RadioMessageType::Finish:
+      doc["t"] = "F";
+      doc["sid"] = compactStationId(message.stationId);
+      if (message.runId.length() > 0) doc["rid"] = message.runId;
+      if (message.runNumber > 0) doc["rn"] = message.runNumber;
+      if (message.finishRaceTimeMs > 0) doc["fr"] = message.finishRaceTimeMs;
+      if (message.resultMs > 0) doc["res"] = message.resultMs;
+      if (message.version.length() > 0) doc["v"] = message.version;
+      output = "";
+      return serializeJson(doc, output) > 0;
+    case RadioMessageType::FinishAck:
+      doc["t"] = "FA";
+      doc["sid"] = compactStationId(message.stationId);
+      if (message.runId.length() > 0) doc["rid"] = message.runId;
+      if (message.runNumber > 0) doc["rn"] = message.runNumber;
+      if (message.resultMs > 0) doc["res"] = message.resultMs;
+      if (message.version.length() > 0) doc["v"] = message.version;
+      output = "";
+      return serializeJson(doc, output) > 0;
+    default:
+      break;
+  }
+
   doc["type"] = typeToString(message.type);
   doc["messageId"] = message.messageId;
 
@@ -178,7 +220,12 @@ bool RadioProtocol::deserialize(const String& input, RadioMessage& output, Strin
   output = RadioMessage{};
   const String compactType = doc["t"] | "";
   const bool compactStatus = compactType == "S";
-  output.type = compactStatus ? RadioMessageType::Status : typeFromString(doc["type"].as<String>());
+  if (compactType == "S") output.type = RadioMessageType::Status;
+  else if (compactType == "RS") output.type = RadioMessageType::RunStart;
+  else if (compactType == "RSA") output.type = RadioMessageType::RunStartAck;
+  else if (compactType == "F") output.type = RadioMessageType::Finish;
+  else if (compactType == "FA") output.type = RadioMessageType::FinishAck;
+  else output.type = typeFromString(doc["type"].as<String>());
   output.messageId = doc["messageId"] | "";
   if (output.messageId.length() == 0) output.messageId = doc["mid"] | "";
   output.stationId = doc["stationId"] | "";
@@ -188,8 +235,9 @@ bool RadioProtocol::deserialize(const String& input, RadioMessage& output, Strin
   if (output.runId.length() == 0) output.runId = doc["rid"] | "";
   output.runNumber = doc["runNumber"] | 0;
   if (output.runNumber == 0) output.runNumber = doc["rnbr"] | 0;
+  if (output.runNumber == 0 && !doc["rn"].isNull() && doc["rn"].is<uint32_t>()) output.runNumber = doc["rn"].as<uint32_t>();
   output.riderName = doc["riderName"] | "";
-  if (output.riderName.length() == 0) output.riderName = doc["rn"] | "";
+  if (output.riderName.length() == 0 && !doc["rn"].isNull() && doc["rn"].is<const char*>()) output.riderName = doc["rn"] | "";
   output.trailName = doc["trailName"] | "";
   if (output.trailName.length() == 0) output.trailName = doc["tn"] | "";
   output.state = doc["state"] | "";
@@ -197,6 +245,7 @@ bool RadioProtocol::deserialize(const String& input, RadioMessage& output, Strin
   output.source = doc["source"] | "";
   output.version = doc["version"] | "";
   if (output.version.length() == 0) output.version = doc["ver"] | "";
+  if (output.version.length() == 0) output.version = doc["v"] | "";
   output.bootId = doc["bootId"] | "";
   if (output.bootId.length() == 0) output.bootId = doc["bid"] | "";
   output.role = doc["role"] | "";
@@ -213,7 +262,9 @@ bool RadioProtocol::deserialize(const String& input, RadioMessage& output, Strin
   if (output.heartbeat == 0) output.heartbeat = doc["hb"] | 0;
   output.startTimestampMs = doc["startTimestampMs"] | 0;
   output.raceStartTimeMs = doc["raceStartTimeMs"] | 0;
+  if (output.raceStartTimeMs == 0) output.raceStartTimeMs = doc["rs"] | 0;
   output.finishRaceTimeMs = doc["finishRaceTimeMs"] | 0;
+  if (output.finishRaceTimeMs == 0 && compactType == "F") output.finishRaceTimeMs = doc["fr"] | 0;
   output.timingSource = doc["timingSource"] | "";
   output.syncId = doc["syncId"] | "";
   output.t1StartRaceMs = doc["t1StartRaceMs"] | 0;
@@ -253,7 +304,7 @@ bool RadioProtocol::deserialize(const String& input, RadioMessage& output, Strin
   output.startPacketCount = doc["startPacketCount"] | 0;
   if (output.startPacketCount == 0) output.startPacketCount = doc["sp"] | 0;
   if (!doc["finishRssi"].isNull()) { output.hasFinishRssi = true; output.finishRssi = doc["finishRssi"].as<int>(); }
-  if (!doc["fr"].isNull()) { output.hasFinishRssi = true; output.finishRssi = doc["fr"].as<int>(); }
+  if (compactStatus && !doc["fr"].isNull()) { output.hasFinishRssi = true; output.finishRssi = doc["fr"].as<int>(); }
   if (!doc["finishSnr"].isNull()) { output.hasFinishSnr = true; output.finishSnr = doc["finishSnr"].as<float>(); }
   if (!doc["fs"].isNull()) { output.hasFinishSnr = true; output.finishSnr = doc["fs"].as<float>(); }
 
@@ -268,7 +319,8 @@ bool RadioProtocol::deserialize(const String& input, RadioMessage& output, Strin
     output.batteryPercent = doc["bp"] | output.batteryPercent;
   }
 
-  if (output.messageId.length() == 0 && output.type != RadioMessageType::Status) {
+  const bool compactCritical = compactType == "RS" || compactType == "RSA" || compactType == "F" || compactType == "FA";
+  if (output.messageId.length() == 0 && output.type != RadioMessageType::Status && !compactCritical) {
     if (error != nullptr) *error = "missing messageId";
     return false;
   }

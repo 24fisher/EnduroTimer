@@ -30,7 +30,7 @@ private:
   void sendStatus(uint32_t nowMs);
   void sendHello(uint32_t nowMs);
   void sendHelloAck(uint32_t nowMs);
-  void sendRunStartAck(const String& runId);
+  void sendRunStartAck(const RadioMessage& runStart);
 #if ENABLE_LORA_TIME_SYNC
   void sendSyncRequest(uint32_t nowMs);
   void sendSyncPong(const RadioMessage& ping);

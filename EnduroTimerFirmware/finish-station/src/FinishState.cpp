@@ -7,7 +7,7 @@ void FinishState::begin() {
 void FinishState::startRun(const String& runId, uint32_t runNumber, const String& riderName, const String& trailName, uint32_t raceStartTimeMs, uint32_t localReceivedMs) {
   runId_ = runId;
   runNumber_ = runNumber;
-  riderName_ = riderName.length() > 0 ? riderName : String("Test Rider");
+  riderName_ = riderName.length() > 0 ? riderName : String("Run ") + String(runNumber);
   trailName_ = trailName;
   startTimestampMs_ = raceStartTimeMs;
   localRunStartReceivedMillis_ = localReceivedMs;
