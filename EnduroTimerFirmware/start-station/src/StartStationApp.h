@@ -14,6 +14,7 @@
 #include "LedIndicator.h"
 #include "StartState.h"
 #include "TimeUtils.h"
+#include "RaceClock.h"
 
 #ifndef START_BUTTON_PIN
 #define START_BUTTON_PIN 0
@@ -79,6 +80,11 @@ private:
   void restoreRadioReceiveMode();
   void sendRunStart(const RunRecord& run);
   void retryRunStartAck(uint32_t nowMs);
+  void startSync(uint32_t nowMs);
+  void updateSync(uint32_t nowMs);
+  void sendSyncRequest(uint32_t nowMs);
+  void sendSyncPing(uint32_t nowMs);
+  void sendSyncApply(uint32_t nowMs);
   bool priorityTxPending() const;
   void sendFinishAck(const RunRecord& run, uint8_t sequence, bool duplicateResend = false);
   void scheduleFinishAckRepeats(const RunRecord& run);
@@ -119,6 +125,7 @@ private:
   String batteryText(const BatteryStatus& status) const;
 
   ClockService clock_;
+  RaceClock raceClock_;
   BatteryService battery_;
   OledDisplay display_;
   BuzzerStub buzzer_;
@@ -151,6 +158,20 @@ private:
   String finishState_ = "Unknown";
   String bootId_;
   String finishFirmwareVersion_;
+  bool finishRaceClockSynced_ = false;
+  int32_t finishRaceClockOffsetMs_ = 0;
+  uint32_t syncAccuracyMs_ = 0;
+  uint32_t lastSyncMs_ = 0;
+  String syncStatusText_ = "SYNC REQUIRED";
+  bool syncInProgress_ = false;
+  bool syncWaitingPong_ = false;
+  bool syncWaitingAck_ = false;
+  uint8_t syncAttempt_ = 0;
+  uint32_t lastSyncTxMs_ = 0;
+  String currentSyncId_;
+  int32_t pendingOffsetToMasterMs_ = 0;
+  uint32_t pendingRoundTripMs_ = 0;
+  uint32_t pendingNetworkDelayMs_ = 0;
   String finishActiveRunId_;
   String finishRiderName_;
   String pendingFinishAckRunId_;

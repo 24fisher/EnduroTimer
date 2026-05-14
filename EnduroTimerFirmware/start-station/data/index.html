@@ -29,6 +29,18 @@
       <button id="syncTimeBtn" class="secondary" type="button">Синхронизировать время</button>
     </section>
 
+    <section class="card controls">
+      <h2>Race clock sync</h2>
+      <p>UI loaded: <strong id="uiLoaded">no</strong></p>
+      <p>Race clock: <strong id="raceClockState">NOT SYNCED</strong></p>
+      <p>Sync accuracy: <strong id="syncAccuracy">—</strong></p>
+      <p>Finish offset: <strong id="finishOffset">—</strong></p>
+      <p>Race clock now: <strong id="raceClockNow">—</strong></p>
+      <p>Last sync: <strong id="lastSync">—</strong></p>
+      <p>Remote boot id: <strong id="remoteBootId">—</strong></p>
+      <p class="muted">Для синхронизации нажмите кнопки на обоих терминалах. Re-sync required if station rebooted.</p>
+    </section>
+
     <section class="card lora-debug">
       <h2>LoRa debug</h2>
       <div class="debug-grid">

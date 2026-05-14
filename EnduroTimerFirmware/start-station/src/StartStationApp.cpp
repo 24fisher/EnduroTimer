@@ -60,6 +60,8 @@ void StartStationApp::begin() {
   battery_.begin();
   led_.begin();
   state_.begin();
+  raceClock_.begin();
+  raceClock_.setOffsetToMaster(0);
   loadStorage();
 }
 
@@ -71,12 +73,16 @@ void StartStationApp::loop() {
 
   updateButton(now);
   updateLed(now);
+  updateSync(now);
 
   RunRecord runToStart;
   updateCountdownDisplay(now);
   if (state_.updateCountdown(now, runToStart)) {
     Serial.printf("COUNTDOWN GO at ms=%lu\n", static_cast<unsigned long>(now));
-    Serial.printf("RUN GO timestamp startTimestampMs=%lu\n", static_cast<unsigned long>(runToStart.startTimestampMs));
+    const uint32_t raceStartTimeMs = raceClock_.nowRaceMs();
+    state_.setRaceStartTime(raceStartTimeMs, syncAccuracyMs_);
+    runToStart = state_.currentRun();
+    Serial.printf("RUN GO timestamp startTimestampMs=%lu raceStartTimeMs=%lu\n", static_cast<unsigned long>(runToStart.startTimestampMs), static_cast<unsigned long>(runToStart.raceStartTimeMs));
     buzzer_.beep("GO");
     pendingRunStartAck_ = true;
     runStartAckReceived_ = false;
@@ -125,6 +131,11 @@ void StartStationApp::loop() {
 bool StartStationApp::requestStartRun(String& error) {
   Serial.printf("START BUTTON pressed at ms=%lu\n", static_cast<unsigned long>(millis()));
   Serial.println("Start run requested");
+  if (!raceClock_.isSynced()) {
+    error = "Race clock sync required";
+    Serial.println("Start blocked: RaceClock not synced");
+    return false;
+  }
   RiderRecord rider = selectRider();
   TrailRecord trail = selectTrail();
   runSequenceCounter_ += 1;
@@ -179,7 +190,17 @@ String StartStationApp::statusJson() const {
   doc["wallClockSynced"] = wallClockSynced_;
   doc["currentTimeText"] = currentTimeText();
   doc["lastTimeSyncText"] = lastTimeSyncText_;
-  doc["timeSource"] = timeSource_;
+  doc["timeSource"] = "BROWSER_FOR_STATS_ONLY";
+  doc["raceClockSynced"] = raceClock_.isSynced();
+  doc["raceClockOffsetMs"] = raceClock_.offsetToMasterMs();
+  doc["raceClockNowMs"] = raceClock_.nowRaceMs();
+  doc["syncRequired"] = !raceClock_.isSynced();
+  doc["syncInProgress"] = syncInProgress_;
+  doc["syncStatusText"] = syncStatusText_;
+  doc["syncAccuracyMs"] = syncAccuracyMs_;
+  doc["finishRaceClockSynced"] = finishRaceClockSynced_;
+  doc["finishRaceClockOffsetMs"] = finishRaceClockOffsetMs_;
+  doc["lastSyncAgoMs"] = lastSyncMs_ > 0 ? static_cast<uint32_t>(millis() - lastSyncMs_) : UINT32_MAX;
   doc["bootId"] = bootId_;
   doc["buildDate"] = __DATE__;
   doc["buildTime"] = __TIME__;
@@ -270,7 +291,7 @@ String StartStationApp::statusJson() const {
   doc["selectedTrailName"] = selectedTrail.displayName;
   doc["currentRiderName"] = current.riderName.length() > 0 ? current.riderName : selectedRider.displayName;
   doc["currentTrailName"] = current.trailName.length() > 0 ? current.trailName : selectedTrail.displayName;
-  uint32_t elapsedMs = (state_.state() == StartRunState::Riding && current.startTimestampMs > 0) ? millis() - current.startTimestampMs : 0;
+  uint32_t elapsedMs = (state_.state() == StartRunState::Riding && current.raceStartTimeMs > 0) ? raceClock_.nowRaceMs() - current.raceStartTimeMs : 0;
   doc["countdownStartedMs"] = state_.countdownStartedMs();
   doc["goTimestampMs"] = state_.goTimestampMs();
   doc["startTimestampMs"] = current.startTimestampMs;
@@ -314,6 +335,8 @@ String StartStationApp::runsJson() const {
     item["trailId"] = run.trailId;
     item["trailName"] = run.trailName;
     item["startTimestampMs"] = run.startTimestampMs;
+    item["raceStartTimeMs"] = run.raceStartTimeMs;
+    item["finishRaceTimeMs"] = run.finishRaceTimeMs;
     item["finishTimestampMs"] = run.finishTimestampMs;
     item["resultMs"] = run.resultMs;
     item["resultFormatted"] = run.resultFormatted;
@@ -322,6 +345,7 @@ String StartStationApp::runsJson() const {
     item["source"] = run.finishSource;
     item["timingSource"] = run.timingSource;
     item["timingNote"] = run.timingNote;
+    item["syncAccuracyMs"] = run.syncAccuracyMs;
   }
 
   Serial.printf("GET /api/runs count=%u\n", static_cast<unsigned>(state_.runs().size()));
@@ -369,6 +393,11 @@ void StartStationApp::updateButton(uint32_t nowMs) {
   if (!startButton_.wasShortPressed()) return;
 
   Serial.println("START button short press event");
+  if (!raceClock_.isSynced()) {
+    startSync(nowMs);
+    return;
+  }
+
   if (state_.state() != StartRunState::Ready) {
     Serial.printf("button ignored: state=%s\n", state_.stateText().c_str());
     return;
@@ -494,6 +523,86 @@ void StartStationApp::restoreRadioReceiveMode() {
 #endif
 }
 
+void StartStationApp::startSync(uint32_t nowMs) {
+  if (state_.state() != StartRunState::Ready) {
+    Serial.printf("SYNC ignored: state=%s\n", state_.stateText().c_str());
+    return;
+  }
+  raceClock_.clearSync();
+  raceClock_.setOffsetToMaster(0);
+  syncInProgress_ = true;
+  syncWaitingPong_ = true;
+  syncWaitingAck_ = false;
+  syncAttempt_ = 0;
+  lastSyncTxMs_ = 0;
+  currentSyncId_ = String("SYNC-") + String(nowMs, HEX);
+  syncStatusText_ = "SYNC... WAIT PONG";
+  Serial.printf("SYNC start syncId=%s\n", currentSyncId_.c_str());
+  sendSyncRequest(nowMs);
+  sendSyncPing(nowMs);
+}
+
+void StartStationApp::updateSync(uint32_t nowMs) {
+  if (!syncInProgress_) return;
+  if (syncWaitingPong_) {
+    if (lastSyncTxMs_ == 0 || nowMs - lastSyncTxMs_ >= 500UL) sendSyncPing(nowMs);
+    return;
+  }
+  if (syncWaitingAck_) {
+    if (lastSyncTxMs_ == 0 || nowMs - lastSyncTxMs_ >= 500UL) sendSyncApply(nowMs);
+  }
+}
+
+void StartStationApp::sendSyncRequest(uint32_t nowMs) {
+  RadioMessage message;
+  message.type = RadioMessageType::SyncRequest;
+  message.stationId = "start";
+  message.messageId = RadioProtocol::makeMessageId("sync-request");
+  message.version = FIRMWARE_VERSION;
+  message.bootId = bootId_;
+  message.syncId = currentSyncId_;
+  message.uptimeMs = nowMs;
+  sendRadio(message);
+}
+
+void StartStationApp::sendSyncPing(uint32_t nowMs) {
+  if (!syncInProgress_ || !syncWaitingPong_) return;
+  if (syncAttempt_ >= 10) { syncInProgress_ = false; syncWaitingPong_ = false; syncStatusText_ = "SYNC FAILED"; Serial.println("SYNC failed waiting PONG"); return; }
+  syncAttempt_ += 1;
+  RadioMessage message;
+  message.type = RadioMessageType::SyncPing;
+  message.stationId = "start";
+  message.messageId = RadioProtocol::makeMessageId("sync-ping");
+  message.version = FIRMWARE_VERSION;
+  message.bootId = bootId_;
+  message.syncId = currentSyncId_;
+  message.t1StartRaceMs = raceClock_.nowRaceMs();
+  lastSyncTxMs_ = nowMs;
+  lastPriorityTxMs_ = nowMs;
+  Serial.printf("SYNC_PING TX attempt=%u syncId=%s t1=%lu\n", syncAttempt_, currentSyncId_.c_str(), static_cast<unsigned long>(message.t1StartRaceMs));
+  sendRadio(message);
+}
+
+void StartStationApp::sendSyncApply(uint32_t nowMs) {
+  if (!syncInProgress_ || !syncWaitingAck_) return;
+  if (syncAttempt_ >= 10) { syncInProgress_ = false; syncWaitingAck_ = false; syncStatusText_ = "SYNC FAILED"; Serial.println("SYNC failed waiting ACK"); return; }
+  syncAttempt_ += 1;
+  RadioMessage message;
+  message.type = RadioMessageType::SyncApply;
+  message.stationId = "start";
+  message.messageId = RadioProtocol::makeMessageId("sync-apply");
+  message.version = FIRMWARE_VERSION;
+  message.bootId = bootId_;
+  message.syncId = currentSyncId_;
+  message.offsetToMasterMs = pendingOffsetToMasterMs_;
+  message.roundTripMs = pendingRoundTripMs_;
+  message.networkDelayMs = pendingNetworkDelayMs_;
+  lastSyncTxMs_ = nowMs;
+  lastPriorityTxMs_ = nowMs;
+  Serial.printf("SYNC_APPLY TX attempt=%u syncId=%s offset=%ld\n", syncAttempt_, currentSyncId_.c_str(), static_cast<long>(pendingOffsetToMasterMs_));
+  sendRadio(message);
+}
+
 void StartStationApp::sendRunStart(const RunRecord& run) {
   if (runStartAckAttempts_ >= 10) return;
   runStartAckAttempts_ += 1;
@@ -505,6 +614,8 @@ void StartStationApp::sendRunStart(const RunRecord& run) {
   message.riderName = run.riderName;
   message.trailName = run.trailName;
   message.startTimestampMs = run.startTimestampMs;
+  message.raceStartTimeMs = run.raceStartTimeMs;
+  message.timingSource = "SYNCED_RACE_CLOCK";
   message.version = FIRMWARE_VERSION;
   message.bootId = bootId_;
 
@@ -543,7 +654,7 @@ void StartStationApp::retryRunStartAck(uint32_t nowMs) {
 bool StartStationApp::priorityTxPending() const {
   const uint32_t nowMs = millis();
   const bool priorityTxRecently = lastPriorityTxMs_ > 0 && nowMs - lastPriorityTxMs_ < 2UL;
-  return pendingRunStartAck_ || pendingFinishAckRunId_.length() > 0 || priorityTxRecently;
+  return syncInProgress_ || pendingRunStartAck_ || pendingFinishAckRunId_.length() > 0 || priorityTxRecently;
 }
 
 void StartStationApp::sendFinishAck(const RunRecord& run, uint8_t sequence, bool duplicateResend) {
@@ -556,6 +667,7 @@ void StartStationApp::sendFinishAck(const RunRecord& run, uint8_t sequence, bool
   message.bootId = bootId_;
   message.resultMs = run.resultMs;
   message.resultFormatted = run.resultFormatted.length() > 0 ? run.resultFormatted : formatSeconds(run.resultMs);
+  message.timingSource = "SYNCED_RACE_CLOCK";
   message.timestampMs = clock_.nowMs();
 
   Serial.printf("FINISH_ACK TX runId=%s resultMs=%lu\n", run.runId.c_str(), static_cast<unsigned long>(run.resultMs));
@@ -607,6 +719,15 @@ void StartStationApp::sendStatus(uint32_t nowMs) {
   message.state = state_.stateText();
   message.uptimeMs = nowMs;
   message.heartbeat = startHeartbeatCount_ + 1;
+  message.version = FIRMWARE_VERSION;
+  message.bootId = bootId_;
+  message.raceClockSynced = raceClock_.isSynced();
+  message.raceClockNowMs = raceClock_.nowRaceMs();
+  message.syncAccuracyMs = syncAccuracyMs_;
+  const BatteryStatus statusBattery = battery_.read();
+  message.hasBatteryVoltage = statusBattery.available;
+  message.batteryVoltage = statusBattery.voltage;
+  message.batteryPercent = statusBattery.percent;
 
   String preview;
   RadioProtocol::serializeCompactStatus(message, preview);
@@ -666,6 +787,9 @@ void StartStationApp::updateFinishLink(const RadioMessage& message, int packetRs
     finishActiveRunId_ = "";
     finishRiderName_ = "";
     finishElapsedMs_ = 0;
+    raceClock_.clearSync();
+    finishRaceClockSynced_ = false;
+    syncStatusText_ = "SYNC REQUIRED";
   }
   Serial.printf("LORA RX from=%s type=%s rssi=%d snr=%.1f age=0 count=%lu\n",
                 message.stationId.c_str(), packetType.c_str(), packetRssi, static_cast<double>(packetSnr),
@@ -682,6 +806,9 @@ void StartStationApp::handleRadioMessage(const RadioMessage& message) {
     if (message.runId.length() > 0) finishActiveRunId_ = message.runId;
     if (message.riderName.length() > 0) finishRiderName_ = message.riderName;
     finishElapsedMs_ = message.elapsedMs;
+    finishRaceClockSynced_ = message.raceClockSynced;
+    finishRaceClockOffsetMs_ = message.offsetToMasterMs;
+    if (message.syncAccuracyMs > 0) syncAccuracyMs_ = message.syncAccuracyMs;
     finishBatteryAvailable_ = message.hasBatteryVoltage;
     finishBatteryVoltage_ = message.batteryVoltage;
     finishBatteryPercent_ = message.batteryPercent;
@@ -718,6 +845,47 @@ void StartStationApp::handleRadioMessage(const RadioMessage& message) {
     return;
   }
 
+  if (message.type == RadioMessageType::SyncRequest && message.stationId == "finish") {
+    Serial.println("SYNC_REQUEST RX from finish");
+    if (!raceClock_.isSynced() && !syncInProgress_) startSync(millis());
+    return;
+  }
+
+  if (message.type == RadioMessageType::SyncPong && message.stationId == "finish") {
+    if (!syncInProgress_ || !syncWaitingPong_ || message.syncId != currentSyncId_) return;
+    const uint32_t t4StartRaceMs = raceClock_.nowRaceMs();
+    const uint32_t roundTripMs = t4StartRaceMs - message.t1StartRaceMs;
+    const uint32_t finishProcessingMs = message.t3FinishLocalMs - message.t2FinishLocalMs;
+    const uint32_t networkDelayMs = roundTripMs > finishProcessingMs ? (roundTripMs - finishProcessingMs) / 2UL : 0;
+    const int32_t offsetToMasterMs = static_cast<int32_t>(message.t1StartRaceMs + networkDelayMs) - static_cast<int32_t>(message.t2FinishLocalMs);
+    pendingOffsetToMasterMs_ = offsetToMasterMs;
+    pendingRoundTripMs_ = roundTripMs;
+    pendingNetworkDelayMs_ = networkDelayMs;
+    syncWaitingPong_ = false;
+    syncWaitingAck_ = true;
+    syncAttempt_ = 0;
+    lastSyncTxMs_ = 0;
+    syncStatusText_ = "SYNC WAIT ACK";
+    Serial.printf("SYNC_PONG RX syncId=%s offset=%ld rtt=%lu delay=%lu\n", currentSyncId_.c_str(), static_cast<long>(offsetToMasterMs), static_cast<unsigned long>(roundTripMs), static_cast<unsigned long>(networkDelayMs));
+    sendSyncApply(millis());
+    return;
+  }
+
+  if (message.type == RadioMessageType::SyncAck && message.stationId == "finish") {
+    if (!syncInProgress_ || !syncWaitingAck_ || message.syncId != currentSyncId_) return;
+    raceClock_.setOffsetToMaster(0);
+    raceClock_.markSynced();
+    finishRaceClockSynced_ = true;
+    finishRaceClockOffsetMs_ = message.offsetToMasterMs;
+    syncAccuracyMs_ = message.syncAccuracyMs > 0 ? message.syncAccuracyMs : pendingNetworkDelayMs_;
+    lastSyncMs_ = millis();
+    syncInProgress_ = false;
+    syncWaitingAck_ = false;
+    syncStatusText_ = "SYNC OK";
+    Serial.printf("SYNC_ACK RX syncId=%s acc=%lu offset=%ld\n", currentSyncId_.c_str(), static_cast<unsigned long>(syncAccuracyMs_), static_cast<long>(finishRaceClockOffsetMs_));
+    return;
+  }
+
   if (message.type == RadioMessageType::RunStartAck && message.stationId == "finish") {
     Serial.printf("RUN_START_ACK RX runId=%s\n", message.runId.c_str());
     if (message.runId == state_.currentRun().runId && pendingRunStartAck_) {
@@ -740,13 +908,13 @@ void StartStationApp::handleRadioMessage(const RadioMessage& message) {
 
   if (message.type == RadioMessageType::Finish && message.stationId == "finish") {
     Serial.printf("FINISH RX raw=%s\n", lastLoRaRaw_.c_str());
-    Serial.printf("FINISH RX finishTimestampMs=%lu startTimestampMs=%lu resultCandidate=%ld\n",
-                  static_cast<unsigned long>(message.finishTimestampMs),
-                  static_cast<unsigned long>(state_.currentRun().startTimestampMs),
-                  static_cast<long>(message.finishTimestampMs) - static_cast<long>(state_.currentRun().startTimestampMs));
+    Serial.printf("FINISH RX finishRaceTimeMs=%lu raceStartTimeMs=%lu resultMs=%lu timing=%s\n",
+                  static_cast<unsigned long>(message.finishRaceTimeMs),
+                  static_cast<unsigned long>(state_.currentRun().raceStartTimeMs),
+                  static_cast<unsigned long>(message.resultMs), message.timingSource.c_str());
     Serial.printf("FINISH parsed runId=%s source=%s\n", message.runId.c_str(), message.source.c_str());
     RunRecord completed;
-    if (state_.completeRun(message.runId, message.finishTimestampMs, message.source, completed)) {
+    if (state_.completeRunSynced(message.runId, message.finishRaceTimeMs, message.resultMs, message.source, message.syncAccuracyMs > 0 ? message.syncAccuracyMs : syncAccuracyMs_, completed)) {
       Serial.printf("FINISH resultMs=%lu\n", static_cast<unsigned long>(completed.resultMs));
       Serial.printf("FINISH accepted runId=%s resultMs=%lu\n", completed.runId.c_str(), static_cast<unsigned long>(completed.resultMs));
       Serial.printf("run saved to recentRuns count=%u\n", static_cast<unsigned>(state_.runs().size()));
@@ -821,12 +989,17 @@ void StartStationApp::updateDisplay() {
     String anim = String("RIDING ");
     for (uint8_t i = 0; i < ridingAnimationFrame(); ++i) anim += " ";
     anim += ">";
-    display_.showLines({startHeader(), anim, formatDurationMs(millis() - current.startTimestampMs).substring(0, 5), fin, bat});
+    display_.showLines({startHeader(), anim, formatDurationMs(raceClock_.nowRaceMs() - current.raceStartTimeMs).substring(0, 5), fin, bat});
     return;
   }
 
   if (state_.state() == StartRunState::Error) {
     display_.showLines({startHeader(), "ERROR", fin, discoveryLine});
+    return;
+  }
+
+  if (!raceClock_.isSynced()) {
+    display_.showLines({startHeader(), syncStatusText_, "PRESS BOTH", "NO RACE START", bat});
     return;
   }
 
@@ -1176,27 +1349,28 @@ bool StartStationApp::appendRunCsv(const RunRecord& run) const {
   }
   if (!exists || file.size() == 0) {
     file.write(0xEF); file.write(0xBB); file.write(0xBF);
-    file.println("RunNumber;RunId;RunTime;Rider;Trail;StartMs;FinishMs;ResultMs;Result;Status;Source;TimingSource");
+    file.println("RunNumber;RunId;RunTime;Rider;Trail;RaceStartMs;FinishRaceMs;ResultMs;Result;Status;Source;TimingSource;SyncAccuracyMs");
   }
   file.print(run.runNumber); file.print(';');
   file.print(escapeCsv(run.runId)); file.print(';');
   file.print(escapeCsv(run.startedAtText.length() > 0 ? run.startedAtText : String("TIME NOT SYNCED"))); file.print(';');
   file.print(escapeCsv(run.riderName)); file.print(';');
   file.print(escapeCsv(run.trailName)); file.print(';');
-  file.print(run.startTimestampMs); file.print(';');
-  file.print(run.finishTimestampMs); file.print(';');
+  file.print(run.raceStartTimeMs); file.print(';');
+  file.print(run.finishRaceTimeMs); file.print(';');
   file.print(run.resultMs); file.print(';');
   file.print(run.resultFormatted); file.print(';');
   file.print(run.status); file.print(';');
   file.print(run.finishSource); file.print(';');
-  file.println(run.timingSource);
+  file.print(run.timingSource); file.print(';');
+  file.println(run.syncAccuracyMs);
   file.close();
   Serial.println("runs.csv append OK");
   return true;
 }
 
 String StartStationApp::runsCsv() const {
-  if (!LittleFS.exists("/runs.csv")) return String("\xEF\xBB\xBFRunNumber;RunId;RunTime;Rider;Trail;StartMs;FinishMs;ResultMs;Result;Status;Source;TimingSource\n");
+  if (!LittleFS.exists("/runs.csv")) return String("\xEF\xBB\xBFRunNumber;RunId;RunTime;Rider;Trail;RaceStartMs;FinishRaceMs;ResultMs;Result;Status;Source;TimingSource;SyncAccuracyMs\n");
   File file = LittleFS.open("/runs.csv", "r");
   String content = file.readString();
   file.close();

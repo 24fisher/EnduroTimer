@@ -66,11 +66,19 @@ bool StartState::updateCountdown(uint32_t nowMs, RunRecord& runToStart) {
   goTimestampMs_ = nowMs;
   currentRun_.startTimestampMs = nowMs;
   currentRun_.timingSource = "RUNNING";
-  currentRun_.timingNote = "Countdown excluded; result starts at GO";
+  currentRun_.timingNote = "Countdown excluded; raceStartTimeMs will be fixed from synced RaceClock";
   currentRun_.status = "Riding";
   state_ = StartRunState::Riding;
   runToStart = currentRun_;
   return true;
+}
+
+void StartState::setRaceStartTime(uint32_t raceStartTimeMs, uint32_t syncAccuracyMs) {
+  currentRun_.raceStartTimeMs = raceStartTimeMs;
+  currentRun_.startTimestampMs = raceStartTimeMs;
+  currentRun_.syncAccuracyMs = syncAccuracyMs;
+  currentRun_.timingSource = "SYNCED_RACE_CLOCK";
+  currentRun_.timingNote = "Sport result uses synced relative RaceClock; browser time is stats only";
 }
 
 bool StartState::completeRun(const String& runId, uint32_t finishTimestampMs, const String& source, RunRecord& completedRun) {
@@ -94,6 +102,27 @@ bool StartState::completeRun(const String& runId, uint32_t finishTimestampMs, co
     currentRun_.timingNote = "Finish timestamp missing; result based on StartStation FINISH receive time";
   }
   currentRun_.resultFormatted = formatSeconds(currentRun_.resultMs);
+  currentRun_.status = "Finished";
+  lastRun_ = currentRun_;
+  completedRun = currentRun_;
+  runs_.insert(runs_.begin(), currentRun_);
+  if (runs_.size() > 20) runs_.pop_back();
+  finishedAtMs_ = millis();
+  state_ = StartRunState::Finished;
+  return true;
+}
+
+bool StartState::completeRunSynced(const String& runId, uint32_t finishRaceTimeMs, uint32_t resultMs, const String& source, uint32_t syncAccuracyMs, RunRecord& completedRun) {
+  if (state_ != StartRunState::Riding || currentRun_.runId != runId) return false;
+
+  currentRun_.finishSource = source;
+  currentRun_.finishRaceTimeMs = finishRaceTimeMs;
+  currentRun_.finishTimestampMs = finishRaceTimeMs;
+  currentRun_.resultMs = resultMs > 0 ? resultMs : (finishRaceTimeMs >= currentRun_.raceStartTimeMs ? finishRaceTimeMs - currentRun_.raceStartTimeMs : 0);
+  currentRun_.resultFormatted = formatSeconds(currentRun_.resultMs);
+  currentRun_.timingSource = "SYNCED_RACE_CLOCK";
+  currentRun_.timingNote = "Result accepted from FinishStation synced RaceClock; FINISH receive time is not used";
+  currentRun_.syncAccuracyMs = syncAccuracyMs;
   currentRun_.status = "Finished";
   lastRun_ = currentRun_;
   completedRun = currentRun_;

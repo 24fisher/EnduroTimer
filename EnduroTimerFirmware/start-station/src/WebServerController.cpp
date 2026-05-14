@@ -119,7 +119,7 @@ bool WebServerController::begin() {
     String error;
     const String displayName = doc["displayName"] | "";
     RiderRecord added;
-    if (!app_.addRider(displayName, error, &added)) { sendError(400, error); return; }
+    if (!app_.addRider(displayName, error, &added)) { sendError(error.startsWith("Failed to save") ? 500 : 400, error); return; }
     JsonDocument out;
     out["ok"] = true;
     JsonObject rider = out["rider"].to<JsonObject>();
@@ -154,7 +154,7 @@ bool WebServerController::begin() {
     String error;
     const String displayName = doc["displayName"] | "";
     TrailRecord added;
-    if (!app_.addTrail(displayName, error, &added)) { sendError(400, error); return; }
+    if (!app_.addTrail(displayName, error, &added)) { sendError(error.startsWith("Failed to save") ? 500 : 400, error); return; }
     JsonDocument out;
     out["ok"] = true;
     JsonObject trail = out["trail"].to<JsonObject>();
@@ -198,6 +198,10 @@ bool WebServerController::begin() {
 
   server_.begin();
   webStarted_ = apStarted_;
+  Serial.println("Route registered: GET /api/riders");
+  Serial.println("Route registered: POST /api/riders/add");
+  Serial.println("Route registered: GET /api/trails");
+  Serial.println("Route registered: POST /api/trails/add");
   Serial.println("Routes registered: /api/status /api/riders/add /api/trails/add /api/runs /api/export/runs.csv /api/debug/routes");
   Serial.println(webStarted_ ? "[BOOT] WebServer OK" : "[BOOT] WebServer FAIL");
   return webStarted_;
@@ -233,6 +237,7 @@ void WebServerController::sendFallbackIndex() {
 }
 
 bool WebServerController::serveStaticFile(const String& path) {
+  Serial.printf("Static file request: %s\n", path.c_str());
   if (!fsMounted_ || !LittleFS.exists(path)) {
     Serial.printf("Static file not found: %s\n", path.c_str());
     return false;

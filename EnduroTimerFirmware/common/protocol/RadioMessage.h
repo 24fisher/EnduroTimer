@@ -13,7 +13,12 @@ enum class RadioMessageType {
   Status,
   Hello,
   HelloAck,
-  StartStatus
+  StartStatus,
+  SyncRequest,
+  SyncPing,
+  SyncPong,
+  SyncApply,
+  SyncAck
 };
 
 struct RadioMessage {
@@ -37,6 +42,19 @@ struct RadioMessage {
   uint32_t uptimeMs = 0;
   uint32_t heartbeat = 0;
   uint32_t startTimestampMs = 0;
+  uint32_t raceStartTimeMs = 0;
+  uint32_t finishRaceTimeMs = 0;
+  String timingSource;
+  String syncId;
+  uint32_t t1StartRaceMs = 0;
+  uint32_t t2FinishLocalMs = 0;
+  uint32_t t3FinishLocalMs = 0;
+  int32_t offsetToMasterMs = 0;
+  uint32_t roundTripMs = 0;
+  uint32_t networkDelayMs = 0;
+  uint32_t syncAccuracyMs = 0;
+  bool raceClockSynced = false;
+  uint32_t raceClockNowMs = 0;
   uint32_t localRunStartReceivedMillis = 0;
   uint32_t finishLocalElapsedMs = 0;
   uint32_t remoteStartTimestampMs = 0;

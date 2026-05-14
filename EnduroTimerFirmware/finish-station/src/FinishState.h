@@ -14,7 +14,7 @@ enum class FinishRunState {
 class FinishState {
 public:
   void begin();
-  void startRun(const String& runId, const String& riderName, const String& trailName, uint32_t startTimestampMs, uint32_t localReceivedMs);
+  void startRun(const String& runId, const String& riderName, const String& trailName, uint32_t raceStartTimeMs, uint32_t localReceivedMs);
   void markFinishSent(uint32_t finishTimestampMs);
   void ackFinish();
   void fail();
@@ -28,6 +28,7 @@ public:
   const String& riderName() const { return riderName_; }
   const String& trailName() const { return trailName_; }
   uint32_t startTimestampMs() const { return startTimestampMs_; }
+  uint32_t raceStartTimeMs() const { return startTimestampMs_; }
   uint32_t finishTimestampMs() const { return finishTimestampMs_; }
   uint32_t localRunStartReceivedMillis() const { return localRunStartReceivedMillis_; }
   uint32_t elapsedMs(uint32_t nowMs) const;
