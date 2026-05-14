@@ -31,7 +31,7 @@ The current Heltec V3 OLED configuration is fixed in `platformio.ini`:
 - Library: U8g2
 - `ARDUINO_USB_CDC_ON_BOOT=0`
 - `ARDUINO_USB_MODE=0`
-- `FIRMWARE_VERSION=0.10`
+- `FIRMWARE_VERSION=0.12`
 - `STATUS_LED_PIN=35`
 - `STATUS_LED_ACTIVE_LEVEL=1`
 
@@ -53,15 +53,47 @@ The current Heltec V3 OLED configuration is fixed in `platformio.ini`:
 - Firmware version is a manual semantic-like incremental string.
 - Initial version: `0.00`.
 - Each MR/iteration increments the string by `0.01` manually.
-- Current version: `0.10`.
-- The version is configured with `FIRMWARE_VERSION` and has a source fallback of `0.10`.
+- Current version: `0.12`.
+- The version is configured with `FIRMWARE_VERSION` and has a source fallback of `0.12`.
 - Version is shown in OLED headers, Serial boot logs, Web API status, the Web UI status block, and all LoRa payloads, including compact `STATUS` heartbeat packets (`ver`) and sync/control messages.
+
+
+## v0.12 one-time Wi-Fi RaceClock synchronization
+
+Firmware v0.12 disables active LoRa time synchronization and moves RaceClock synchronization to a one-time HTTP exchange over Wi-Fi at station startup. StartStation and FinishStation remain separate firmware applications. Web UI start stays disabled; starts are still hardware-button only after synchronization is complete.
+
+### Time sync changes
+
+- `FIRMWARE_VERSION` is `0.12`; Serial boot logs, OLED headers (`START TERM v0.12` / `FINISH TERM v0.12`), `/api/status.firmwareVersion`, and all LoRa messages report `0.12`.
+- `ENABLE_LORA_TIME_SYNC=0` disables the old `SYNC_REQUEST`, `SYNC_PING`, `SYNC_PONG`, `SYNC_APPLY`, and `SYNC_ACK` runtime flow. The protocol parser keeps compatibility, but firmware no longer sends LoRa time-sync messages or starts sync from buttons.
+- StartStation is the RaceClock master: `offsetToMasterMs=0`, its own RaceClock is marked synced after boot, and race start remains blocked until FinishStation reports one successful Wi-Fi sync.
+- FinishStation connects as a Wi-Fi station to the StartStation AP (`SSID=EnduroTimer`, password `endurotimer`) and performs one HTTP RaceClock sync at startup.
+- FinishStation takes five HTTP samples from `GET /api/time/race-sync`, selects the sample with the lowest RTT, applies the offset when acceptable, marks RaceClock synced, and posts `POST /api/finish/sync-status`.
+- After success, both OLEDs show `SYNCED` and `READY` with the sync accuracy. There is no periodic Wi-Fi resync and the offset is not changed again during Ready/Riding.
+- If FinishStation cannot connect, verify the `EnduroTimer` SSID/password and that StartStation AP is running at `192.168.4.1`.
+- If the system is not ready, check `/api/status.finishRaceClockSynced`, `/api/status.finishSyncDoneOnce`, `/api/status.finishSyncAccuracyMs`, and `/api/status.readyBlockReason`.
+- If either station reboots, the boot ID changes and synchronization must happen again.
+
+### Boot flow
+
+1. StartStation starts the Wi-Fi AP (`EnduroTimer`, `endurotimer`, `192.168.4.1`) and serves the Web UI plus HTTP API.
+2. FinishStation starts Wi-Fi STA mode and retries the AP connection every two seconds without blocking the loop.
+3. FinishStation syncs RaceClock once via `GET /api/time/race-sync`.
+4. FinishStation sends `POST /api/finish/sync-status` to StartStation.
+5. StartStation stores the Finish sync status and both terminals show `SYNCED` / `READY`.
+
+### Timing model
+
+- `RUN_START` carries `raceStartTimeMs` from `raceClock.nowRaceMs()`. FinishStation uses the synchronized RaceClock immediately, so an LoRa delivery delay is reflected in the displayed elapsed time.
+- FinishStation computes `finishRaceTimeMs` and `resultMs` from the once-synchronized RaceClock and sends `timingSource=WIFI_SYNCED_RACE_CLOCK_ONCE`.
+- StartStation accepts `resultMs` from the FINISH packet as the primary sport result and uses FINISH receive time only as a fallback path.
+- Browser WallClock (`POST /api/time/sync`) remains only for statistics: `startedAtText`, results table `RunTime`, and CSV `RunTime`. Browser time is not used for RaceClock or sport timing.
 
 ## v0.10 LoRa listener-first status scheduling and sync collision guard
 
 Firmware v0.10 keeps StartStation and FinishStation as separate applications and keeps start/finish actions on physical buttons only. It focuses on reducing LoRa half-duplex collisions and preventing two sync sessions from overwriting each other.
 
-- `FIRMWARE_VERSION` is `0.10`; Serial boot logs, OLED headers (`START TERM v0.10` / `FINISH TERM v0.10`), `/api/status.firmwareVersion`, and all LoRa messages report `0.10`. Compact `STATUS` uses `ver: "0.10"`.
+- `FIRMWARE_VERSION` is `0.10`; Serial boot logs, OLED headers (`START TERM v0.12` / `FINISH TERM v0.12`), `/api/status.firmwareVersion`, and all LoRa messages report `0.12`. Compact `STATUS` uses `ver: "0.12"`.
 - FinishStation is the primary beacon source: `FINISH_STATUS_INTERVAL_MS = 5000` with a first beacon at boot + 500 ms + 0-300 ms jitter, then 5000 ms + 0-300 ms jitter.
 - StartStation is primarily a listener in Ready/Idle: `START_STATUS_READY_INTERVAL_MS = 15000` with a first beacon at boot + 2500 ms + 0-700 ms jitter, then 15000 ms + 500-1500 ms jitter.
 - StartStation uses `START_STATUS_ACTIVE_INTERVAL_MS = 7000` only while a run, ACK wait, sync, or other active condition is in progress.
@@ -89,12 +121,12 @@ Firmware v0.10 keeps StartStation and FinishStation as separate applications and
 After boot, both OLEDs require synchronization before a race can start or finish:
 
 ```text
-START TERM v0.10
+START TERM v0.12
 SYNC REQUIRED
 PRESS BOTH
 NO RACE START
 
-FINISH TERM v0.10
+FINISH TERM v0.12
 SYNC REQUIRED
 PRESS BOTH
 NO FINISH
@@ -110,11 +142,11 @@ At `GO`, StartStation stores and sends `raceStartTimeMs = raceClock.nowRaceMs()`
 elapsed = finishRaceClockNow - raceStartTimeMs
 ```
 
-Therefore, if `RUN_START` arrives 3 seconds late, FinishStation immediately shows about `00:03` instead of hiding the delivery delay. On the finish button, FinishStation sends `finishRaceTimeMs`, `resultMs`, and `timingSource: "SYNCED_RACE_CLOCK"`. StartStation accepts that result and does not use FINISH receive time as the sport result.
+Therefore, if `RUN_START` arrives 3 seconds late, FinishStation immediately shows about `00:03` instead of hiding the delivery delay. On the finish button, FinishStation sends `finishRaceTimeMs`, `resultMs`, and `timingSource: "WIFI_SYNCED_RACE_CLOCK_ONCE"`. StartStation accepts that result and does not use FINISH receive time as the sport result.
 
 ### Protocol and status changes
 
-All LoRa messages include `version: "0.10"` or compact `ver: "0.10"`: `STATUS`, `HELLO`, `HELLO_ACK`, `SYNC_REQUEST`, `SYNC_PING`, `SYNC_PONG`, `SYNC_APPLY`, `SYNC_ACK`, `RUN_START`, `RUN_START_ACK`, `FINISH`, and `FINISH_ACK`. `/api/status` now reports `firmwareVersion`, `raceClockSynced`, `raceClockOffsetMs`, `raceClockNowMs`, `syncRequired`, `syncAccuracyMs`, `timeSource: "BROWSER_FOR_STATS_ONLY"`, and remote boot/sync diagnostics.
+All LoRa messages include `version: "0.12"` or compact `ver: "0.12"`: `STATUS`, `HELLO`, `HELLO_ACK`, `SYNC_REQUEST`, `SYNC_PING`, `SYNC_PONG`, `SYNC_APPLY`, `SYNC_ACK`, `RUN_START`, `RUN_START_ACK`, `FINISH`, and `FINISH_ACK`. `/api/status` now reports `firmwareVersion`, `raceClockSynced`, `raceClockOffsetMs`, `raceClockNowMs`, `syncRequired`, `syncAccuracyMs`, `timeSource: "BROWSER_FOR_STATS_ONLY"`, and remote boot/sync diagnostics.
 
 CSV columns are now:
 
@@ -124,7 +156,7 @@ RunNumber;RunId;RunTime;Rider;Trail;RaceStartMs;FinishRaceMs;ResultMs;Result;Sta
 
 ### Web UI rider/trail buttons
 
-The LittleFS Web UI loads `/app.js` after the DOM, logs `EnduroTimer UI loaded v0.10`, binds `addRiderButton` and `addTrailButton` in `DOMContentLoaded`, posts JSON to `POST /api/riders/add` and `POST /api/trails/add`, shows fetch errors instead of failing silently, and reloads the catalog/dropdowns after success. The WebServer logs static file requests and route registration for the rider/trail endpoints.
+The LittleFS Web UI loads `/app.js` after the DOM, logs `EnduroTimer UI loaded v0.12`, binds `addRiderButton` and `addTrailButton` in `DOMContentLoaded`, posts JSON to `POST /api/riders/add` and `POST /api/trails/add`, shows fetch errors instead of failing silently, and reloads the catalog/dropdowns after success. The WebServer logs static file requests and route registration for the rider/trail endpoints.
 
 
 ## v0.10 compact LoRa STATUS heartbeat
@@ -172,7 +204,7 @@ RunNumber;RunId;RunTime;Rider;Trail;RaceStartMs;FinishRaceMs;ResultMs;Result;Sta
 - RaceClock synchronization is required before StartStation can begin the countdown and before FinishStation accepts a finish.
 - StartStation fixes `raceStartTimeMs` only at `GO`, starts the riding timer only at `GO`, and sends `RUN_START` only after `GO`.
 - FinishStation stores `raceStartTimeMs` from `RUN_START` and displays elapsed time as `raceClock.nowRaceMs() - raceStartTimeMs`, so LoRa delivery latency is included in the visible elapsed time.
-- On finish, FinishStation sends `finishRaceTimeMs`, `resultMs`, and `timingSource=SYNCED_RACE_CLOCK`.
+- On finish, FinishStation sends `finishRaceTimeMs`, `resultMs`, and `timingSource=WIFI_SYNCED_RACE_CLOCK_ONCE`.
 - StartStation uses `resultMs` / `finishRaceTimeMs` from FinishStation as the primary sport timing result and does not use the FINISH receive time as the result.
 - Browser WallClock is only for statistical `RunTime`; a future DS3231 RTC may improve or replace the sync workflow, but browser time must not drive sport timing.
 
@@ -204,7 +236,7 @@ Firmware v0.04 keeps StartStation and FinishStation as separate applications and
 
 - FinishStation sends `FINISH` with the saved finish timestamp and then waits for `FINISH_ACK` from StartStation.
 - StartStation accepts the first valid `FINISH` for the active run, calculates `resultMs`, stores `resultFormatted` in seconds (for example `20.123 s`), and replies immediately with `FINISH_ACK`.
-- `FINISH_ACK` includes `stationId: "start"`, `version: "0.10"`, `bootId`, `runId`, `resultMs`, `resultFormatted`, and `timestampMs`.
+- `FINISH_ACK` includes `stationId: "start"`, `version: "0.12"`, `bootId`, `runId`, `resultMs`, `resultFormatted`, and `timestampMs`.
 - StartStation sends the ACK three times total using a non-blocking millis-based resend policy (`FINISH_ACK_REPEAT_COUNT=3`, `FINISH_ACK_REPEAT_INTERVAL_MS=250`).
 - Repeated `FINISH` packets for an already completed `runId` do not create duplicate run records or recalculate the result; they immediately trigger another `FINISH_ACK`.
 - FinishStation updates the StartStation link from any valid `FINISH_ACK`, accepts matching ACKs for either the active run or the last finished run, stops FINISH retries immediately, leaves `AckTimeout` if a late matching ACK arrives, and shows `ACK OK` with the result.
@@ -243,7 +275,7 @@ Signal display rules:
 - Every received LoRa packet logs `LORA RX type=... rssi=... snr=... raw=...`; valid opposite-station packets also log `LORA RX from=... type=... rssi=... snr=... age=0 count=...`. JSON parse failures, missing `stationId`, and unknown `type` are logged explicitly with the raw packet.
 - After every LoRa TX (`HELLO`, `HELLO_ACK`, `STATUS`, `RUN_START`, `RUN_START_ACK`, `FINISH`, or `FINISH_ACK`), the firmware yields briefly, waits 1 ms for SX1262 settle, and then lets the next polling `receive()` re-enter receive/listen mode after the short blocking transmit. Serial prints `LoRa RX mode restored` after every transmit; FinishStation STATUS is sent every five seconds plus jitter; StartStation STATUS is slower in Ready/Idle, and each STATUS heartbeat is logged.
 - `STATUS payload len=...` is logged for heartbeat diagnostics and whenever a STATUS payload exceeds 200 bytes. STATUS packets are serialized in a compact JSON form to keep the LoRa payload small while remaining accepted by the same deserializer.
-- StartStation and FinishStation include `version: "0.10"` and a per-boot `bootId` in `RUN_START`, `RUN_START_ACK`, `FINISH`, `FINISH_ACK`, `HELLO`, and `HELLO_ACK` payloads. Compact `STATUS` includes `ver` and `bid` for version and boot diagnostics.
+- StartStation and FinishStation include `version: "0.12"` and a per-boot `bootId` in `RUN_START`, `RUN_START_ACK`, `FINISH`, `FINISH_ACK`, `HELLO`, and `HELLO_ACK` payloads. Compact `STATUS` includes `ver` and `bid` for version and boot diagnostics.
 - FinishStation includes only compact numeric reverse-link fields (`sr`, `ss`, and optionally `sa`) in `STATUS`; StartStation combines those values with local link state for `/api/status`.
 
 
@@ -266,7 +298,7 @@ Firmware v0.04 adds an explicit discovery handshake for stations that are powere
 Firmware v0.04 restores the lower-terminal run state machine:
 
 - FinishStation enters externally visible `Riding` immediately after a valid `RUN_START` packet from StartStation.
-- The Riding OLED screen shows `FINISH TERM v0.10`, a moving `RIDING >` indicator, rider name, elapsed timer, and StartStation RSSI or `START:NO SIGNAL`.
+- The Riding OLED screen shows `FINISH TERM v0.12`, a moving `RIDING >` indicator, rider name, elapsed timer, and StartStation RSSI or `START:NO SIGNAL`.
 - A short press on the finish button in Riding accepts the finish, shows `FINISH LINE / CROSSED`, sends a `FINISH` packet with `source: "BUTTON_STUB"`, and moves to `FinishSent`.
 - `FINISH_MAX_RETRY_ATTEMPTS` is 15 and `FINISH_RETRY_INTERVAL_MS` is 1000 ms.
 - In `FinishSent`, automatic retries continue until ACK or timeout. A short button press manually resends the last `FINISH` without changing its timestamp.
@@ -522,7 +554,7 @@ StartStation replies to a matching active run with `FINISH_ACK`. Duplicate `FINI
 StartStation Ready:
 
 ```text
-START TERM v0.10
+START TERM v0.12
 FIN:-72dBm
 Rider: Test Rider
 Trail: Default trail
@@ -532,7 +564,7 @@ PKT:STATUS
 StartStation Countdown uses immediate rendering on every countdown text change and is not throttled by the normal status screen refresh:
 
 ```text
-START v0.10
+START v0.12
 3 / 2 / 1 / GO
 ```
 
@@ -541,7 +573,7 @@ The countdown state machine is millis-based and non-blocking: `3` for 1000 ms, `
 StartStation Riding includes a non-blocking moving `>` animation updated from `millis()` about every 250 ms:
 
 ```text
-START TERM v0.10
+START TERM v0.12
 RIDING >
 Time: 00:12
 FIN:-72dBm
@@ -551,7 +583,7 @@ PKT:STATUS
 StartStation Finished:
 
 ```text
-START v0.10
+START v0.12
 FINISHED
 Test Rider
 00:20.123
@@ -560,7 +592,7 @@ Test Rider
 FinishStation Idle:
 
 ```text
-FINISH TERM v0.10
+FINISH TERM v0.12
 LoRa: OK
 State: IDLE
 START:-70dBm
@@ -570,7 +602,7 @@ PKT:STATUS
 FinishStation Riding also shows the moving `>` animation:
 
 ```text
-FINISH TERM v0.10
+FINISH TERM v0.12
 RIDING >
 Time: 00:12
 START:-70dBm
@@ -580,7 +612,7 @@ PKT:STATUS
 FinishStation finish-line overlay appears immediately after an accepted finish button press while retries and ACK handling continue in the background:
 
 ```text
-FINISH TERM v0.10
+FINISH TERM v0.12
 FINISH LINE
 CROSSED
 ```
@@ -588,7 +620,7 @@ CROSSED
 FinishStation FinishSent:
 
 ```text
-FINISH TERM v0.10
+FINISH TERM v0.12
 FINISH SENT
 Sent: x/15
 START:-70dBm
@@ -598,7 +630,7 @@ PKT:STATUS
 FinishStation ACK:
 
 ```text
-FINISH TERM v0.10
+FINISH TERM v0.12
 ACK OK
 IDLE
 ```

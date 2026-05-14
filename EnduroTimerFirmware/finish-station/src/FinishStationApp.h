@@ -31,10 +31,17 @@ private:
   void sendHello(uint32_t nowMs);
   void sendHelloAck(uint32_t nowMs);
   void sendRunStartAck(const String& runId);
+#if ENABLE_LORA_TIME_SYNC
   void sendSyncRequest(uint32_t nowMs);
   void sendSyncPong(const RadioMessage& ping);
   void sendSyncAck(const RadioMessage& apply);
   void enterSyncReady(uint32_t nowMs);
+#endif
+  void beginWifi();
+  void updateWifiSync(uint32_t nowMs);
+  bool takeWifiSyncSample(uint8_t sampleNumber, uint32_t& rttMs, int32_t& offsetMs, String& startBootId);
+  void finishWifiSyncSuccess(int32_t offsetMs, uint32_t rttMs, const String& startBootId);
+  bool postFinishSyncStatus();
   bool discoveryActive() const;
   bool priorityTxPending(uint32_t nowMs) const;
   void acceptFinishButton(uint32_t nowMs);
@@ -94,7 +101,17 @@ private:
   uint32_t syncReadyUntilMs_ = 0;
   uint32_t syncAccuracyMs_ = 0;
   uint32_t lastSyncMs_ = 0;
-  String syncStatusText_ = "SYNC REQUIRED";
+  String syncStatusText_ = "WIFI SEARCH";
+  bool wifiStarted_ = false;
+  bool wifiConnected_ = false;
+  bool syncDoneOnce_ = false;
+  uint32_t nextWifiConnectAttemptMs_ = 0;
+  uint32_t nextWifiSyncAttemptMs_ = 0;
+  uint8_t wifiSyncSampleIndex_ = 0;
+  uint32_t bestWifiSyncRttMs_ = UINT32_MAX;
+  int32_t bestWifiSyncOffsetMs_ = 0;
+  String startHttpBootId_ = "";
+  String wifiStatusText_ = "WIFI SEARCH";
   uint32_t showNoRunUntilMs_ = 0;
   uint32_t showAckOkUntilMs_ = 0;
   uint32_t finishLineCrossedUntilMs_ = 0;

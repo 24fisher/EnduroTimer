@@ -77,7 +77,7 @@ void StartState::setRaceStartTime(uint32_t raceStartTimeMs, uint32_t syncAccurac
   currentRun_.raceStartTimeMs = raceStartTimeMs;
   currentRun_.startTimestampMs = raceStartTimeMs;
   currentRun_.syncAccuracyMs = syncAccuracyMs;
-  currentRun_.timingSource = "SYNCED_RACE_CLOCK";
+  currentRun_.timingSource = "WIFI_SYNCED_RACE_CLOCK_ONCE";
   currentRun_.timingNote = "Sport result uses synced relative RaceClock; browser time is stats only";
 }
 
@@ -120,7 +120,7 @@ bool StartState::completeRunSynced(const String& runId, uint32_t finishRaceTimeM
   currentRun_.finishTimestampMs = finishRaceTimeMs;
   currentRun_.resultMs = resultMs > 0 ? resultMs : (finishRaceTimeMs >= currentRun_.raceStartTimeMs ? finishRaceTimeMs - currentRun_.raceStartTimeMs : 0);
   currentRun_.resultFormatted = formatSeconds(currentRun_.resultMs);
-  currentRun_.timingSource = "SYNCED_RACE_CLOCK";
+  currentRun_.timingSource = "WIFI_SYNCED_RACE_CLOCK_ONCE";
   currentRun_.timingNote = "Result accepted from FinishStation synced RaceClock; FINISH receive time is not used";
   currentRun_.syncAccuracyMs = syncAccuracyMs;
   currentRun_.status = "Finished";

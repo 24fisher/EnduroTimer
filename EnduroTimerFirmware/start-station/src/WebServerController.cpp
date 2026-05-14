@@ -27,11 +27,13 @@ bool WebServerController::begin() {
   Serial.println("WiFi AP starting...");
   WiFi.mode(WIFI_AP);
   WiFi.setSleep(false);
+  WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0));
   apStarted_ = WiFi.softAP("EnduroTimer", "endurotimer");
   if (apStarted_) {
     Serial.println("WiFi AP OK");
     Serial.println("SSID: EnduroTimer");
     Serial.printf("IP: %s\n", WiFi.softAPIP().toString().c_str());
+    Serial.printf("WiFi AP OK ssid=EnduroTimer ip=%s\n", WiFi.softAPIP().toString().c_str());
     Serial.printf("WiFi AP: MAC %s\n", WiFi.softAPmacAddress().c_str());
     Serial.printf("[BOOT] WiFi AP OK ssid=EnduroTimer ip=%s\n", WiFi.softAPIP().toString().c_str());
   } else {
@@ -49,6 +51,14 @@ bool WebServerController::begin() {
   });
 
   server_.on("/api/status", HTTP_GET, [this]() { sendJson(200, app_.statusJson()); });
+  server_.on("/api/time/race-sync", HTTP_GET, [this]() { sendJson(200, app_.raceSyncJson()); });
+  server_.on("/api/finish/sync-status", HTTP_POST, [this]() {
+    const String body = server_.arg("plain");
+    Serial.printf("HTTP POST /api/finish/sync-status body=%s\n", body.c_str());
+    String error;
+    if (!app_.applyFinishSyncStatus(body, error)) { sendError(400, error.length() > 0 ? error : String("Finish sync-status not ready")); return; }
+    sendJson(200, String("{\"ok\":true}"));
+  });
   server_.on("/api/debug/routes", HTTP_GET, [this]() {
     sendJson(200, String("{\"ok\":true,\"routes\":[\"/api/status\",\"/api/riders/add\",\"/api/trails/add\",\"/api/runs\",\"/api/export/runs.csv\"]}"));
   });

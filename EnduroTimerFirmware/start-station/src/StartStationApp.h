@@ -68,6 +68,8 @@ public:
   bool updateSettings(const String& selectedRiderId, const String& selectedTrailId, String& error);
   String runsCsv() const;
   bool syncBrowserTime(uint64_t epochMs, int timezoneOffsetMinutes, const String& isoLocal, String& error);
+  String raceSyncJson() const;
+  bool applyFinishSyncStatus(const String& body, String& error);
 
 private:
   void configureButton();
@@ -80,11 +82,13 @@ private:
   void restoreRadioReceiveMode();
   void sendRunStart(const RunRecord& run);
   void retryRunStartAck(uint32_t nowMs);
+#if ENABLE_LORA_TIME_SYNC
   void startSync(uint32_t nowMs);
   void updateSync(uint32_t nowMs);
   void sendSyncRequest(uint32_t nowMs);
   void sendSyncPing(uint32_t nowMs);
   void sendSyncApply(uint32_t nowMs);
+#endif
   bool priorityTxPending() const;
   void sendFinishAck(const RunRecord& run, uint8_t sequence, bool duplicateResend = false);
   void scheduleFinishAckRepeats(const RunRecord& run);
@@ -167,9 +171,14 @@ private:
   String finishState_ = "Unknown";
   String bootId_;
   String finishFirmwareVersion_;
+  bool finishWifiConnected_ = false;
   bool finishRaceClockSynced_ = false;
+  bool finishSyncDoneOnce_ = false;
   int32_t finishRaceClockOffsetMs_ = 0;
   uint32_t syncAccuracyMs_ = 0;
+  String finishWifiIp_ = "";
+  String finishHttpBootId_ = "";
+  uint32_t lastFinishWifiSyncStatusMs_ = 0;
   uint32_t lastSyncMs_ = 0;
   String syncStatusText_ = "SYNC REQUIRED";
   bool syncInProgress_ = false;
