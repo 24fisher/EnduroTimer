@@ -2,9 +2,13 @@
 
 #include <Arduino.h>
 
-static constexpr uint32_t LINK_HEARTBEAT_INTERVAL_MS = 5000UL;
-static constexpr uint32_t LINK_TIMEOUT_MS = 25000UL;
-static constexpr uint32_t LINK_DISCOVERY_INTERVAL_MS = 1000UL;
+static constexpr uint32_t FINISH_STATUS_INTERVAL_MS = 5000UL;
+static constexpr uint32_t START_STATUS_READY_INTERVAL_MS = 15000UL;
+static constexpr uint32_t START_STATUS_ACTIVE_INTERVAL_MS = 7000UL;
+static constexpr uint32_t LINK_HEARTBEAT_INTERVAL_MS = FINISH_STATUS_INTERVAL_MS;
+static constexpr uint32_t LINK_TIMEOUT_MS = 30000UL;
+static constexpr uint32_t LINK_DISCOVERY_INTERVAL_MS = 5000UL;
+static constexpr uint32_t LORA_POST_PRIORITY_QUIET_MS = 300UL;
 
 struct LinkStatus {
   bool hasEverReceived = false;

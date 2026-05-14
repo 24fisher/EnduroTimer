@@ -93,6 +93,9 @@ private:
   void sendHello(uint32_t nowMs);
   void sendHelloAck(uint32_t nowMs);
   bool discoveryActive() const;
+  bool startStatusActiveMode() const;
+  uint32_t nextStartStatusDelayMs() const;
+  void scheduleNextStartStatus(uint32_t nowMs);
   String finishSignalText() const;
   String finishReportedStartSignalText() const;
   String makeBootId(const char* stationId) const;
@@ -142,9 +145,15 @@ private:
   LinkStatus finishLink_;
   uint32_t finishLastStatusMs_ = 0;
   uint32_t finishHeartbeatCount_ = 0;
+  uint32_t previousFinishHeartbeatCount_ = 0;
+  uint32_t missedFinishStatusCount_ = 0;
   uint32_t startHeartbeatCount_ = 0;
   uint32_t lastStatusSendMs_ = 0;
   uint32_t lastStatusSentOkMs_ = 0;
+  uint32_t nextStartStatusDueMs_ = 0;
+  uint32_t startStatusEarliestMs_ = 0;
+  uint32_t lastHelloSentMs_ = 0;
+  uint32_t lastHelloSkipLogMs_ = 0;
   uint32_t lastDiscoverySentMs_ = 0;
   uint32_t lastHelloReceivedMs_ = 0;
   uint32_t lastPriorityTxMs_ = 0;

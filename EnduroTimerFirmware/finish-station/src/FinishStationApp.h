@@ -60,6 +60,7 @@ private:
   bool oledReady_ = false;
   bool radioReady_ = false;
   uint32_t lastStatusMs_ = 0;
+  uint32_t nextFinishStatusDueMs_ = 0;
   uint32_t lastDiscoverySentMs_ = 0;
   uint32_t lastHelloReceivedMs_ = 0;
   uint32_t lastStatusSentOkMs_ = 0;
@@ -88,6 +89,8 @@ private:
   LinkStatus startLink_;
   String startState_ = "Unknown";
   bool syncReady_ = false;
+  bool syncInProgress_ = false;
+  String activeSyncId_;
   uint32_t syncReadyUntilMs_ = 0;
   uint32_t syncAccuracyMs_ = 0;
   uint32_t lastSyncMs_ = 0;
