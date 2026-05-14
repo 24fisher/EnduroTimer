@@ -1,4 +1,4 @@
-console.log("EnduroTimer UI loaded v0.12");
+console.log("EnduroTimer UI loaded v0.13");
 const $ = (id) => document.getElementById(id);
 let consecutiveFetchErrors = 0;
 let riders = [];
@@ -69,6 +69,11 @@ function renderStatus(status) {
   $('debugFinishState').textContent = status.finishState || '—';
   $('debugReverseSignal').textContent = reverseSignal;
   $('debugReverseAge').textContent = ageText(status.finishReportedStartLastSeenAgoMs);
+  const runStartAckStatus = status.runStartAckTimeout ? 'timeout' : status.runStartAckReceived ? 'OK' : status.pendingRunStartAck ? 'pending' : '—';
+  if ($('debugRunStartAck')) $('debugRunStartAck').textContent = runStartAckStatus;
+  if ($('debugRunStartAttempts')) $('debugRunStartAttempts').textContent = status.runStartAttempt ?? status.runStartAckAttempts ?? 0;
+  if ($('debugFinishReportedState')) $('debugFinishReportedState').textContent = status.finishReportedState || status.finishState || '—';
+  if ($('debugCurrentRunId')) $('debugCurrentRunId').textContent = status.currentRunId || '—';
   $('countdown').textContent = status.countdownText ? `Countdown: ${status.countdownText}` : 'Countdown: —';
   $('runTimer').textContent = status.currentRunElapsedFormatted || '00:00';
   $('lastResult').textContent = status.lastResultFormatted || '—';

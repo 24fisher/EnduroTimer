@@ -23,6 +23,8 @@ static constexpr uint32_t DisplayRefreshMs = 250UL;
 static constexpr uint32_t ButtonDebounceMs = 50UL;
 static constexpr uint32_t SYNC_PING_RETRY_INTERVAL_MS = 1000UL;
 static constexpr uint8_t SYNC_MAX_ATTEMPTS = 8;
+static constexpr uint32_t RUN_START_RETRY_INTERVAL_MS = 700UL;
+static constexpr uint8_t RUN_START_MAX_ATTEMPTS = 15;
 static constexpr uint8_t FINISH_ACK_REPEAT_COUNT = 3;
 static constexpr uint32_t FINISH_ACK_REPEAT_INTERVAL_MS = 250UL;
 RTC_DATA_ATTR static uint32_t startBootCounter = 0;
@@ -85,11 +87,12 @@ void StartStationApp::loop() {
   RunRecord runToStart;
   updateCountdownDisplay(now);
   if (state_.updateCountdown(now, runToStart)) {
-    Serial.printf("COUNTDOWN GO at ms=%lu\n", static_cast<unsigned long>(now));
+    Serial.printf("COUNTDOWN GO at raceMs=%lu\n", static_cast<unsigned long>(raceClock_.nowRaceMs()));
     const uint32_t raceStartTimeMs = raceClock_.nowRaceMs();
     state_.setRaceStartTime(raceStartTimeMs, syncAccuracyMs_);
     runToStart = state_.currentRun();
     Serial.printf("RUN GO timestamp startTimestampMs=%lu raceStartTimeMs=%lu\n", static_cast<unsigned long>(runToStart.startTimestampMs), static_cast<unsigned long>(runToStart.raceStartTimeMs));
+    Serial.printf("RUN_START build runId=%s raceStartTimeMs=%lu\n", runToStart.runId.c_str(), static_cast<unsigned long>(runToStart.raceStartTimeMs));
     buzzer_.beep("GO");
     pendingRunStartAck_ = true;
     runStartAckReceived_ = false;
@@ -113,7 +116,7 @@ void StartStationApp::loop() {
     if (syncInProgress_) {
       if (now - lastHelloSkipLogMs_ >= 5000UL) { Serial.println("HELLO skipped: sync in progress"); lastHelloSkipLogMs_ = now; }
     } else if (priorityPending) {
-      if (now - lastHelloSkipLogMs_ >= 5000UL) { Serial.println("TX deferred HELLO because priority message pending"); lastHelloSkipLogMs_ = now; }
+      if (now - lastHelloSkipLogMs_ >= 5000UL) { Serial.println(pendingRunStartAck_ ? "TX deferred HELLO because RUN_START pending" : "TX deferred HELLO because priority message pending"); lastHelloSkipLogMs_ = now; }
     } else if (finishAge < LINK_TIMEOUT_MS) {
       if (now - lastHelloSkipLogMs_ >= 5000UL) { Serial.printf("HELLO skipped: finish link recently active age=%lu\n", static_cast<unsigned long>(finishAge)); lastHelloSkipLogMs_ = now; }
     } else {
@@ -126,7 +129,7 @@ void StartStationApp::loop() {
 
   if (nextStartStatusDueMs_ > 0 && now >= nextStartStatusDueMs_ && now >= startStatusEarliestMs_) {
     if (priorityPending) {
-      Serial.println("TX deferred STATUS because priority message pending");
+      Serial.println(pendingRunStartAck_ ? "TX deferred STATUS because RUN_START pending" : "TX deferred STATUS because priority message pending");
       nextStartStatusDueMs_ = now + 500UL;
     } else if (finishLastStatusMs_ > 0 && finishLastSeenAgoMs() < 1000UL) {
       startStatusEarliestMs_ = now + 500UL + static_cast<uint32_t>(random(0, 501));
@@ -281,12 +284,16 @@ String StartStationApp::statusJson() const {
   doc["finishElapsedMs"] = finishElapsedMs_;
   doc["startHeartbeatCount"] = startHeartbeatCount_;
   doc["pendingRunStartAck"] = pendingRunStartAck_;
+  doc["runStartAttempt"] = runStartAckAttempts_;
   doc["runStartAckAttempts"] = runStartAckAttempts_;
   doc["runStartAckReceived"] = runStartAckReceived_;
+  doc["runStartAckTimeout"] = runStartAckTimedOut_;
+  doc["lastRunStartTxMs"] = lastRunStartSendMs_;
   doc["lastRunStartAckAgoMs"] = lastRunStartAckMs_ > 0 ? static_cast<uint32_t>(millis() - lastRunStartAckMs_) : UINT32_MAX;
   if (lastStatusSentOkMs_ > 0) doc["lastStartStatusSentAgoMs"] = static_cast<uint32_t>(millis() - lastStatusSentOkMs_); else doc["lastStartStatusSentAgoMs"] = nullptr;
   const String displayedFinishState = finishLinkActive ? finishState_ : String("Unknown");
   doc["finishState"] = displayedFinishState;
+  doc["finishReportedState"] = displayedFinishState;
   doc["finishLastKnownState"] = finishState_;
   doc["finishHasError"] = finishLinkActive && finishState_ == "Error";
   if (finishLinkActive && finishState_ == "Error") {
@@ -322,6 +329,7 @@ String StartStationApp::statusJson() const {
   doc["lastLoRaRaw"] = lastLoRaRaw_;
   doc["lastLoRaRawShort"] = lastLoRaRaw_;
   doc["currentRunId"] = current.runId;
+  doc["currentRunRaceStartTimeMs"] = current.raceStartTimeMs;
   RiderRecord selectedRider = selectRider();
   TrailRecord selectedTrail = selectTrail();
   doc["selectedTrailId"] = selectedTrail.id;
@@ -547,7 +555,7 @@ void StartStationApp::pollRadio() {
     lastFinishPacketType_ = RadioProtocol::typeToString(message.type);
     Serial.printf("LORA RX raw=%s\n", lastLoRaRaw_.c_str());
     Serial.printf("LORA RX type=%s rssi=%d snr=%.1f raw=%s\n", lastFinishPacketType_.c_str(), lastRssi_, static_cast<double>(lastSnr_), lastLoRaRaw_.c_str());
-    Serial.printf("LORA parsed type=%s stationId=%s hb=%lu\n", lastFinishPacketType_.c_str(), message.stationId.c_str(), static_cast<unsigned long>(message.heartbeat));
+    Serial.printf("LORA parsed type=%s stationId=%s runId=%s raceStartTimeMs=%lu hb=%lu\n", lastFinishPacketType_.c_str(), message.stationId.c_str(), message.runId.c_str(), static_cast<unsigned long>(message.raceStartTimeMs), static_cast<unsigned long>(message.heartbeat));
     if (message.type == RadioMessageType::Unknown) {
       Serial.printf("LORA unknown type=%s raw=%s\n", lastFinishPacketType_.c_str(), payload.c_str());
     }
@@ -587,7 +595,7 @@ bool StartStationApp::sendRadio(const RadioMessage& message, int* resultCode) {
   if (resultCode != nullptr) *resultCode = result;
   restoreRadioReceiveMode();
   const bool logTxMode = true;
-  Serial.println("LoRa RX mode restored");
+  Serial.println(message.type == RadioMessageType::RunStart ? "LoRa RX mode restored after RUN_START" : "LoRa RX mode restored");
   if (result != RADIOLIB_ERR_NONE) {
     Serial.printf("[StartStation] LoRa TX failed: %d\n", result);
     return false;
@@ -698,13 +706,14 @@ void StartStationApp::sendSyncApply(uint32_t nowMs) {
 #endif
 
 void StartStationApp::sendRunStart(const RunRecord& run) {
-  if (runStartAckAttempts_ >= 10) return;
+  if (runStartAckAttempts_ >= RUN_START_MAX_ATTEMPTS) return;
   runStartAckAttempts_ += 1;
   RadioMessage message;
   message.type = RadioMessageType::RunStart;
   message.stationId = "start";
   message.messageId = RadioProtocol::makeMessageId("start");
   message.runId = run.runId;
+  message.runNumber = run.runNumber;
   message.riderName = run.riderName;
   message.trailName = run.trailName;
   message.startTimestampMs = run.startTimestampMs;
@@ -714,23 +723,30 @@ void StartStationApp::sendRunStart(const RunRecord& run) {
   message.bootId = bootId_;
 
   lastRunStartSendMs_ = clock_.nowMs();
-  Serial.printf("RUN_START TX runId=%s startTimestampMs=%lu rider=%s\n", run.runId.c_str(), static_cast<unsigned long>(run.startTimestampMs), run.riderName.c_str());
-  Serial.printf("RUN_START TX attempt=%u runId=%s\n", runStartAckAttempts_, run.runId.c_str());
+  String rawPayload;
+  RadioProtocol::serialize(message, rawPayload);
+  const String rawPreview = rawPayload.length() > 250 ? rawPayload.substring(0, 250) : rawPayload;
+  Serial.printf("RUN_START TX runId=%s startTimestampMs=%lu raceStartTimeMs=%lu rider=%s\n", run.runId.c_str(), static_cast<unsigned long>(run.startTimestampMs), static_cast<unsigned long>(run.raceStartTimeMs), run.riderName.c_str());
+  Serial.printf("RUN_START payload len=%u\n", static_cast<unsigned>(rawPayload.length()));
+  Serial.printf("RUN_START raw=%s\n", rawPreview.c_str());
+  Serial.printf("RUN_START %s attempt=%u/%u runId=%s\n", runStartAckAttempts_ == 1 ? "TX" : "retry", runStartAckAttempts_, RUN_START_MAX_ATTEMPTS, run.runId.c_str());
+  Serial.printf("RUN_START TX attempt=%u\n", runStartAckAttempts_);
   Serial.printf("TX priority RUN_START attempt=%u\n", runStartAckAttempts_);
   int resultCode = 0;
   if (sendRadio(message, &resultCode)) {
     lastPriorityTxMs_ = clock_.nowMs();
     lastRunStartSendMs_ = lastPriorityTxMs_;
-    Serial.printf("RUN_START sent OK runId=%s start=%lu\n", run.runId.c_str(),
-                  static_cast<unsigned long>(run.startTimestampMs));
+    Serial.printf("RUN_START TX ok runId=%s raceStartTimeMs=%lu\n", run.runId.c_str(),
+                  static_cast<unsigned long>(run.raceStartTimeMs));
   } else {
-    Serial.printf("RUN_START failed code=%d runId=%s\n", resultCode, run.runId.c_str());
+    Serial.printf("RUN_START TX failed code=%d runId=%s\n", resultCode, run.runId.c_str());
   }
 }
 
 void StartStationApp::retryRunStartAck(uint32_t nowMs) {
   if (!pendingRunStartAck_) return;
-  if (runStartAckAttempts_ >= 10) {
+  if (runStartAckAttempts_ >= RUN_START_MAX_ATTEMPTS) {
+    if (lastRunStartSendMs_ > 0 && nowMs - lastRunStartSendMs_ < RUN_START_RETRY_INTERVAL_MS) return;
     pendingRunStartAck_ = false;
     runStartAckTimedOut_ = true;
     Serial.printf("RUN_START ACK TIMEOUT attempts=%u\n", runStartAckAttempts_);
@@ -741,7 +757,8 @@ void StartStationApp::retryRunStartAck(uint32_t nowMs) {
 #endif
     return;
   }
-  if (lastRunStartSendMs_ > 0 && nowMs - lastRunStartSendMs_ < 500UL) return;
+  if (lastRunStartSendMs_ > 0 && nowMs - lastRunStartSendMs_ < RUN_START_RETRY_INTERVAL_MS) return;
+  Serial.printf("RUN_START retry attempt=%u/%u runId=%s\n", static_cast<unsigned>(runStartAckAttempts_ + 1), RUN_START_MAX_ATTEMPTS, state_.currentRun().runId.c_str());
   sendRunStart(state_.currentRun());
 }
 

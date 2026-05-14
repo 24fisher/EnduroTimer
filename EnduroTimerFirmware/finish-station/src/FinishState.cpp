@@ -4,8 +4,9 @@ void FinishState::begin() {
   state_ = FinishRunState::Idle;
 }
 
-void FinishState::startRun(const String& runId, const String& riderName, const String& trailName, uint32_t raceStartTimeMs, uint32_t localReceivedMs) {
+void FinishState::startRun(const String& runId, uint32_t runNumber, const String& riderName, const String& trailName, uint32_t raceStartTimeMs, uint32_t localReceivedMs) {
   runId_ = runId;
+  runNumber_ = runNumber;
   riderName_ = riderName.length() > 0 ? riderName : String("Test Rider");
   trailName_ = trailName;
   startTimestampMs_ = raceStartTimeMs;
@@ -21,6 +22,7 @@ void FinishState::markFinishSent(uint32_t finishTimestampMs) {
 
 void FinishState::ackFinish() {
   runId_ = "";
+  runNumber_ = 0;
   riderName_ = "";
   trailName_ = "";
   startTimestampMs_ = 0;

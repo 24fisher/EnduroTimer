@@ -31,7 +31,7 @@ The current Heltec V3 OLED configuration is fixed in `platformio.ini`:
 - Library: U8g2
 - `ARDUINO_USB_CDC_ON_BOOT=0`
 - `ARDUINO_USB_MODE=0`
-- `FIRMWARE_VERSION=0.12`
+- `FIRMWARE_VERSION=0.13`
 - `STATUS_LED_PIN=35`
 - `STATUS_LED_ACTIVE_LEVEL=1`
 
@@ -53,10 +53,24 @@ The current Heltec V3 OLED configuration is fixed in `platformio.ini`:
 - Firmware version is a manual semantic-like incremental string.
 - Initial version: `0.00`.
 - Each MR/iteration increments the string by `0.01` manually.
-- Current version: `0.12`.
-- The version is configured with `FIRMWARE_VERSION` and has a source fallback of `0.12`.
+- Current version: `0.13`.
+- The version is configured with `FIRMWARE_VERSION` and has a source fallback of `0.13`.
 - Version is shown in OLED headers, Serial boot logs, Web API status, the Web UI status block, and all LoRa payloads, including compact `STATUS` heartbeat packets (`ver`) and sync/control messages.
 
+
+## v0.13 reliable RUN_START delivery
+
+Firmware v0.13 keeps the v0.12 one-time Wi-Fi RaceClock synchronization model, then makes the race-start event over LoRa reliable and diagnosable. Wi-Fi sync still happens once at startup; the actual race start is still sent by LoRa using `RUN_START`.
+
+- `FIRMWARE_VERSION` is `0.13`; Serial boot logs show `Version: v0.13`, OLED headers show `START TERM v0.13` and `FINISH TERM v0.13`, `/api/status.firmwareVersion` reports `0.13`, and all LoRa messages include `version: "0.13"` (compact `STATUS` uses `ver`).
+- After countdown `GO`, StartStation fixes `raceStartTimeMs = raceClock.nowRaceMs()`, keeps the run in `Riding`, builds a `RUN_START` payload with `stationId=start`, `runId`, `runNumber`, rider/trail snapshots, `raceStartTimeMs`, and `timingSource=WIFI_SYNCED_RACE_CLOCK_ONCE`, and transmits it immediately.
+- `RUN_START` is retried every 700 ms up to 15 attempts until FinishStation returns `RUN_START_ACK`. While a `RUN_START_ACK` is pending, StartStation defers low-priority `STATUS` and `HELLO` traffic and keeps polling RX for the ACK.
+- FinishStation enters `Riding` only after a valid `RUN_START` with a non-empty `runId` and `raceStartTimeMs > 0`. It does not treat compact `STATUS st=G` as a race start.
+- FinishStation sends `RUN_START_ACK` after entering `Riding`. Duplicate `RUN_START` packets for the same run do not reset the timer or create a new run; they only resend `RUN_START_ACK`.
+- If StartStation reports `Riding` in `STATUS` while FinishStation is still `Idle`, FinishStation logs `WARN: Start reports Riding but Finish has no active RUN_START` and shows `WAIT RUN_START` briefly.
+- StartStation `/api/status` includes `pendingRunStartAck`, `runStartAttempt`, `runStartAckReceived`, `runStartAckTimeout`, `lastRunStartTxMs`, `currentRunId`, `currentRunRaceStartTimeMs`, `finishReportedState`, and `finishLastPacketType` for Web UI diagnostics.
+- The Web UI LoRa debug block shows `RUN_START ACK` as `OK`, `pending`, or `timeout`, plus attempts, Finish reported state, and current run id.
+- If StartStation shows `Riding` but FinishStation stays `Idle`, check the Web UI `RUN_START` attempts/ACK status and FinishStation Serial logs for `RUN_START received`, `RUN_START invalid`, or `RUN_START ignored: race clock not synced`.
 
 ## v0.12 one-time Wi-Fi RaceClock synchronization
 
