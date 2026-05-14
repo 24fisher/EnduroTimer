@@ -57,9 +57,9 @@ public:
   String ridersJson() const;
   String trailsJson() const;
   String settingsJson() const;
-  bool addRider(const String& displayName, String& error);
+  bool addRider(const String& displayName, String& error, RiderRecord* addedRider = nullptr);
   bool deactivateRider(const String& riderId, String& error);
-  bool addTrail(const String& displayName, String& error);
+  bool addTrail(const String& displayName, String& error, TrailRecord* addedTrail = nullptr);
   bool deactivateTrail(const String& trailId, String& error);
   bool updateSettings(const String& selectedRiderId, const String& selectedTrailId, String& error);
   String runsCsv() const;
@@ -83,10 +83,10 @@ private:
   void loadTrails();
   void loadSettings();
   void ensureDefaults();
-  void saveRiders() const;
-  void saveTrails() const;
-  void saveSettings() const;
-  void appendRunCsv(const RunRecord& run) const;
+  bool saveRiders();
+  bool saveTrails();
+  bool saveSettings();
+  bool appendRunCsv(const RunRecord& run) const;
   RiderRecord selectRider() const;
   TrailRecord selectTrail() const;
   bool findActiveRider(const String& id, RiderRecord& rider) const;
@@ -115,6 +115,7 @@ private:
   bool hasFinishSignal_ = false;
   int finishReportedStartRssi_ = 0;
   float finishReportedStartSnr_ = 0.0F;
+  uint32_t finishReportedStartLastSeenAgoMs_ = 0;
   bool hasFinishReportedStartSignal_ = false;
   String lastFinishPacketType_ = "-";
   String lastLoRaRaw_ = "-";

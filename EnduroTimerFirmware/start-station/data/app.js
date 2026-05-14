@@ -3,10 +3,14 @@ let consecutiveFetchErrors = 0;
 let riders = [];
 let trails = [];
 let settings = {};
+let lastRunsRefreshMs = 0;
+let lastCatalogRefreshMs = 0;
 
 async function api(path, options = {}) {
   const response = await fetch(path, { cache: 'no-store', headers: { 'Content-Type': 'application/json' }, ...options });
-  const data = await response.json();
+  const text = await response.text();
+  let data = {};
+  try { data = text ? JSON.parse(text) : {}; } catch (error) { throw new Error(`Invalid JSON from ${path}`); }
   if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
   return data;
 }
@@ -24,21 +28,21 @@ function finishStateLabel(status) {
 }
 
 function signalText(rssi, snr) {
-  return rssi === null || rssi === undefined ? 'No packets' : `${Number(rssi).toFixed(0)} dBm / ${Number(snr).toFixed(1)} dB`;
+  return rssi === null || rssi === undefined ? 'NO SIGNAL' : `${Number(rssi).toFixed(0)} dBm${snr === null || snr === undefined ? '' : ` / ${Number(snr).toFixed(1)} dB`}`;
 }
 
 function renderStatus(status) {
-  $('stateBadge').textContent = status.state;
+  $('stateBadge').textContent = status.countdownText || status.state;
   $('stateBadge').className = `badge state-${String(status.state).toLowerCase()}`;
   $('serviceFlags').innerHTML = `OLED <span class="${status.oledOk ? 'online' : 'offline'}">${status.oledOk ? 'OK' : 'FAIL'}</span> · Wi-Fi <span class="${status.wifiOk ? 'online' : 'offline'}">${status.wifiOk ? 'OK' : 'FAIL'}</span> · Web <span class="${status.webOk ? 'online' : 'offline'}">${status.webOk ? 'OK' : 'FAIL'}</span> · LoRa <span class="${status.loraOk ? 'online' : 'offline'}">${status.loraOk ? 'OK' : 'FAIL'}</span>`;
   const lastSeen = Number(status.finishLastSeenAgoMs || 0);
-  $('finishOnline').textContent = status.finishStationOnline ? `Online, last seen ${lastSeen} ms ago` : 'Offline';
+  $('finishOnline').textContent = status.finishStationOnline ? `Финиш: ${signalText(status.finishRssi, null)}` : 'Финиш: NO SIGNAL';
   $('finishOnline').className = status.finishStationOnline ? 'online' : 'offline';
-  $('finishState').textContent = `state: ${finishStateLabel(status)} · heartbeat: ${status.finishHeartbeatCount || 0}`;
+  $('finishState').textContent = `state: ${finishStateLabel(status)} · heartbeat: ${status.finishHeartbeatCount || 0} · last seen: ${lastSeen || '—'} ms`;
   $('finishState').className = status.finishHasError ? 'offline' : status.finishState === 'FinishSent' ? 'pending' : '';
-  $('loraStats').textContent = signalText(status.finishRssi, status.finishSnr);
-  $('reverseLoraStats').textContent = `reported Start RSSI/SNR: ${signalText(status.finishReportedStartRssi, status.finishReportedStartSnr)}`;
-  $('lastPacket').textContent = `packet: ${status.lastLoRaPacketType || status.lastPacketType || '—'}`;
+  $('loraStats').textContent = `Signal from finish: ${signalText(status.finishRssi, status.finishSnr)}`;
+  $('reverseLoraStats').textContent = `Signal reported by finish from start: ${signalText(status.finishReportedStartRssi, status.finishReportedStartSnr)}${status.finishReportedStartLastSeenAgoMs ? ` (${status.finishReportedStartLastSeenAgoMs} ms ago)` : ''}`;
+  $('lastPacket').textContent = `packet: ${status.lastLoRaPacketType || status.lastPacketType || '—'} · raw: ${status.lastLoRaRawShort || '—'}`;
   $('countdown').textContent = status.countdownText ? `Countdown: ${status.countdownText}` : 'Countdown: —';
   $('runTimer').textContent = status.currentRunElapsedFormatted || '00:00';
   $('lastResult').textContent = status.lastResultFormatted || '—';
@@ -51,8 +55,12 @@ function renderStatus(status) {
 
 function renderRuns(runs) {
   const body = $('runsBody');
+  $('runsError').textContent = '';
   if (!runs.length) { body.innerHTML = '<tr><td colspan="6">No runs yet</td></tr>'; return; }
-  body.innerHTML = runs.map((run) => `<tr><td><code>${run.runId}</code></td><td>${run.riderName}</td><td>${run.trailName || '—'}</td><td>${run.resultFormatted || '—'}</td><td>${run.status}</td><td>${run.finishSource || '—'}</td></tr>`).join('');
+  body.innerHTML = runs
+    .filter((run) => run.status === 'Finished')
+    .map((run) => `<tr><td><code>${run.runId}</code></td><td>${run.riderName}</td><td>${run.trailName || '—'}</td><td>${run.resultFormatted || '—'}</td><td>${run.status}</td><td>${run.source || run.finishSource || '—'}</td></tr>`)
+    .join('') || '<tr><td colspan="6">No finished runs yet</td></tr>';
 }
 
 function renderCatalogs() {
@@ -66,24 +74,14 @@ function renderCatalogs() {
 
 async function saveSettings() {
   await api('/api/settings', { method: 'POST', body: JSON.stringify({ selectedRiderId: $('selectedRider').value, selectedTrailId: $('selectedTrail').value }) });
+  settings = await api('/api/settings');
   showMessage('Settings saved.');
 }
 
-async function refresh() {
+async function refreshStatus() {
   try {
-    const [status, runs, ridersData, settingsData] = await Promise.all([api('/api/status'), api('/api/runs'), api('/api/riders'), api('/api/settings')]);
-    let trailsData = trails;
-    try {
-      trailsData = await api('/api/trails');
-      $('trailsError').textContent = '';
-    } catch (trailError) {
-      $('trailsError').textContent = 'Не удалось загрузить трассы';
-      showMessage('Не удалось загрузить трассы', true);
-    }
-    riders = ridersData;
-    trails = trailsData;
-    settings = settingsData;
-    renderStatus(status); renderRuns(runs); renderCatalogs();
+    const status = await api('/api/status');
+    renderStatus(status);
     if (consecutiveFetchErrors > 0) showMessage('Web connection restored.');
     consecutiveFetchErrors = 0;
   } catch (error) {
@@ -92,16 +90,54 @@ async function refresh() {
   }
 }
 
+async function refreshRuns() {
+  try {
+    renderRuns(await api('/api/runs'));
+  } catch (error) {
+    $('runsError').textContent = `Не удалось загрузить результаты: ${error.message}`;
+  }
+}
+
+async function refreshCatalogs() {
+  try {
+    [riders, trails, settings] = await Promise.all([api('/api/riders'), api('/api/trails'), api('/api/settings')]);
+    $('ridersError').textContent = '';
+    $('trailsError').textContent = '';
+    renderCatalogs();
+  } catch (error) {
+    $('ridersError').textContent = `Не удалось загрузить справочники: ${error.message}`;
+  }
+}
+
+async function refresh() {
+  await refreshStatus();
+  const now = Date.now();
+  if (now - lastRunsRefreshMs >= 2000) { lastRunsRefreshMs = now; refreshRuns(); }
+  if (now - lastCatalogRefreshMs >= 10000) { lastCatalogRefreshMs = now; refreshCatalogs(); }
+}
 
 $('resetBtn').addEventListener('click', async () => { try { await api('/api/system/reset', { method: 'POST' }); showMessage('Active run reset.'); refresh(); } catch (e) { showMessage(e.message, true); } });
-$('addRiderBtn').addEventListener('click', async () => { try { await api('/api/riders/add', { method: 'POST', body: JSON.stringify({ displayName: $('riderInput').value }) }); $('riderInput').value = ''; refresh(); } catch (e) { showMessage(e.message, true); } });
-$('addTrailBtn').addEventListener('click', async () => { try { await api('/api/trails/add', { method: 'POST', body: JSON.stringify({ displayName: $('trailInput').value }) }); $('trailInput').value = ''; refresh(); } catch (e) { showMessage(e.message, true); } });
+$('addRiderBtn').addEventListener('click', async () => {
+  const displayName = $('riderInput').value.trim();
+  if (!displayName) { showMessage('Введите имя райдера', true); return; }
+  try { await api('/api/riders/add', { method: 'POST', body: JSON.stringify({ displayName }) }); $('riderInput').value = ''; await refreshCatalogs(); showMessage('Райдер добавлен'); } catch (e) { showMessage(e.message, true); }
+});
+$('addTrailBtn').addEventListener('click', async () => {
+  const displayName = $('trailInput').value.trim();
+  if (!displayName) { showMessage('Введите название трассы', true); return; }
+  try { await api('/api/trails/add', { method: 'POST', body: JSON.stringify({ displayName }) }); $('trailInput').value = ''; await refreshCatalogs(); showMessage('Трасса добавлена'); } catch (e) { showMessage(e.message, true); }
+});
 $('selectedRider').addEventListener('change', saveSettings);
 $('selectedTrail').addEventListener('change', saveSettings);
 document.addEventListener('click', async (event) => {
-  if (event.target.classList.contains('deactivate-rider')) { await api('/api/riders/deactivate', { method: 'POST', body: JSON.stringify({ riderId: event.target.dataset.rider }) }); refresh(); }
-  if (event.target.classList.contains('deactivate-trail')) { await api('/api/trails/deactivate', { method: 'POST', body: JSON.stringify({ trailId: event.target.dataset.trail }) }); refresh(); }
+  try {
+    if (event.target.classList.contains('deactivate-rider')) { await api('/api/riders/deactivate', { method: 'POST', body: JSON.stringify({ riderId: event.target.dataset.rider }) }); await refreshCatalogs(); }
+    if (event.target.classList.contains('deactivate-trail')) { await api('/api/trails/deactivate', { method: 'POST', body: JSON.stringify({ trailId: event.target.dataset.trail }) }); await refreshCatalogs(); }
+  } catch (error) { showMessage(error.message, true); }
 });
 
+refreshCatalogs();
+refreshRuns();
 refresh();
 setInterval(refresh, 1000);
+setInterval(refreshRuns, 2000);

@@ -52,20 +52,21 @@ StartStation online hysteresis:
 
 - `offline -> online`: immediately on the first valid FinishStation `STATUS`.
 - `online -> offline`: only when the last `STATUS` is older than 10000 ms.
-- StartStation logs transitions only: `FINISH ONLINE` and `FINISH OFFLINE lastSeenAgo=...`.
+- StartStation logs transitions only: `FINISH ONLINE` and `FINISH NO SIGNAL lastSeenAgo=...`.
+- The UI and OLED use `NO SIGNAL` instead of `OFF` whenever radio packets have not been seen for more than 10 seconds.
 
 Signal tracking:
 
-- StartStation stores RSSI/SNR from every packet received from FinishStation and shows it on OLED and Web UI.
-- FinishStation stores RSSI/SNR from every packet received from StartStation and shows it on OLED.
-- FinishStation includes its reported StartStation RSSI/SNR in `STATUS`, so StartStation can show both directions in `/api/status`.
+- StartStation stores RSSI/SNR from every packet received from FinishStation and shows `FIN:-72dBm` on OLED/Web UI while the signal is fresh. If no packet has arrived for 10000 ms it shows `FIN: NO SIGNAL`.
+- FinishStation stores RSSI/SNR from every packet received from StartStation and shows `START:-33dBm` on OLED while the signal is fresh. If no packet has arrived for 10000 ms it shows `START:NO SIGNAL`.
+- FinishStation includes its reported StartStation RSSI/SNR and `startLastSeenAgoMs` in `STATUS`, so StartStation can show both directions in `/api/status`.
 
 ## Riders, trails, settings, and results
 
 StartStation stores simple LittleFS data files:
 
-- `/riders.json` — rider list.
-- `/trails.json` — trail list.
+- `/riders.json` — rider list, created automatically when missing. Riders are added with `POST /api/riders/add`.
+- `/trails.json` — trail list, created automatically when missing. Trails are added with `POST /api/trails/add`.
 - `/settings.json` — selected rider/trail.
 - `/runs.csv` — finished run export with UTF-8 BOM and semicolon-separated columns.
 
@@ -181,8 +182,8 @@ Returns current status, for example:
 
 - `POST /api/runs/start` — disabled by default with HTTP 403 unless `ENABLE_WEB_START=1` is compiled.
 - `POST /api/system/reset` — clears the active run and returns StartStation to `Ready`.
-- `GET /api/runs` — recent finished runs in RAM.
-- `GET /api/export/runs.csv` — finished run CSV download.
+- `GET /api/runs` — recent finished runs in RAM, populated immediately after a valid `FINISH` message.
+- `GET /api/export/runs.csv` — finished run CSV download from `/runs.csv`.
 - `GET /api/riders` — rider list.
 - `POST /api/riders/add` — JSON body `{ "displayName": "..." }`.
 - `POST /api/riders/deactivate` — JSON body `{ "riderId": "..." }`.
@@ -197,17 +198,17 @@ Returns current status, for example:
 The LittleFS Web UI shows:
 
 - StartStation service flags and state.
-- FinishStation online/offline, state, heartbeat, and last seen age.
-- Finish RSSI/SNR and Finish-reported Start RSSI/SNR.
+- FinishStation signal, state, heartbeat, and last seen age. Missing radio packets are shown as `NO SIGNAL`, not `OFF`.
+- Signal from FinishStation (`Signal from finish: -72 dBm`) and signal reported by FinishStation from StartStation (`Signal reported by finish from start: -33 dBm`).
 - Last LoRa packet type.
 - Countdown and current run timer.
 - Current rider and current trail.
-- Visible riders and trails sections, including trail select, add, and deactivate controls.
+- Visible riders and trails sections, including select, add, deactivate, and per-section error messages. Empty rider/trail add forms show `Введите имя райдера` or `Введите название трассы`.
 - Reset system button.
 - CSV download link.
 - Recent results table with Rider, Trail, Result, Status, Source, and Run ID.
 
-The UI polls once per second. If `/api/trails` fails, it shows `Не удалось загрузить трассы` but keeps the rest of the UI visible. It does not show a hard connection error for a single failed status fetch; after more than five consecutive failures it shows `Нет связи с верхним терминалом`.
+The UI polls `/api/status` once per second, `/api/runs` every two seconds, and rider/trail/settings catalogs on load and after catalog changes. If one endpoint fails, the matching section shows an error while the rest of the UI stays visible. It does not show a hard connection error for a single failed status fetch; after more than five consecutive failures it shows `Нет связи с верхним терминалом`.
 
 ## LoRa protocol
 
@@ -238,6 +239,7 @@ FinishStation `STATUS` includes state, active run, timer, button readiness, and 
   "elapsedMs": 12345,
   "startRssi": -70,
   "startSnr": 8.5,
+  "startLastSeenAgoMs": 250,
   "buttonReady": true
 }
 ```
@@ -290,7 +292,7 @@ StartStation Ready:
 
 ```text
 START TERMINAL
-FIN: OK -72
+FIN:-72dBm
 Rider: Test Rider
 Trail: Default trail
 Last: 00:20.1
@@ -303,7 +305,7 @@ START
 3 / 2 / 1 / GO
 ```
 
-The countdown state machine is millis-based: `3` for 1000 ms, `2` for 1000 ms, `1` for 1000 ms, and `GO` for about 700 ms. Serial logs include `COUNTDOWN step=... at ms=...` and `OLED countdown rendered step=... at ms=...`.
+The countdown state machine is millis-based and non-blocking: `3` for 1000 ms, `2` for 1000 ms, `1` for 1000 ms, and `GO` for about 700 ms. Serial logs include `COUNTDOWN step=... time=...` and `OLED countdown rendered step=... at ms=...`.
 
 StartStation Riding:
 
@@ -311,7 +313,7 @@ StartStation Riding:
 START TERMINAL
 RIDING
 00:12
-FIN: OK -72
+FIN:-72dBm
 ```
 
 StartStation Finished:
@@ -329,7 +331,7 @@ FinishStation Idle:
 FINISH TERMINAL
 LoRa: OK
 State: IDLE
-ST: -70
+START:-70dBm
 ```
 
 FinishStation Riding:
@@ -340,7 +342,7 @@ RIDING
 Rider: Test Rider
 Timer: 00:12
 Btn: FINISH
-ST: -70
+START:-70dBm
 ```
 
 FinishStation finish-line overlay appears immediately after an accepted finish button press while retries and ACK handling continue in the background:
@@ -357,7 +359,7 @@ FinishStation FinishSent:
 FINISH TERMINAL
 FINISH SENT
 Sent: x/5
-ST: -70
+START:-70dBm
 ```
 
 FinishStation ACK:
@@ -396,13 +398,13 @@ pio run -e start_station -t uploadfs
 
 If files are still missing, the fallback page at `http://192.168.4.1/` should appear and show the uploadfs command.
 
-### FinishStation is always offline / `FIN: OFF`
+### FinishStation is always `NO SIGNAL`
 
 1. Check that `ENABLE_LORA=1` is present for both `start_station` and `finish_station` in `platformio.ini`.
 2. Check that both boards use `LORA_FREQUENCY_MHZ=868.0`.
-3. Watch FinishStation Serial for `STATUS sent heartbeat=... state=...` once per second.
-4. Watch StartStation Serial for `STATUS received from finish heartbeat=... rssi=... snr=...`.
-5. If packet parsing fails, inspect `LoRa RX raw: ...` and `parse failed: ...` on Serial.
+3. Watch FinishStation Serial for `STATUS sent heartbeat=5 state=...` every fifth heartbeat. STATUS is still sent every second.
+4. Watch StartStation Serial for `LoRa RX raw: ...` and `STATUS received heartbeat=... rssi=... snr=...`.
+5. If packet parsing fails, inspect `LoRa RX raw: ...` and `LoRa parse failed raw=... error=...` on Serial.
 6. Check that antennas are connected to both boards.
 
 ### Finish button does not react
@@ -414,7 +416,7 @@ If files are still missing, the fallback page at `http://192.168.4.1/` should ap
 
 ### Countdown updates slowly
 
-The StartStation countdown must use its immediate OLED render path, not only the regular status refresh. Serial should show `COUNTDOWN step=3/2/1/GO at ms=...` and `OLED countdown rendered step=... at ms=...` for each transition.
+The StartStation countdown must use its immediate OLED render path, not only the regular status refresh. Serial should show `COUNTDOWN step=3/2/1/GO time=...` and `OLED countdown rendered step=... at ms=...` for each transition.
 
 ### Cyrillic looks wrong on OLED
 

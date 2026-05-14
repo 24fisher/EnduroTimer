@@ -35,4 +35,5 @@ struct RadioMessage {
   int startRssi = 0;
   bool hasStartSnr = false;
   float startSnr = 0.0F;
+  uint32_t startLastSeenAgoMs = 0;
 };

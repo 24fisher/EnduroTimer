@@ -17,6 +17,7 @@ static constexpr int LORA_BUSY = 13;
 static constexpr uint8_t MaxFinishAttempts = 5;
 static constexpr uint32_t StatusIntervalMs = 1000UL;
 static constexpr uint32_t DisplayRefreshMs = 200UL;
+static constexpr uint32_t StartSignalTimeoutMs = 10000UL;
 RTC_DATA_ATTR static uint32_t finishBootCounter = 0;
 #if ENABLE_LORA
 static SX1262 radio = new Module(LORA_NSS, LORA_DIO1, LORA_RST, LORA_BUSY);
@@ -57,6 +58,9 @@ void FinishStationApp::loop() {
 #if ENABLE_LORA
   pollRadio();
 #endif
+  if (startLastSeenMs_ > 0 && now - startLastSeenMs_ > StartSignalTimeoutMs) {
+    hasStartSignal_ = false;
+  }
   updateLed(now);
 
   uint32_t finishTimestampMs = 0;
@@ -174,11 +178,12 @@ void FinishStationApp::pollRadio() {
     RadioMessage message;
     String error;
     if (!RadioProtocol::deserialize(payload, message, &error)) {
-      Serial.printf("parse failed: %s raw=%s\n", error.c_str(), payload.c_str());
+      Serial.printf("LoRa parse failed raw=%s error=%s\n", payload.c_str(), error.c_str());
       return;
     }
     startRssi_ = static_cast<int>(radio.getRSSI());
     startSnr_ = radio.getSNR();
+    startLastSeenMs_ = millis();
     hasStartSignal_ = true;
     lastPacket_ = RadioProtocol::typeToString(message.type);
     handleRadioMessage(message);
@@ -222,15 +227,18 @@ void FinishStationApp::sendStatus() {
   if (state_.riderName().length() > 0) message.riderName = state_.riderName();
   if (state_.trailName().length() > 0) message.trailName = state_.trailName();
   message.elapsedMs = state_.elapsedMs(clock_.nowMs());
-  if (hasStartSignal_) {
+  if (hasStartSignal_ && startLastSeenMs_ > 0 && clock_.nowMs() - startLastSeenMs_ <= StartSignalTimeoutMs) {
     message.hasStartRssi = true;
     message.startRssi = startRssi_;
     message.hasStartSnr = true;
     message.startSnr = startSnr_;
+    message.startLastSeenAgoMs = clock_.nowMs() - startLastSeenMs_;
   }
   if (sendRadio(message)) {
     heartbeatCounter_ += 1;
-    Serial.printf("STATUS sent heartbeat=%lu state=%s\n", static_cast<unsigned long>(heartbeatCounter_), message.state.c_str());
+    if (heartbeatCounter_ % 5 == 0) {
+      Serial.printf("STATUS sent heartbeat=%lu state=%s\n", static_cast<unsigned long>(heartbeatCounter_), message.state.c_str());
+    }
   } else {
     Serial.println("STATUS send failed code=-1");
   }
@@ -285,6 +293,8 @@ void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
 
 void FinishStationApp::updateDisplay() {
   const String runShort = state_.runId().length() > 0 ? state_.runId().substring(max(0, static_cast<int>(state_.runId().length()) - 6)) : "-";
+  const bool startOnline = hasStartSignal_ && startLastSeenMs_ > 0 && millis() - startLastSeenMs_ <= StartSignalTimeoutMs;
+  const String startSignal = startOnline ? String("START:") + String(startRssi_) + "dBm" : String("START:NO SIGNAL");
 
   if (finishLineCrossedUntilMs_ > millis()) {
     display_.showFinishLineCrossed();
@@ -307,20 +317,20 @@ void FinishStationApp::updateDisplay() {
   }
 
   if (state_.state() == FinishRunState::WaitFinish) {
-    display_.showLines({"FINISH TERMINAL", "RIDING", "Rider: " + toDisplayText(state_.riderName(), 16), "Timer: " + formatDurationMs(state_.elapsedMs(millis())).substring(0, 5), "Btn: FINISH", String("ST: ") + (hasStartSignal_ ? String(startRssi_) : String("--"))});
+    display_.showLines({"FINISH TERMINAL", "RIDING", "Rider: " + toDisplayText(state_.riderName(), 16), "Timer: " + formatDurationMs(state_.elapsedMs(millis())).substring(0, 5), "Btn: FINISH", startSignal});
     return;
   }
 
   if (state_.state() == FinishRunState::FinishSent) {
-    display_.showLines({"FINISH TERMINAL", "FINISH SENT", "Sent: " + String(finishAttempts_) + "/5", String("ST: ") + (hasStartSignal_ ? String(startRssi_) : String("--"))});
+    display_.showLines({"FINISH TERMINAL", "FINISH SENT", "Sent: " + String(finishAttempts_) + "/5", startSignal});
     return;
   }
 
   display_.showLines({
     "FINISH TERMINAL",
-    String("LoRa: ") + (radioReady_ ? "OK" : "OFF"),
+    String("LoRa: ") + (radioReady_ ? "OK" : "NO SIGNAL"),
     "State: IDLE",
-    String("ST: ") + (hasStartSignal_ ? String(startRssi_) : String("--")),
+    startSignal,
   });
 }
 

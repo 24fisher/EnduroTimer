@@ -54,6 +54,7 @@ bool RadioProtocol::serialize(const RadioMessage& message, String& output) {
     doc["buttonReady"] = message.buttonReady;
     if (message.hasStartRssi) doc["startRssi"] = message.startRssi; else doc["startRssi"] = nullptr;
     if (message.hasStartSnr) doc["startSnr"] = message.startSnr; else doc["startSnr"] = nullptr;
+    if (message.startLastSeenAgoMs > 0) doc["startLastSeenAgoMs"] = message.startLastSeenAgoMs; else doc["startLastSeenAgoMs"] = nullptr;
     if (message.hasBatteryVoltage) {
       doc["batteryVoltage"] = message.batteryVoltage;
     } else {
@@ -93,6 +94,7 @@ bool RadioProtocol::deserialize(const String& input, RadioMessage& output, Strin
   output.elapsedMs = doc["elapsedMs"] | 0;
   if (!doc["startRssi"].isNull()) { output.hasStartRssi = true; output.startRssi = doc["startRssi"].as<int>(); }
   if (!doc["startSnr"].isNull()) { output.hasStartSnr = true; output.startSnr = doc["startSnr"].as<float>(); }
+  output.startLastSeenAgoMs = doc["startLastSeenAgoMs"] | 0;
 
   if (!doc["batteryVoltage"].isNull()) {
     output.hasBatteryVoltage = true;
