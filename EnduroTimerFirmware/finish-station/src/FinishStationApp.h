@@ -43,6 +43,9 @@ private:
   uint8_t finishAttempts_ = 0;
   bool ledOn_ = false;
   String lastPacket_ = "-";
+  int startRssi_ = 0;
+  float startSnr_ = 0.0F;
+  bool hasStartSignal_ = false;
   uint32_t showNoRunUntilMs_ = 0;
   uint32_t showAckOkUntilMs_ = 0;
 };

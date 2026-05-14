@@ -60,10 +60,11 @@ void FinishStationApp::loop() {
 
   uint32_t finishTimestampMs = 0;
   if (sensor_.update(now, finishTimestampMs)) {
-    if (state_.state() == FinishRunState::WaitFinish) {
+    if (state_.canFinish()) {
       state_.markFinishSent(finishTimestampMs);
       finishAttempts_ = 0;
       lastFinishSendMs_ = 0;
+      Serial.printf("Finish accepted runId=%s\n", state_.runId().c_str());
       sendFinish();
 #if ENABLE_OLED
       if (!display_.testPatternOnly()) {
@@ -71,10 +72,11 @@ void FinishStationApp::loop() {
       }
 #endif
     } else if (state_.state() == FinishRunState::Idle) {
-      Serial.println("Finish ignored: state=Idle");
-      Serial.println("button ignored: no active run");
-      Serial.println("button ignored: state=Idle");
+      Serial.println("Finish ignored: no active run.");
+      Serial.println("Finish ignored: no active run");
       showNoRunUntilMs_ = now + 1200UL;
+    } else if (state_.state() == FinishRunState::FinishSent) {
+      Serial.println("Finish ignored: already sent, waiting ACK.");
     } else {
       Serial.printf("button ignored: state=%s\n", state_.stateText().c_str());
     }
@@ -166,6 +168,9 @@ void FinishStationApp::pollRadio() {
       Serial.printf("[FinishStation] invalid packet: %s payload=%s\n", error.c_str(), payload.c_str());
       return;
     }
+    startRssi_ = static_cast<int>(radio.getRSSI());
+    startSnr_ = radio.getSNR();
+    hasStartSignal_ = true;
     lastPacket_ = RadioProtocol::typeToString(message.type);
     handleRadioMessage(message);
   }
@@ -205,9 +210,16 @@ void FinishStationApp::sendStatus() {
   message.uptimeMs = message.timestampMs;
   message.heartbeat = heartbeatCounter_ + 1;
   if (state_.runId().length() > 0) message.runId = state_.runId();
+  if (state_.riderName().length() > 0) message.riderName = state_.riderName();
+  message.elapsedMs = state_.elapsedMs(clock_.nowMs());
+  if (hasStartSignal_) {
+    message.hasStartRssi = true;
+    message.startRssi = startRssi_;
+    message.hasStartSnr = true;
+    message.startSnr = startSnr_;
+  }
   if (sendRadio(message)) {
     heartbeatCounter_ += 1;
-    Serial.printf("[FinishStation] STATUS sent: %s heartbeat=%lu\n", message.state.c_str(), static_cast<unsigned long>(heartbeatCounter_));
   }
 }
 
@@ -220,6 +232,7 @@ void FinishStationApp::sendFinish() {
   message.source = "BUTTON_STUB";
   finishAttempts_ += 1;
   lastFinishSendMs_ = clock_.nowMs();
+  Serial.printf("FINISH sent attempt=%u\n", finishAttempts_);
   if (sendRadio(message)) {
     Serial.printf("[FinishStation] FINISH sent: run=%s attempt=%u/%u\n", state_.runId().c_str(),
                   finishAttempts_, MaxFinishAttempts);
@@ -233,7 +246,7 @@ void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
   if (message.type == RadioMessageType::RunStart) {
     Serial.printf("[FinishStation] RUN_START received: run=%s start=%lu\n", message.runId.c_str(),
                   static_cast<unsigned long>(message.startTimestampMs));
-    state_.startRun(message.runId, message.startTimestampMs);
+    state_.startRun(message.runId, message.riderName, message.trailName, message.startTimestampMs, millis());
     sensor_.arm(message.runId, message.startTimestampMs);
     finishAttempts_ = 0;
     buzzer_.beep("RUN_START");
@@ -248,7 +261,7 @@ void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
     showAckOkUntilMs_ = millis() + 1500UL;
 #if ENABLE_OLED
     if (!display_.testPatternOnly()) {
-      display_.showLines({"FINISH ACK", "IDLE"});
+      display_.showLines({"ACK OK", "IDLE"});
     }
 #endif
   }
@@ -258,7 +271,7 @@ void FinishStationApp::updateDisplay() {
   const String runShort = state_.runId().length() > 0 ? state_.runId().substring(max(0, static_cast<int>(state_.runId().length()) - 6)) : "-";
 
   if (showAckOkUntilMs_ > millis()) {
-    display_.showLines({"FINISH ACK", "IDLE"});
+    display_.showLines({"ACK OK", "IDLE"});
     return;
   }
 
@@ -268,26 +281,25 @@ void FinishStationApp::updateDisplay() {
   }
 
   if (state_.state() == FinishRunState::Error) {
-    display_.showLines({"ERROR", String("LoRa: ") + (radioReady_ ? "OK" : "OFF"), "ACK TIMEOUT", "Run: " + runShort, "Sent: " + String(finishAttempts_) + "/5"});
+    display_.showLines({"ERROR", String("LoRa: ") + (radioReady_ ? "OK" : "OFF"), "ACK TIMEOUT", "Sent: " + String(finishAttempts_) + "/5"});
     return;
   }
 
   if (state_.state() == FinishRunState::WaitFinish) {
-    display_.showLines({"WAIT FINISH", "Run: " + runShort, "Btn: finish"});
+    display_.showLines({"RIDING", state_.riderName().substring(0, 18), formatDurationMs(state_.elapsedMs(millis())).substring(0, 5), "Btn: FINISH", String("ST: ") + (hasStartSignal_ ? String(startRssi_) : String("--"))});
     return;
   }
 
   if (state_.state() == FinishRunState::FinishSent) {
-    display_.showLines({"FINISH SENT", "Run: " + runShort, "Sent: " + String(finishAttempts_) + "/5"});
+    display_.showLines({"FINISH SENT", "Sent: " + String(finishAttempts_) + "/5", String("ST: ") + (hasStartSignal_ ? String(startRssi_) : String("--"))});
     return;
   }
 
   display_.showLines({
-    "ENDURO TIMER",
     "FINISH",
     String("LoRa: ") + (radioReady_ ? "OK" : "OFF"),
+    String("ST RSSI: ") + (hasStartSignal_ ? String(startRssi_) : String("--")),
     "IDLE",
-    "HB: " + String(heartbeatCounter_),
   });
 }
 

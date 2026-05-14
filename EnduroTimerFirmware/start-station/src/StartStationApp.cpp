@@ -1,6 +1,7 @@
 #include "StartStationApp.h"
 
 #include <ArduinoJson.h>
+#include <LittleFS.h>
 #include <SPI.h>
 #include <WiFi.h>
 #include <esp_system.h>
@@ -15,7 +16,7 @@ static constexpr int LORA_NSS = 8;
 static constexpr int LORA_DIO1 = 14;
 static constexpr int LORA_RST = 12;
 static constexpr int LORA_BUSY = 13;
-static constexpr uint32_t FinishOfflineTimeoutMs = 5000UL;
+static constexpr uint32_t FinishOfflineTimeoutMs = 10000UL;
 static constexpr uint32_t DisplayRefreshMs = 250UL;
 static constexpr uint32_t ButtonDebounceMs = 50UL;
 RTC_DATA_ATTR static uint32_t startBootCounter = 0;
@@ -48,6 +49,7 @@ void StartStationApp::begin() {
   Serial.println("[BOOT] Button OK");
   buzzer_.begin();
   state_.begin();
+  loadStorage();
 }
 
 void StartStationApp::loop() {
@@ -55,6 +57,10 @@ void StartStationApp::loop() {
 #if ENABLE_LORA
   pollRadio();
 #endif
+  if (finishOnlineState_ && lastFinishSeenMs_ > 0 && now - lastFinishSeenMs_ > FinishOfflineTimeoutMs) {
+    finishOnlineState_ = false;
+    Serial.printf("FINISH OFFLINE lastSeenAgo=%lu\n", static_cast<unsigned long>(now - lastFinishSeenMs_));
+  }
   updateButton(now);
   updateLed(now);
 
@@ -80,7 +86,9 @@ void StartStationApp::loop() {
 
 bool StartStationApp::requestStartRun(String& error) {
   Serial.println("Start run requested");
-  const bool ok = state_.startCountdown(error);
+  RiderRecord rider = selectRider();
+  TrailRecord trail = selectTrail();
+  const bool ok = state_.startCountdown(rider.id, rider.displayName, trail.id, trail.displayName, error);
   if (!ok) {
     error = "Run already active";
     return false;
@@ -126,7 +134,6 @@ String StartStationApp::statusJson() const {
   doc["loraOk"] = radioReady_;
   doc["finishStationOnline"] = finishOnline();
   doc["finishLastSeenAgoMs"] = lastFinishSeenMs_ > 0 ? finishLastSeenAgoMs() : 0;
-  doc["finishLastStatusMs"] = finishLastStatusMs_;
   doc["finishHeartbeatCount"] = finishHeartbeatCount_;
   doc["finishState"] = finishState_;
   doc["finishHasError"] = finishState_ == "Error";
@@ -135,15 +142,29 @@ String StartStationApp::statusJson() const {
   } else {
     doc["finishErrorMessage"] = nullptr;
   }
-  if (radioReady_ && lastFinishSeenMs_ > 0) {
-    doc["loraLastRssi"] = lastRssi_;
-    doc["loraLastSnr"] = lastSnr_;
+  if (hasFinishSignal_) {
+    doc["finishRssi"] = finishRssi_;
+    doc["finishSnr"] = finishSnr_;
   } else {
-    doc["loraLastRssi"] = nullptr;
-    doc["loraLastSnr"] = nullptr;
+    doc["finishRssi"] = nullptr;
+    doc["finishSnr"] = nullptr;
   }
+  if (hasFinishReportedStartSignal_) {
+    doc["finishReportedStartRssi"] = finishReportedStartRssi_;
+    doc["finishReportedStartSnr"] = finishReportedStartSnr_;
+  } else {
+    doc["finishReportedStartRssi"] = nullptr;
+    doc["finishReportedStartSnr"] = nullptr;
+  }
+  doc["lastPacketType"] = lastFinishPacketType_;
   doc["currentRunId"] = current.runId;
-  doc["currentRiderName"] = current.riderName.length() > 0 ? current.riderName : "Test Rider";
+  RiderRecord selectedRider = selectRider();
+  TrailRecord selectedTrail = selectTrail();
+  doc["currentRiderName"] = current.riderName.length() > 0 ? current.riderName : selectedRider.displayName;
+  doc["currentTrailName"] = current.trailName.length() > 0 ? current.trailName : selectedTrail.displayName;
+  uint32_t elapsedMs = (state_.state() == StartRunState::Riding && current.startTimestampMs > 0) ? millis() - current.startTimestampMs : 0;
+  doc["currentRunElapsedMs"] = elapsedMs;
+  doc["currentRunElapsedFormatted"] = elapsedMs > 0 ? formatDurationMs(elapsedMs).substring(0, 5) : String("00:00");
   doc["countdownText"] = state_.countdownText(millis());
   doc["lastResultMs"] = last.resultMs > 0 ? last.resultMs : 0;
   doc["lastResultFormatted"] = last.resultFormatted;
@@ -163,12 +184,16 @@ String StartStationApp::runsJson() const {
   for (const RunRecord& run : state_.runs()) {
     JsonObject item = array.add<JsonObject>();
     item["runId"] = run.runId;
+    item["riderId"] = run.riderId;
     item["riderName"] = run.riderName;
+    item["trailId"] = run.trailId;
+    item["trailName"] = run.trailName;
     item["startTimestampMs"] = run.startTimestampMs;
     item["finishTimestampMs"] = run.finishTimestampMs;
     item["resultMs"] = run.resultMs;
     item["resultFormatted"] = run.resultFormatted;
     item["status"] = run.status;
+    item["finishSource"] = run.finishSource;
   }
 
   String output;
@@ -250,14 +275,16 @@ void StartStationApp::pollRadio() {
   String payload;
   const int state = radio.receive(payload, 0);
   if (state == RADIOLIB_ERR_NONE) {
-    lastRssi_ = radio.getRSSI();
-    lastSnr_ = radio.getSNR();
+    finishRssi_ = static_cast<int>(radio.getRSSI());
+    finishSnr_ = radio.getSNR();
+    hasFinishSignal_ = true;
     RadioMessage message;
     String error;
     if (!RadioProtocol::deserialize(payload, message, &error)) {
       Serial.printf("[StartStation] invalid packet: %s payload=%s\n", error.c_str(), payload.c_str());
       return;
     }
+    lastFinishPacketType_ = RadioProtocol::typeToString(message.type);
     handleRadioMessage(message);
   }
 #else
@@ -289,6 +316,7 @@ void StartStationApp::sendRunStart(const RunRecord& run) {
   message.messageId = RadioProtocol::makeMessageId("start");
   message.runId = run.runId;
   message.riderName = run.riderName;
+  message.trailName = run.trailName;
   message.startTimestampMs = run.startTimestampMs;
 
   if (sendRadio(message)) {
@@ -310,11 +338,18 @@ void StartStationApp::sendFinishAck(const String& runId) {
 void StartStationApp::handleRadioMessage(const RadioMessage& message) {
   if (message.type == RadioMessageType::Status) {
     lastFinishSeenMs_ = millis();
+    if (!finishOnlineState_) {
+      finishOnlineState_ = true;
+      Serial.println("FINISH ONLINE");
+    }
     finishLastStatusMs_ = message.timestampMs > 0 ? message.timestampMs : message.uptimeMs;
     finishHeartbeatCount_ = message.heartbeat;
     if (message.state.length() > 0) finishState_ = message.state;
-    Serial.printf("[StartStation] STATUS received: state=%s run=%s rssi=%.1f snr=%.1f\n",
-                  finishState_.c_str(), message.runId.c_str(), lastRssi_, lastSnr_);
+    if (message.hasStartRssi && message.hasStartSnr) {
+      finishReportedStartRssi_ = message.startRssi;
+      finishReportedStartSnr_ = message.startSnr;
+      hasFinishReportedStartSignal_ = true;
+    }
     return;
   }
 
@@ -324,6 +359,7 @@ void StartStationApp::handleRadioMessage(const RadioMessage& message) {
     RunRecord completed;
     if (state_.completeRun(message.runId, message.finishTimestampMs, message.source, completed)) {
       Serial.printf("[StartStation] result calculated: %s\n", completed.resultFormatted.c_str());
+      appendRunCsv(completed);
 #if ENABLE_OLED
       if (!display_.testPatternOnly()) {
         display_.showLines({"FINISHED", completed.resultFormatted, "Run: " + completed.runId, "Finish: " + completed.finishSource});
@@ -341,7 +377,7 @@ void StartStationApp::handleRadioMessage(const RadioMessage& message) {
 }
 
 bool StartStationApp::finishOnline() const {
-  return lastFinishSeenMs_ > 0 && millis() - lastFinishSeenMs_ <= FinishOfflineTimeoutMs;
+  return finishOnlineState_;
 }
 
 uint32_t StartStationApp::finishLastSeenAgoMs() const {
@@ -372,6 +408,7 @@ void StartStationApp::updateDisplay() {
   const RunRecord& last = state_.lastRun();
   const String runShort = current.runId.length() > 0 ? current.runId.substring(max(0, static_cast<int>(current.runId.length()) - 6)) : "-";
   const String lastResult = last.resultFormatted.length() > 0 ? last.resultFormatted : "-";
+  const String fin = String("FIN: ") + (finishOnline() ? "OK" : "OFF") + (hasFinishSignal_ ? String(" ") + String(finishRssi_) : String(""));
 
   if (state_.state() == StartRunState::Countdown) {
     display_.showCountdown(state_.countdownText(millis()));
@@ -379,21 +416,23 @@ void StartStationApp::updateDisplay() {
   }
 
   if (state_.state() == StartRunState::Finished) {
-    display_.showLines({"FINISHED", lastResult, "Run: " + runShort, "Finish: " + last.finishSource});
+    display_.showLines({"FINISHED", last.riderName.substring(0, 18), lastResult, "Finish: " + last.finishSource});
     return;
   }
 
   if (state_.state() == StartRunState::Riding) {
-    display_.showLines({"RIDING", "Run: " + runShort, String("FIN: ") + (finishOnline() ? "OK" : "OFF"), String("LoRa: ") + (radioReady_ ? "OK" : "OFF")});
+    display_.showLines({"RIDING", current.riderName.substring(0, 18), formatDurationMs(millis() - current.startTimestampMs).substring(0, 5), fin});
     return;
   }
 
+  RiderRecord rider = selectRider();
+  TrailRecord trail = selectTrail();
   display_.showLines({
     "ENDURO TIMER",
     "START",
-    "AP: " + (wifiApStarted_ ? wifiIp_.toString() : String("WIFI FAIL")),
-    String("FIN: ") + (finishOnline() ? "OK" : "OFF"),
-    String("LoRa: ") + (radioReady_ ? "OK" : "OFF"),
+    fin,
+    "Rider: " + rider.displayName.substring(0, 12),
+    "Trail: " + trail.displayName.substring(0, 12),
     "Last: " + lastResult,
   });
 }
@@ -407,4 +446,274 @@ void StartStationApp::logHeartbeat(uint32_t nowMs) {
                 static_cast<unsigned long>(nowMs), static_cast<unsigned long>(ESP.getFreeHeap()),
                 static_cast<unsigned long>(ESP.getMinFreeHeap()), finishOnline() ? "true" : "false");
   lastHeartbeatMs_ = nowMs;
+}
+
+void StartStationApp::loadStorage() {
+  if (!LittleFS.begin(true)) {
+    Serial.println("[StartStation] LittleFS unavailable for app storage");
+    return;
+  }
+  loadRiders();
+  loadTrails();
+  loadSettings();
+  ensureDefaults();
+}
+
+void StartStationApp::loadRiders() {
+  riders_.clear();
+  if (!LittleFS.exists("/riders.json")) return;
+  File file = LittleFS.open("/riders.json", "r");
+  JsonDocument doc;
+  if (deserializeJson(doc, file)) { file.close(); return; }
+  file.close();
+  for (JsonObject item : doc.as<JsonArray>()) {
+    RiderRecord rider;
+    rider.id = item["riderId"] | "";
+    rider.displayName = item["displayName"] | "";
+    rider.isActive = item["isActive"] | true;
+    rider.createdAtMs = item["createdAtMs"] | 0;
+    if (rider.id.length() > 0 && rider.displayName.length() > 0) riders_.push_back(rider);
+  }
+}
+
+void StartStationApp::loadTrails() {
+  trails_.clear();
+  if (!LittleFS.exists("/trails.json")) return;
+  File file = LittleFS.open("/trails.json", "r");
+  JsonDocument doc;
+  if (deserializeJson(doc, file)) { file.close(); return; }
+  file.close();
+  for (JsonObject item : doc.as<JsonArray>()) {
+    TrailRecord trail;
+    trail.id = item["trailId"] | "";
+    trail.displayName = item["displayName"] | "";
+    trail.isActive = item["isActive"] | true;
+    trail.createdAtMs = item["createdAtMs"] | 0;
+    if (trail.id.length() > 0 && trail.displayName.length() > 0) trails_.push_back(trail);
+  }
+}
+
+void StartStationApp::loadSettings() {
+  settings_ = AppSettings{};
+  if (!LittleFS.exists("/settings.json")) return;
+  File file = LittleFS.open("/settings.json", "r");
+  JsonDocument doc;
+  if (!deserializeJson(doc, file)) {
+    settings_.selectedRiderId = doc["selectedRiderId"] | "";
+    settings_.selectedTrailId = doc["selectedTrailId"] | "";
+  }
+  file.close();
+}
+
+void StartStationApp::ensureDefaults() {
+  bool changedRiders = false;
+  if (riders_.empty()) {
+    riders_.push_back({"r001", "Test Rider", true, millis()});
+    settings_.selectedRiderId = "r001";
+    changedRiders = true;
+  }
+  bool changedTrails = false;
+  if (trails_.empty()) {
+    trails_.push_back({"t001", "Трасса по умолчанию", true, millis()});
+    settings_.selectedTrailId = "t001";
+    changedTrails = true;
+  }
+  RiderRecord rider;
+  if (!findActiveRider(settings_.selectedRiderId, rider)) settings_.selectedRiderId = selectRider().id;
+  TrailRecord trail;
+  if (!findActiveTrail(settings_.selectedTrailId, trail)) settings_.selectedTrailId = selectTrail().id;
+  if (changedRiders) saveRiders();
+  if (changedTrails) saveTrails();
+  saveSettings();
+}
+
+void StartStationApp::saveRiders() const {
+  JsonDocument doc;
+  JsonArray array = doc.to<JsonArray>();
+  for (const RiderRecord& rider : riders_) {
+    JsonObject item = array.add<JsonObject>();
+    item["riderId"] = rider.id;
+    item["displayName"] = rider.displayName;
+    item["isActive"] = rider.isActive;
+    item["createdAtMs"] = rider.createdAtMs;
+  }
+  File file = LittleFS.open("/riders.json", "w");
+  serializeJson(doc, file);
+  file.close();
+}
+
+void StartStationApp::saveTrails() const {
+  JsonDocument doc;
+  JsonArray array = doc.to<JsonArray>();
+  for (const TrailRecord& trail : trails_) {
+    JsonObject item = array.add<JsonObject>();
+    item["trailId"] = trail.id;
+    item["displayName"] = trail.displayName;
+    item["isActive"] = trail.isActive;
+    item["createdAtMs"] = trail.createdAtMs;
+  }
+  File file = LittleFS.open("/trails.json", "w");
+  serializeJson(doc, file);
+  file.close();
+}
+
+void StartStationApp::saveSettings() const {
+  JsonDocument doc;
+  doc["selectedRiderId"] = settings_.selectedRiderId;
+  doc["selectedTrailId"] = settings_.selectedTrailId;
+  File file = LittleFS.open("/settings.json", "w");
+  serializeJson(doc, file);
+  file.close();
+}
+
+String StartStationApp::ridersJson() const {
+  JsonDocument doc;
+  JsonArray array = doc.to<JsonArray>();
+  for (const RiderRecord& rider : riders_) {
+    JsonObject item = array.add<JsonObject>();
+    item["riderId"] = rider.id;
+    item["displayName"] = rider.displayName;
+    item["isActive"] = rider.isActive;
+    item["createdAtMs"] = rider.createdAtMs;
+  }
+  String output;
+  serializeJson(doc, output);
+  return output;
+}
+
+String StartStationApp::trailsJson() const {
+  JsonDocument doc;
+  JsonArray array = doc.to<JsonArray>();
+  for (const TrailRecord& trail : trails_) {
+    JsonObject item = array.add<JsonObject>();
+    item["trailId"] = trail.id;
+    item["displayName"] = trail.displayName;
+    item["isActive"] = trail.isActive;
+    item["createdAtMs"] = trail.createdAtMs;
+  }
+  String output;
+  serializeJson(doc, output);
+  return output;
+}
+
+String StartStationApp::settingsJson() const {
+  JsonDocument doc;
+  doc["selectedRiderId"] = settings_.selectedRiderId;
+  doc["selectedTrailId"] = settings_.selectedTrailId;
+  String output;
+  serializeJson(doc, output);
+  return output;
+}
+
+bool StartStationApp::addRider(const String& displayName, String& error) {
+  if (displayName.length() == 0) { error = "displayName is required"; return false; }
+  riders_.push_back({makeEntityId("r"), displayName, true, millis()});
+  if (settings_.selectedRiderId.length() == 0) settings_.selectedRiderId = riders_.back().id;
+  saveRiders();
+  saveSettings();
+  return true;
+}
+
+bool StartStationApp::deactivateRider(const String& riderId, String& error) {
+  for (RiderRecord& rider : riders_) {
+    if (rider.id == riderId) {
+      rider.isActive = false;
+      if (settings_.selectedRiderId == riderId) settings_.selectedRiderId = selectRider().id;
+      saveRiders(); saveSettings(); return true;
+    }
+  }
+  error = "rider not found";
+  return false;
+}
+
+bool StartStationApp::addTrail(const String& displayName, String& error) {
+  if (displayName.length() == 0) { error = "displayName is required"; return false; }
+  trails_.push_back({makeEntityId("t"), displayName, true, millis()});
+  if (settings_.selectedTrailId.length() == 0) settings_.selectedTrailId = trails_.back().id;
+  saveTrails(); saveSettings(); return true;
+}
+
+bool StartStationApp::deactivateTrail(const String& trailId, String& error) {
+  for (TrailRecord& trail : trails_) {
+    if (trail.id == trailId) {
+      trail.isActive = false;
+      if (settings_.selectedTrailId == trailId) settings_.selectedTrailId = selectTrail().id;
+      saveTrails(); saveSettings(); return true;
+    }
+  }
+  error = "trail not found";
+  return false;
+}
+
+bool StartStationApp::updateSettings(const String& selectedRiderId, const String& selectedTrailId, String& error) {
+  RiderRecord rider;
+  TrailRecord trail;
+  if (selectedRiderId.length() > 0 && !findActiveRider(selectedRiderId, rider)) { error = "selected rider is inactive or missing"; return false; }
+  if (selectedTrailId.length() > 0 && !findActiveTrail(selectedTrailId, trail)) { error = "selected trail is inactive or missing"; return false; }
+  if (selectedRiderId.length() > 0) settings_.selectedRiderId = selectedRiderId;
+  if (selectedTrailId.length() > 0) settings_.selectedTrailId = selectedTrailId;
+  saveSettings();
+  return true;
+}
+
+bool StartStationApp::findActiveRider(const String& id, RiderRecord& rider) const {
+  for (const RiderRecord& item : riders_) if (item.id == id && item.isActive) { rider = item; return true; }
+  return false;
+}
+
+bool StartStationApp::findActiveTrail(const String& id, TrailRecord& trail) const {
+  for (const TrailRecord& item : trails_) if (item.id == id && item.isActive) { trail = item; return true; }
+  return false;
+}
+
+RiderRecord StartStationApp::selectRider() const {
+  RiderRecord rider;
+  if (findActiveRider(settings_.selectedRiderId, rider)) return rider;
+  for (const RiderRecord& item : riders_) if (item.isActive) return item;
+  return {"", "Test Rider", true, millis()};
+}
+
+TrailRecord StartStationApp::selectTrail() const {
+  TrailRecord trail;
+  if (findActiveTrail(settings_.selectedTrailId, trail)) return trail;
+  for (const TrailRecord& item : trails_) if (item.isActive) return item;
+  return {"t-default", "Трасса по умолчанию", true, millis()};
+}
+
+String StartStationApp::makeEntityId(const char* prefix) const {
+  return String(prefix) + String(millis(), HEX);
+}
+
+String StartStationApp::escapeCsv(const String& value) const {
+  String out = value;
+  out.replace("\"", "\"\"");
+  return String("\"") + out + "\"";
+}
+
+void StartStationApp::appendRunCsv(const RunRecord& run) const {
+  const bool exists = LittleFS.exists("/runs.csv");
+  File file = LittleFS.open("/runs.csv", "a");
+  if (!file) return;
+  if (!exists || file.size() == 0) {
+    file.write(0xEF); file.write(0xBB); file.write(0xBF);
+    file.println("RunId;Rider;Trail;StartMs;FinishMs;ResultMs;Result;Status;Source");
+  }
+  file.print(escapeCsv(run.runId)); file.print(';');
+  file.print(escapeCsv(run.riderName)); file.print(';');
+  file.print(escapeCsv(run.trailName)); file.print(';');
+  file.print(run.startTimestampMs); file.print(';');
+  file.print(run.finishTimestampMs); file.print(';');
+  file.print(run.resultMs); file.print(';');
+  file.print(run.resultFormatted); file.print(';');
+  file.print(run.status); file.print(';');
+  file.println(run.finishSource);
+  file.close();
+}
+
+String StartStationApp::runsCsv() const {
+  if (!LittleFS.exists("/runs.csv")) return String("\xEF\xBB\xBFRunId;Rider;Trail;StartMs;FinishMs;ResultMs;Result;Status;Source\n");
+  File file = LittleFS.open("/runs.csv", "r");
+  String content = file.readString();
+  file.close();
+  return content;
 }

@@ -38,6 +38,7 @@ bool RadioProtocol::serialize(const RadioMessage& message, String& output) {
   if (message.stationId.length() > 0) doc["stationId"] = message.stationId;
   if (message.runId.length() > 0) doc["runId"] = message.runId;
   if (message.riderName.length() > 0) doc["riderName"] = message.riderName;
+  if (message.trailName.length() > 0) doc["trailName"] = message.trailName;
   if (message.state.length() > 0) doc["state"] = message.state;
   if (message.source.length() > 0) doc["source"] = message.source;
   if (message.timestampMs > 0) doc["timestampMs"] = message.timestampMs;
@@ -45,11 +46,14 @@ bool RadioProtocol::serialize(const RadioMessage& message, String& output) {
   if (message.heartbeat > 0) doc["heartbeat"] = message.heartbeat;
   if (message.startTimestampMs > 0) doc["startTimestampMs"] = message.startTimestampMs;
   if (message.finishTimestampMs > 0) doc["finishTimestampMs"] = message.finishTimestampMs;
+  if (message.elapsedMs > 0) doc["elapsedMs"] = message.elapsedMs;
 
   if (message.type == RadioMessageType::Status) {
     if (message.runId.length() > 0) doc["activeRunId"] = message.runId;
     doc["beamClear"] = message.beamClear;
     doc["buttonReady"] = message.buttonReady;
+    if (message.hasStartRssi) doc["startRssi"] = message.startRssi; else doc["startRssi"] = nullptr;
+    if (message.hasStartSnr) doc["startSnr"] = message.startSnr; else doc["startSnr"] = nullptr;
     if (message.hasBatteryVoltage) {
       doc["batteryVoltage"] = message.batteryVoltage;
     } else {
@@ -76,6 +80,7 @@ bool RadioProtocol::deserialize(const String& input, RadioMessage& output, Strin
   output.runId = doc["runId"] | "";
   if (output.runId.length() == 0) output.runId = doc["activeRunId"] | "";
   output.riderName = doc["riderName"] | "";
+  output.trailName = doc["trailName"] | "";
   output.state = doc["state"] | "";
   output.source = doc["source"] | "";
   output.beamClear = doc["beamClear"] | true;
@@ -85,6 +90,9 @@ bool RadioProtocol::deserialize(const String& input, RadioMessage& output, Strin
   output.heartbeat = doc["heartbeat"] | 0;
   output.startTimestampMs = doc["startTimestampMs"] | 0;
   output.finishTimestampMs = doc["finishTimestampMs"] | 0;
+  output.elapsedMs = doc["elapsedMs"] | 0;
+  if (!doc["startRssi"].isNull()) { output.hasStartRssi = true; output.startRssi = doc["startRssi"].as<int>(); }
+  if (!doc["startSnr"].isNull()) { output.hasStartSnr = true; output.startSnr = doc["startSnr"].as<float>(); }
 
   if (!doc["batteryVoltage"].isNull()) {
     output.hasBatteryVoltage = true;

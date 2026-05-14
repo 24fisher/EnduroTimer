@@ -9,67 +9,49 @@
 <body>
   <main class="shell">
     <section class="hero card">
-      <div>
-        <p class="eyebrow">Heltec WiFi LoRa 32 V3</p>
-        <h1>EnduroTimer StartStation</h1>
-        <p class="muted">LoRa smoke test with physical buttons on two bare Heltec boards.</p>
-      </div>
+      <div><p class="eyebrow">Heltec WiFi LoRa 32 V3</p><h1>EnduroTimer StartStation</h1><p class="muted">Hardware-button start, LoRa finish, LittleFS CSV results.</p></div>
       <div id="stateBadge" class="badge">Boot</div>
     </section>
 
     <section class="grid">
-      <article class="card metric">
-        <span>StartStation status</span>
-        <strong id="serviceFlags">—</strong>
-        <small>OLED / Wi-Fi / Web / LoRa</small>
-      </article>
-      <article class="card metric">
-        <span>Finish station</span>
-        <strong id="finishOnline">—</strong>
-        <small id="finishState">state: —</small>
-      </article>
-      <article class="card metric">
-        <span>RSSI/SNR</span>
-        <strong id="loraStats">—</strong>
-        <small>from last FinishStation packet</small>
-      </article>
-      <article class="card metric">
-        <span>Countdown</span>
-        <strong id="countdown">—</strong>
-        <small>3, 2, 1, GO</small>
-      </article>
-      <article class="card metric">
-        <span>Last result</span>
-        <strong id="lastResult">—</strong>
-        <small id="lastSource">—</small>
-      </article>
+      <article class="card metric"><span>StartStation status</span><strong id="serviceFlags">—</strong><small>OLED / Wi-Fi / Web / LoRa</small></article>
+      <article class="card metric"><span>Finish station</span><strong id="finishOnline">—</strong><small id="finishState">state: —</small></article>
+      <article class="card metric"><span>Finish RSSI/SNR</span><strong id="loraStats">—</strong><small id="reverseLoraStats">reported Start RSSI/SNR: —</small></article>
+      <article class="card metric"><span>Timer</span><strong id="runTimer">00:00</strong><small id="countdown">—</small></article>
+      <article class="card metric"><span>Last result</span><strong id="lastResult">—</strong><small id="lastSource">—</small></article>
     </section>
 
     <section class="card controls">
       <div>
-        <h2>Test run</h2>
+        <h2>Current run</h2>
         <p>Rider: <strong id="riderName">Test Rider</strong></p>
+        <p>Trail: <strong id="trailName">Трасса по умолчанию</strong></p>
         <p>Current run: <code id="runId">—</code></p>
-        <p class="muted">Старт: кнопка на верхнем Heltec или кнопка в вебке.</p>
-        <p class="muted">Финиш: кнопка на нижнем Heltec.</p>
+        <p class="muted">Старт заезда — только кнопкой на верхнем терминале.</p>
+        <p class="muted">Финиш — кнопкой на нижнем терминале.</p>
       </div>
-      <div class="buttons">
-        <button id="startBtn">Start test run</button>
-        <button id="resetBtn" class="secondary">Reset</button>
-      </div>
+      <div class="buttons"><button id="resetBtn" class="secondary">Reset system</button><a class="button secondary" href="/api/export/runs.csv">Download CSV</a></div>
       <p id="message" class="message"></p>
+    </section>
+
+    <section class="grid two">
+      <article class="card">
+        <h2>Riders</h2>
+        <label>Selected rider <select id="selectedRider"></select></label>
+        <div class="inline"><input id="riderInput" placeholder="Display name"><button id="addRiderBtn">Добавить</button></div>
+        <div class="table-wrap"><table><thead><tr><th>Name</th><th>Active</th><th>Actions</th></tr></thead><tbody id="ridersBody"></tbody></table></div>
+      </article>
+      <article class="card">
+        <h2>Trails</h2>
+        <label>Selected trail <select id="selectedTrail"></select></label>
+        <div class="inline"><input id="trailInput" placeholder="Trail name"><button id="addTrailBtn">Добавить</button></div>
+        <div class="table-wrap"><table><thead><tr><th>Name</th><th>Active</th><th>Actions</th></tr></thead><tbody id="trailsBody"></tbody></table></div>
+      </article>
     </section>
 
     <section class="card">
       <h2>Recent runs in RAM</h2>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr><th>Run ID</th><th>Rider</th><th>Result</th><th>Status</th></tr>
-          </thead>
-          <tbody id="runsBody"><tr><td colspan="4">No runs yet</td></tr></tbody>
-        </table>
-      </div>
+      <div class="table-wrap"><table><thead><tr><th>Run ID</th><th>Rider</th><th>Trail</th><th>Result</th><th>Status</th><th>Source</th></tr></thead><tbody id="runsBody"><tr><td colspan="6">No runs yet</td></tr></tbody></table></div>
     </section>
   </main>
   <script src="/app.js"></script>

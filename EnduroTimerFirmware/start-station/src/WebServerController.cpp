@@ -61,6 +61,7 @@ bool WebServerController::begin() {
   });
 
   server_.on("/api/runs/start", HTTP_POST, [this]() {
+#if ENABLE_WEB_START
     String error;
     if (!app_.requestStartRun(error)) {
       sendError(409, error.length() > 0 ? error : String("Run already active"));
@@ -72,6 +73,9 @@ bool WebServerController::begin() {
     String output;
     serializeJson(doc, output);
     sendJson(200, output);
+#else
+    sendError(403, "Start is only available from hardware button");
+#endif
   });
 
   server_.on("/api/system/reset", HTTP_POST, [this]() {
@@ -85,6 +89,50 @@ bool WebServerController::begin() {
   });
 
   server_.on("/api/runs", HTTP_GET, [this]() { sendJson(200, app_.runsJson()); });
+  server_.on("/api/export/runs.csv", HTTP_GET, [this]() { sendCsv(app_.runsCsv()); });
+  server_.on("/api/riders", HTTP_GET, [this]() { sendJson(200, app_.ridersJson()); });
+  server_.on("/api/trails", HTTP_GET, [this]() { sendJson(200, app_.trailsJson()); });
+  server_.on("/api/settings", HTTP_GET, [this]() { sendJson(200, app_.settingsJson()); });
+
+  server_.on("/api/riders/add", HTTP_POST, [this]() {
+    JsonDocument doc;
+    deserializeJson(doc, server_.arg("plain"));
+    String error;
+    if (!app_.addRider(doc["displayName"] | "", error)) { sendError(400, error); return; }
+    sendJson(200, String("{\"ok\":true}"));
+  });
+
+  server_.on("/api/riders/deactivate", HTTP_POST, [this]() {
+    JsonDocument doc;
+    deserializeJson(doc, server_.arg("plain"));
+    String error;
+    if (!app_.deactivateRider(doc["riderId"] | "", error)) { sendError(404, error); return; }
+    sendJson(200, String("{\"ok\":true}"));
+  });
+
+  server_.on("/api/trails/add", HTTP_POST, [this]() {
+    JsonDocument doc;
+    deserializeJson(doc, server_.arg("plain"));
+    String error;
+    if (!app_.addTrail(doc["displayName"] | "", error)) { sendError(400, error); return; }
+    sendJson(200, String("{\"ok\":true}"));
+  });
+
+  server_.on("/api/trails/deactivate", HTTP_POST, [this]() {
+    JsonDocument doc;
+    deserializeJson(doc, server_.arg("plain"));
+    String error;
+    if (!app_.deactivateTrail(doc["trailId"] | "", error)) { sendError(404, error); return; }
+    sendJson(200, String("{\"ok\":true}"));
+  });
+
+  server_.on("/api/settings", HTTP_POST, [this]() {
+    JsonDocument doc;
+    deserializeJson(doc, server_.arg("plain"));
+    String error;
+    if (!app_.updateSettings(doc["selectedRiderId"] | "", doc["selectedTrailId"] | "", error)) { sendError(400, error); return; }
+    sendJson(200, String("{\"ok\":true}"));
+  });
 
   server_.onNotFound([this]() {
     String path = server_.uri();
@@ -111,6 +159,12 @@ void WebServerController::sendJson(int code, const String& body) {
   server_.sendHeader("Access-Control-Allow-Origin", "*");
   server_.sendHeader("Cache-Control", "no-store");
   server_.send(code, "application/json", body);
+}
+
+void WebServerController::sendCsv(const String& body) {
+  server_.sendHeader("Cache-Control", "no-store");
+  server_.sendHeader("Content-Disposition", "attachment; filename=\"enduro_runs.csv\"");
+  server_.send(200, "text/csv; charset=utf-8", body);
 }
 
 void WebServerController::sendError(int code, const String& message) {

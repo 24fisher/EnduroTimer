@@ -16,6 +16,7 @@ public:
 private:
   void sendJson(int code, const String& body);
   void sendError(int code, const String& message);
+  void sendCsv(const String& body);
   bool serveStaticFile(const String& path);
   void sendFallbackIndex();
 

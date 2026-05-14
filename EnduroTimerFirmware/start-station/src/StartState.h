@@ -16,7 +16,10 @@ enum class StartRunState {
 
 struct RunRecord {
   String runId;
+  String riderId;
   String riderName;
+  String trailId;
+  String trailName;
   uint32_t startTimestampMs = 0;
   uint32_t finishTimestampMs = 0;
   uint32_t resultMs = 0;
@@ -28,7 +31,7 @@ struct RunRecord {
 class StartState {
 public:
   void begin();
-  bool startCountdown(String& error);
+  bool startCountdown(const String& riderId, const String& riderName, const String& trailId, const String& trailName, String& error);
   void resetActiveRun();
   void setError();
   bool updateCountdown(uint32_t nowMs, RunRecord& runToStart);
