@@ -38,6 +38,8 @@ struct RadioMessage {
   uint32_t startTimestampMs = 0;
   uint32_t finishTimestampMs = 0;
   uint32_t elapsedMs = 0;
+  uint32_t resultMs = 0;
+  String resultFormatted;
   bool hasStartRssi = false;
   int startRssi = 0;
   bool hasStartSnr = false;

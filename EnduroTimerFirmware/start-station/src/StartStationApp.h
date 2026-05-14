@@ -78,7 +78,9 @@ private:
   void sendRunStart(const RunRecord& run);
   void retryRunStartAck(uint32_t nowMs);
   bool priorityTxPending() const;
-  void sendFinishAck(const String& runId);
+  void sendFinishAck(const RunRecord& run, uint8_t sequence, bool duplicateResend = false);
+  void scheduleFinishAckRepeats(const RunRecord& run);
+  void processFinishAckRepeats(uint32_t nowMs);
   void sendStatus(uint32_t nowMs);
   void sendHello(uint32_t nowMs);
   void sendHelloAck(uint32_t nowMs);
@@ -144,6 +146,12 @@ private:
   String finishFirmwareVersion_;
   String finishActiveRunId_;
   String finishRiderName_;
+  String pendingFinishAckRunId_;
+  uint32_t pendingFinishAckResultMs_ = 0;
+  String pendingFinishAckResultFormatted_;
+  uint8_t finishAckSendCount_ = 0;
+  uint32_t lastFinishAckSentMs_ = 0;
+  String lastFinishAckRunId_;
   uint32_t finishElapsedMs_ = 0;
   int finishReportedStartRssi_ = 0;
   float finishReportedStartSnr_ = 0.0F;

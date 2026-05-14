@@ -66,7 +66,7 @@ bool StartState::completeRun(const String& runId, uint32_t finishTimestampMs, co
   currentRun_.resultMs = finishTimestampMs >= currentRun_.startTimestampMs
                            ? finishTimestampMs - currentRun_.startTimestampMs
                            : 0;
-  currentRun_.resultFormatted = formatDurationMs(currentRun_.resultMs);
+  currentRun_.resultFormatted = formatSeconds(currentRun_.resultMs);
   currentRun_.finishSource = source;
   currentRun_.status = "Finished";
   lastRun_ = currentRun_;
@@ -79,7 +79,7 @@ bool StartState::completeRun(const String& runId, uint32_t finishTimestampMs, co
 }
 
 void StartState::tickAutoReady(uint32_t nowMs) {
-  if (state_ == StartRunState::Finished && nowMs - finishedAtMs_ >= 5000UL) {
+  if (state_ == StartRunState::Finished && nowMs - finishedAtMs_ >= 8000UL) {
     currentRun_ = RunRecord{};
     state_ = StartRunState::Ready;
   }

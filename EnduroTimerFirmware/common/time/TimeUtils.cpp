@@ -14,3 +14,14 @@ String formatDurationMs(uint32_t durationMs) {
            static_cast<unsigned long>(seconds), static_cast<unsigned long>(millisPart));
   return String(buffer);
 }
+
+
+String formatSeconds(uint32_t durationMs) {
+  const uint32_t seconds = durationMs / 1000UL;
+  const uint32_t millisPart = durationMs % 1000UL;
+
+  char buffer[20];
+  snprintf(buffer, sizeof(buffer), "%lu.%03lu s", static_cast<unsigned long>(seconds),
+           static_cast<unsigned long>(millisPart));
+  return String(buffer);
+}

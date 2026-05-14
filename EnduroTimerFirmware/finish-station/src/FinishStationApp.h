@@ -64,6 +64,11 @@ private:
   String bootId_;
   uint8_t finishAttempts_ = 0;
   uint8_t manualResendCount_ = 0;
+  bool finishAckReceived_ = false;
+  String lastFinishedRunId_;
+  uint32_t lastResultMs_ = 0;
+  String lastResultFormatted_;
+  uint32_t localResultMs_ = 0;
   String lastPacket_ = "-";
   String lastRunStartAckRunId_;
   String lastLoRaRaw_ = "-";

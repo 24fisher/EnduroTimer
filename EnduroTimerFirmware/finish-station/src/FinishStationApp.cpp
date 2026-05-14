@@ -75,13 +75,13 @@ void FinishStationApp::loop() {
   }
 
   bool prioritySentThisCycle = false;
-  if (state_.state() == FinishRunState::FinishSent && finishAttempts_ < FINISH_MAX_RETRY_ATTEMPTS &&
+  if (!finishAckReceived_ && state_.state() == FinishRunState::FinishSent && finishAttempts_ < FINISH_MAX_RETRY_ATTEMPTS &&
       now - lastFinishSendMs_ >= FINISH_RETRY_INTERVAL_MS) {
     sendFinish();
     prioritySentThisCycle = true;
   }
 
-  if (state_.state() == FinishRunState::FinishSent && finishAttempts_ >= FINISH_MAX_RETRY_ATTEMPTS &&
+  if (!finishAckReceived_ && state_.state() == FinishRunState::FinishSent && finishAttempts_ >= FINISH_MAX_RETRY_ATTEMPTS &&
       now - lastFinishSendMs_ >= FINISH_RETRY_INTERVAL_MS) {
     Serial.printf("FINISH_ACK timeout: sent %u/%u.\n", finishAttempts_, FINISH_MAX_RETRY_ATTEMPTS);
     state_.ackTimeout();
@@ -267,6 +267,9 @@ void FinishStationApp::sendStatus(uint32_t nowMs) {
   if (state_.runId().length() > 0) message.runId = state_.runId();
   if (state_.riderName().length() > 0) message.riderName = state_.riderName();
   if (state_.trailName().length() > 0) message.trailName = state_.trailName();
+  if (lastFinishedRunId_.length() > 0 && message.runId.length() == 0) message.runId = lastFinishedRunId_;
+  if (lastResultMs_ > 0) message.resultMs = lastResultMs_;
+  if (lastResultFormatted_.length() > 0) message.resultFormatted = lastResultFormatted_;
   message.elapsedMs = state_.elapsedMs(nowMs);
   message.startLinkActive = isLinkActive(startLink_);
   message.startPacketCount = startLink_.packetCount;
@@ -323,7 +326,7 @@ bool FinishStationApp::discoveryActive() const {
 bool FinishStationApp::priorityTxPending(uint32_t nowMs) const {
   const bool priorityTxRecently = lastPriorityTxMs_ > 0 && nowMs - lastPriorityTxMs_ < 2UL;
   return priorityTxRecently ||
-         (state_.state() == FinishRunState::FinishSent &&
+         (!finishAckReceived_ && state_.state() == FinishRunState::FinishSent &&
           (finishAttempts_ < FINISH_MAX_RETRY_ATTEMPTS || nowMs - lastFinishSendMs_ < FINISH_RETRY_INTERVAL_MS));
 }
 
@@ -349,6 +352,11 @@ void FinishStationApp::acceptFinishButton(uint32_t nowMs) {
   Serial.println("FINISH button short press");
   Serial.printf("Finish accepted runId=%s\n", state_.runId().c_str());
   const uint32_t finishTimestampMs = state_.startTimestampMs() + state_.elapsedMs(nowMs);
+  localResultMs_ = finishTimestampMs >= state_.startTimestampMs() ? finishTimestampMs - state_.startTimestampMs() : 0;
+  lastResultMs_ = localResultMs_;
+  lastResultFormatted_ = formatSeconds(localResultMs_);
+  lastFinishedRunId_ = state_.runId();
+  finishAckReceived_ = false;
   state_.markFinishSent(finishTimestampMs);
   finishAttempts_ = 0;
   manualResendCount_ = 0;
@@ -357,7 +365,7 @@ void FinishStationApp::acceptFinishButton(uint32_t nowMs) {
   led_.flash(2, 100, 120);
 #if ENABLE_OLED
   if (!display_.testPatternOnly()) {
-    display_.showLines({finishHeader(), "FINISH LINE", "CROSSED"});
+    display_.showLines({finishHeader(), "FINISH LINE", "CROSSED", lastResultFormatted_});
   }
 #endif
   sendFinish();
@@ -385,6 +393,7 @@ void FinishStationApp::handleFinishButton(uint32_t nowMs) {
 }
 
 void FinishStationApp::sendFinish() {
+  if (finishAckReceived_) return;
   RadioMessage message;
   message.type = RadioMessageType::Finish;
   message.messageId = RadioProtocol::makeMessageId("finish");
@@ -397,7 +406,8 @@ void FinishStationApp::sendFinish() {
   finishAttempts_ += 1;
   lastFinishSendMs_ = clock_.nowMs();
   lastPriorityTxMs_ = lastFinishSendMs_;
-  Serial.printf("FINISH sent attempt=%u/%u\n", finishAttempts_, FINISH_MAX_RETRY_ATTEMPTS);
+  Serial.printf("FINISH TX attempt=%u/%u runId=%s\n", finishAttempts_, FINISH_MAX_RETRY_ATTEMPTS, state_.runId().c_str());
+  Serial.printf("Waiting FINISH_ACK runId=%s\n", state_.runId().c_str());
   if (sendRadio(message)) {
     Serial.printf("[FinishStation] FINISH sent: run=%s attempt=%u/%u\n", state_.runId().c_str(),
                   finishAttempts_, FINISH_MAX_RETRY_ATTEMPTS);
@@ -480,6 +490,8 @@ void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
       sensor_.arm(message.runId, message.startTimestampMs);
       finishAttempts_ = 0;
       manualResendCount_ = 0;
+      finishAckReceived_ = false;
+      localResultMs_ = 0;
       lastFinishSendMs_ = 0;
       finishLineCrossedUntilMs_ = 0;
       showNoRunUntilMs_ = 0;
@@ -492,18 +504,39 @@ void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
     return;
   }
 
-  if (message.type == RadioMessageType::FinishAck && message.runId == state_.runId()) {
-    Serial.printf("[FinishStation] FINISH_ACK received: run=%s\n", message.runId.c_str());
-    sensor_.reset();
-    state_.ackFinish();
-    finishAttempts_ = 0;
-    manualResendCount_ = 0;
-    showAckOkUntilMs_ = millis() + 1500UL;
+  if (message.type == RadioMessageType::FinishAck && message.stationId == "start") {
+    Serial.printf("FINISH_ACK RX runId=%s resultMs=%lu\n", message.runId.c_str(), static_cast<unsigned long>(message.resultMs));
+    const String expectedRunId = state_.runId().length() > 0 ? state_.runId() : lastFinishedRunId_;
+    if (message.runId == expectedRunId && message.runId.length() > 0) {
+      Serial.println(state_.runId().length() > 0 ? "FINISH_ACK matched active run" : "FINISH_ACK matched last finished run");
+      finishAckReceived_ = true;
+      if (message.resultMs > 0) lastResultMs_ = message.resultMs;
+      if (message.resultFormatted.length() > 0) {
+        lastResultFormatted_ = message.resultFormatted;
+      } else if (lastResultMs_ > 0) {
+        lastResultFormatted_ = formatSeconds(lastResultMs_);
+      }
+      lastFinishedRunId_ = message.runId;
+      sensor_.reset();
+      state_.ackFinish();
+      finishAttempts_ = 0;
+      manualResendCount_ = 0;
+      lastFinishSendMs_ = 0;
+      finishLineCrossedUntilMs_ = 0;
+      showAckOkUntilMs_ = millis() + 2000UL;
+      Serial.println("ACK matched, retry stopped");
+      Serial.println("Finish retry stopped");
+      Serial.println("Finish state -> AckOk / Idle");
+      Serial.printf("Last result = %s\n", lastResultFormatted_.c_str());
 #if ENABLE_OLED
-    if (!display_.testPatternOnly()) {
-      display_.showLines({finishHeader(), "ACK OK", "IDLE"});
-    }
+      if (!display_.testPatternOnly()) {
+        display_.showLines({finishHeader(), "ACK OK", lastResultFormatted_, isLinkActive(startLink_) ? String("START:") + String(startLink_.lastRssi) + "dBm" : String("START:NO SIG")});
+      }
 #endif
+    } else {
+      Serial.printf("FINISH_ACK ignored mismatch expected=%s got=%s\n", expectedRunId.c_str(), message.runId.c_str());
+    }
+    return;
   }
 }
 
@@ -512,15 +545,13 @@ void FinishStationApp::updateDisplay() {
   const bool startOnline = isLinkActive(startLink_);
   const String startSignal = startOnline ? String("START:") + String(startLink_.lastRssi) + "dBm" : String("START:NO SIG");
   const String linkDebug = startLink_.lastPacketType.length() > 0 ? String("PKT:") + startLink_.lastPacketType : String("HB:") + String(startHeartbeatCount_);
-  const String discoveryLine = discoveryActive() ? String("DISCOVERY...") : linkDebug;
-
   if (finishLineCrossedUntilMs_ > millis()) {
-    display_.showLines({finishHeader(), "FINISH LINE", "CROSSED"});
+    display_.showLines({finishHeader(), "FINISH LINE", "CROSSED", lastResultFormatted_});
     return;
   }
 
   if (showAckOkUntilMs_ > millis()) {
-    display_.showLines({finishHeader(), "ACK OK", "IDLE"});
+    display_.showLines({finishHeader(), "ACK OK", lastResultFormatted_.length() > 0 ? lastResultFormatted_ : String("-"), startSignal});
     return;
   }
 
@@ -530,7 +561,7 @@ void FinishStationApp::updateDisplay() {
   }
 
   if (state_.state() == FinishRunState::AckTimeout) {
-    display_.showLines({finishHeader(), "ACK TIMEOUT", "PRESS BTN RESEND", "Sent: " + String(finishAttempts_) + "/" + String(FINISH_MAX_RETRY_ATTEMPTS)});
+    display_.showLines({finishHeader(), "ACK TIMEOUT", lastResultFormatted_.length() > 0 ? lastResultFormatted_ : String("-"), "PRESS RESEND"});
     return;
   }
 
@@ -548,7 +579,7 @@ void FinishStationApp::updateDisplay() {
   }
 
   if (state_.state() == FinishRunState::FinishSent) {
-    display_.showLines({finishHeader(), "FINISH SENT", "Sent: " + String(finishAttempts_) + "/" + String(FINISH_MAX_RETRY_ATTEMPTS), startSignal, linkDebug});
+    display_.showLines({finishHeader(), "FINISH SENT", lastResultFormatted_.length() > 0 ? lastResultFormatted_ : String("-"), "Sent: " + String(finishAttempts_) + "/" + String(FINISH_MAX_RETRY_ATTEMPTS), startSignal});
     return;
   }
 
@@ -556,8 +587,8 @@ void FinishStationApp::updateDisplay() {
     finishHeader(),
     String("LoRa: ") + (radioReady_ ? "OK" : "FAIL"),
     "State: IDLE",
+    "Last: " + (lastResultFormatted_.length() > 0 ? lastResultFormatted_ : String("-")),
     startSignal,
-    discoveryLine,
   });
 }
 

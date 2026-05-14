@@ -64,6 +64,8 @@ bool RadioProtocol::serialize(const RadioMessage& message, String& output) {
     if (message.riderName.length() > 0) { doc["rn"] = message.riderName; doc["riderName"] = message.riderName; }
     if (message.trailName.length() > 0) { doc["tn"] = message.trailName; doc["trailName"] = message.trailName; }
     if (message.elapsedMs > 0) doc["el"] = message.elapsedMs;
+    if (message.resultMs > 0) { doc["resultMs"] = message.resultMs; doc["res"] = message.resultMs; }
+    if (message.resultFormatted.length() > 0) doc["resultFormatted"] = message.resultFormatted;
     if (message.startLinkActive || message.startPacketCount > 0 || message.hasStartRssi || message.hasStartSnr) {
       doc["sl"] = message.startLinkActive;
       doc["sp"] = message.startPacketCount;
@@ -94,6 +96,8 @@ bool RadioProtocol::serialize(const RadioMessage& message, String& output) {
   if (message.startTimestampMs > 0) doc["startTimestampMs"] = message.startTimestampMs;
   if (message.finishTimestampMs > 0) doc["finishTimestampMs"] = message.finishTimestampMs;
   if (message.elapsedMs > 0) doc["elapsedMs"] = message.elapsedMs;
+  if (message.resultMs > 0) doc["resultMs"] = message.resultMs;
+  if (message.resultFormatted.length() > 0) doc["resultFormatted"] = message.resultFormatted;
 
   output = "";
   return serializeJson(doc, output) > 0;
@@ -143,6 +147,9 @@ bool RadioProtocol::deserialize(const String& input, RadioMessage& output, Strin
   if (output.finishTimestampMs == 0) output.finishTimestampMs = doc["fts"] | 0;
   output.elapsedMs = doc["elapsedMs"] | 0;
   if (output.elapsedMs == 0) output.elapsedMs = doc["el"] | 0;
+  output.resultMs = doc["resultMs"] | 0;
+  if (output.resultMs == 0) output.resultMs = doc["res"] | 0;
+  output.resultFormatted = doc["resultFormatted"] | "";
   if (!doc["startRssi"].isNull()) { output.hasStartRssi = true; output.startRssi = doc["startRssi"].as<int>(); }
   if (!doc["sr"].isNull()) { output.hasStartRssi = true; output.startRssi = doc["sr"].as<int>(); }
   if (!doc["startSnr"].isNull()) { output.hasStartSnr = true; output.startSnr = doc["startSnr"].as<float>(); }
