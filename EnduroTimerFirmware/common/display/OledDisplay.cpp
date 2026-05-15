@@ -75,25 +75,42 @@
 #define OLED_DRIVER_TYPE SSD1306_NONAME
 #endif
 
-static constexpr uint32_t OledI2cClockHz = 100000UL;
+#ifndef OLED_I2C_CLOCK_HZ
+#define OLED_I2C_CLOCK_HZ 400000UL
+#endif
+
+#ifndef OLED_USE_SW_I2C
+#define OLED_USE_SW_I2C 0
+#endif
+
+static constexpr uint32_t OledI2cClockHz = OLED_I2C_CLOCK_HZ;
 static constexpr uint16_t OledI2cTimeoutMs = 50;
 static const uint8_t OledAddressCandidates[] = {0x3C, 0x3D};
 
 #if OLED_DRIVER_TYPE == SSD1306_VCOMH0
-using OledDisplayDriver = U8G2_SSD1306_128X64_VCOMH0_F_SW_I2C;
+using OledDisplayDriver =
+#if OLED_USE_SW_I2C
+    U8G2_SSD1306_128X64_VCOMH0_F_SW_I2C;
+#else
+    U8G2_SSD1306_128X64_VCOMH0_F_HW_I2C;
+#endif
 static const char* OledDriverTypeName = "SSD1306_VCOMH0";
 #elif OLED_DRIVER_TYPE == SH1106
-using OledDisplayDriver = U8G2_SH1106_128X64_NONAME_F_SW_I2C;
-static const char* OledDriverTypeName = "SH1106";
-#elif OLED_DRIVER_TYPE == SSD1306_64_NONAME
-// U8g2 has no separate 128x64 constructor named SSD1306_64_NONAME in the
-// supported matrix, so keep the 128x64 NONAME constructor and expose the build
-// flag as a diagnostic alias.
-using OledDisplayDriver = U8G2_SSD1306_128X64_NONAME_F_SW_I2C;
-static const char* OledDriverTypeName = "SSD1306_64_NONAME";
+using OledDisplayDriver =
+#if OLED_USE_SW_I2C
+    U8G2_SH1106_128X64_NONAME_F_SW_I2C;
 #else
-using OledDisplayDriver = U8G2_SSD1306_128X64_NONAME_F_SW_I2C;
-static const char* OledDriverTypeName = "SSD1306_NONAME";
+    U8G2_SH1106_128X64_NONAME_F_HW_I2C;
+#endif
+static const char* OledDriverTypeName = "SH1106";
+#else
+using OledDisplayDriver =
+#if OLED_USE_SW_I2C
+    U8G2_SSD1306_128X64_NONAME_F_SW_I2C;
+#else
+    U8G2_SSD1306_128X64_NONAME_F_HW_I2C;
+#endif
+static const char* OledDriverTypeName = OLED_DRIVER_TYPE == SSD1306_64_NONAME ? "SSD1306_64_NONAME" : "SSD1306_NONAME";
 #endif
 
 static std::unique_ptr<OledDisplayDriver> u8g2;
@@ -128,6 +145,8 @@ static void beginOledWire() {
   Serial.println("I2C begin...");
   Serial.printf("I2C pins SDA=%d SCL=%d clock=%lu timeout=%u\n", OLED_SDA, OLED_SCL,
                 static_cast<unsigned long>(OledI2cClockHz), OledI2cTimeoutMs);
+  Serial.printf("OLED I2C mode: %s\n", OLED_USE_SW_I2C ? "SW" : "HW");
+  Serial.printf("OLED I2C clock: %lu\n", static_cast<unsigned long>(OledI2cClockHz));
   Wire.begin(OLED_SDA, OLED_SCL);
   Wire.setClock(OledI2cClockHz);
   Wire.setTimeOut(OledI2cTimeoutMs);
@@ -154,8 +173,12 @@ static bool findOledAddress(uint8_t& foundAddress) {
 static bool createU8g2(uint8_t address) {
   Serial.println("U8g2 create begin");
   Serial.printf("OLED driver type: %s\n", OledDriverTypeName);
+#if OLED_USE_SW_I2C
   // U8g2 SW I2C argument order is rotation, clock, data, reset.
   u8g2.reset(new OledDisplayDriver(U8G2_R0, OLED_SCL, OLED_SDA, OLED_RST));
+#else
+  u8g2.reset(new OledDisplayDriver(U8G2_R0, OLED_RST));
+#endif
   Serial.println("U8g2 create returned");
 
   if (u8g2 == nullptr) {
@@ -197,6 +220,9 @@ static void drawTestPattern() {
 bool OledDisplay::begin() {
   initialized_ = false;
   address_ = 0;
+  lastLines_.clear();
+  lastFrameKey_ = String();
+  lastRenderMs_ = 0;
   lastInvertTestMs = 0;
 
 #if !ENABLE_OLED
@@ -273,18 +299,33 @@ bool OledDisplay::testPatternOnly() const {
 void OledDisplay::showLines(const std::vector<String>& lines) {
   if (!initialized_ || u8g2 == nullptr || testPatternOnly()) return;
 
+  std::vector<String> normalized;
+  normalized.reserve(lines.size());
+  for (const String& line : lines) normalized.push_back(line.length() > 0 ? line : String("-"));
+
+  const uint32_t now = millis();
+  bool changed = normalized.size() != lastLines_.size();
+  if (!changed) {
+    for (size_t i = 0; i < normalized.size(); ++i) {
+      if (normalized[i] != lastLines_[i]) { changed = true; break; }
+    }
+  }
+  if (!changed && now - lastRenderMs_ < 2000UL) return;
+
   u8g2->clearBuffer();
   u8g2->setFont(u8g2_font_6x10_tf);
 
   int y = 10;
-  for (const String& line : lines) {
-    const String visibleLine = line.length() > 0 ? line : String("-");
+  for (const String& visibleLine : normalized) {
     u8g2->drawStr(0, y, visibleLine.c_str());
     y += 10;
     if (y > 64) break;
   }
 
   u8g2->sendBuffer();
+  lastLines_ = normalized;
+  lastFrameKey_ = "lines";
+  lastRenderMs_ = now;
 }
 
 void OledDisplay::showBoot(const String& role) {
@@ -309,6 +350,10 @@ void OledDisplay::showStatus(const String& line1, const String& line2, const Str
 void OledDisplay::showCountdown(const String& text, const String& role) {
   if (!initialized_ || u8g2 == nullptr || testPatternOnly()) return;
 
+  const String frameKey = String("countdown|") + role + "|" + text;
+  const uint32_t now = millis();
+  if (frameKey == lastFrameKey_ && now - lastRenderMs_ < 1000UL) return;
+
   u8g2->clearBuffer();
   u8g2->setFont(u8g2_font_6x10_tf);
   u8g2->drawStr(0, 9, role.length() > 0 ? role.c_str() : "START");
@@ -318,6 +363,9 @@ void OledDisplay::showCountdown(const String& text, const String& role) {
   if (x < 0) x = 0;
   u8g2->drawStr(x, 60, text.c_str());
   u8g2->sendBuffer();
+  lastLines_.clear();
+  lastFrameKey_ = frameKey;
+  lastRenderMs_ = now;
 }
 
 void OledDisplay::showFinishLineCrossed() {

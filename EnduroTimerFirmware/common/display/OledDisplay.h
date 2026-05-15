@@ -22,4 +22,7 @@ public:
 private:
   bool initialized_ = false;
   uint8_t address_ = 0;
+  std::vector<String> lastLines_;
+  String lastFrameKey_;
+  uint32_t lastRenderMs_ = 0;
 };

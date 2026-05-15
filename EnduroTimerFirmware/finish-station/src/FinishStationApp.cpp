@@ -24,6 +24,8 @@ static constexpr uint8_t FINISH_MAX_RETRY_ATTEMPTS = 15;
 static constexpr uint32_t FINISH_RETRY_INTERVAL_MS = 1000UL;
 static constexpr uint32_t DisplayRefreshMs = 200UL;
 static constexpr uint32_t WIFI_RETRY_INTERVAL_MS = 2000UL;
+static constexpr uint32_t WIFI_SYNC_RETRY_DELAY_MS = 2000UL;
+static constexpr uint32_t HTTP_SYNC_TIMEOUT_MS = 300UL;
 static constexpr uint8_t WIFI_SYNC_SAMPLE_COUNT = 5;
 RTC_DATA_ATTR static uint32_t finishBootCounter = 0;
 #if ENABLE_LORA
@@ -74,18 +76,20 @@ void FinishStationApp::loop() {
   loopMonitor_.tick(now);
 
   uint32_t finishTimestampMs = 0;
+  const uint32_t buttonStartMs = millis();
   if (sensor_.update(now, finishTimestampMs)) {
     (void)finishTimestampMs;
     Serial.printf("state=%s\n", state_.stateText().c_str());
     Serial.printf("canFinish=%d\n", state_.canFinish() ? 1 : 0);
     handleFinishButton(now);
   }
+  loopMonitor_.recordBlock("Button", millis() - buttonStartMs);
 
   updateLed(now);
+  { const uint32_t blockStartMs = millis(); updateWifiSync(now); loopMonitor_.recordBlock("WiFiConnect", millis() - blockStartMs); }
 #if ENABLE_LORA
-  pollRadio();
+  { const uint32_t blockStartMs = millis(); pollRadio(); loopMonitor_.recordBlock("RadioPoll", millis() - blockStartMs); }
 #endif
-  updateWifiSync(now);
 #if ENABLE_LORA_TIME_SYNC
   if (syncInProgress_ && syncReadyUntilMs_ > 0 && now > syncReadyUntilMs_ && !raceClock_.isSynced()) {
     syncInProgress_ = false;
@@ -100,7 +104,7 @@ void FinishStationApp::loop() {
   bool prioritySentThisCycle = false;
   if (!finishAckReceived_ && state_.state() == FinishRunState::FinishSent && finishAttempts_ < FINISH_MAX_RETRY_ATTEMPTS &&
       now - lastFinishSendMs_ >= FINISH_RETRY_INTERVAL_MS) {
-    sendFinish();
+    { const uint32_t blockStartMs = millis(); sendFinish(); loopMonitor_.recordBlock("RadioTx", millis() - blockStartMs); }
     prioritySentThisCycle = true;
   }
 
@@ -115,7 +119,7 @@ void FinishStationApp::loop() {
     if (priorityPending) {
       Serial.println("TX deferred HELLO because priority message pending");
     } else {
-      sendHello(now);
+      { const uint32_t blockStartMs = millis(); sendHello(now); loopMonitor_.recordBlock("RadioTx", millis() - blockStartMs); }
       lastDiscoverySentMs_ = now;
     }
   }
@@ -125,7 +129,7 @@ void FinishStationApp::loop() {
       Serial.println("TX deferred STATUS because priority message pending");
       nextFinishStatusDueMs_ = now + 500UL;
     } else {
-      sendStatus(now);
+      { const uint32_t blockStartMs = millis(); sendStatus(now); loopMonitor_.recordBlock("RadioTx", millis() - blockStartMs); }
       lastStatusMs_ = now;
       nextFinishStatusDueMs_ = now + FINISH_STATUS_INTERVAL_MS + static_cast<uint32_t>(random(0, 301));
     }
@@ -137,7 +141,7 @@ void FinishStationApp::loop() {
     const uint32_t displayStartMs = millis();
     updateDisplay();
     const uint32_t displayDurationMs = millis() - displayStartMs;
-    if (displayDurationMs > 100UL) Serial.printf("WARN OLED render slow durationMs=%lu\n", static_cast<unsigned long>(displayDurationMs));
+    loopMonitor_.recordBlock("OLED", displayDurationMs);
     lastDisplayMs_ = now;
   }
 #endif
@@ -160,7 +164,15 @@ void FinishStationApp::beginWifi() {
 
 void FinishStationApp::updateWifiSync(uint32_t nowMs) {
 #if ENABLE_WIFI
-  if (!wifiStarted_ || syncDoneOnce_) return;
+  if (!wifiStarted_) return;
+
+  if (syncDoneOnce_) {
+    if (pendingSyncStatusPost_ && nowMs >= nextWifiSyncAttemptMs_ && WiFi.status() == WL_CONNECTED) {
+      if (postFinishSyncStatus()) pendingSyncStatusPost_ = false;
+      else nextWifiSyncAttemptMs_ = nowMs + WIFI_SYNC_RETRY_DELAY_MS;
+    }
+    return;
+  }
 
   if (WiFi.status() != WL_CONNECTED) {
     wifiConnected_ = false;
@@ -194,7 +206,7 @@ void FinishStationApp::updateWifiSync(uint32_t nowMs) {
   if (!takeWifiSyncSample(sampleNumber, rttMs, offsetMs, startBootId)) {
     wifiSyncSampleIndex_ = 0;
     bestWifiSyncRttMs_ = UINT32_MAX;
-    nextWifiSyncAttemptMs_ = nowMs + WIFI_RETRY_INTERVAL_MS;
+    nextWifiSyncAttemptMs_ = nowMs + WIFI_SYNC_RETRY_DELAY_MS;
     return;
   }
 
@@ -212,7 +224,7 @@ void FinishStationApp::updateWifiSync(uint32_t nowMs) {
       Serial.printf("WIFI SYNC bad rtt=%lu, retry...\n", static_cast<unsigned long>(bestWifiSyncRttMs_));
       wifiSyncSampleIndex_ = 0;
       bestWifiSyncRttMs_ = UINT32_MAX;
-      nextWifiSyncAttemptMs_ = nowMs + WIFI_RETRY_INTERVAL_MS;
+      nextWifiSyncAttemptMs_ = nowMs + WIFI_SYNC_RETRY_DELAY_MS;
     } else {
       finishWifiSyncSuccess(bestWifiSyncOffsetMs_, bestWifiSyncRttMs_, startHttpBootId_);
     }
@@ -227,11 +239,11 @@ bool FinishStationApp::takeWifiSyncSample(uint8_t sampleNumber, uint32_t& rttMs,
   HTTPClient http;
   const uint32_t t0FinishLocalMs = millis();
   http.begin("http://192.168.4.1/api/time/race-sync");
-  http.setTimeout(500);
+  http.setTimeout(HTTP_SYNC_TIMEOUT_MS);
   const int code = http.GET();
   const uint32_t t3FinishLocalMs = millis();
   const uint32_t blockingRttMs = t3FinishLocalMs - t0FinishLocalMs;
-  if (blockingRttMs > 500UL) Serial.printf("WARN wifi sync sample blocking rtt=%lu\n", static_cast<unsigned long>(blockingRttMs));
+  loopMonitor_.recordBlock("WiFiSyncHTTP", blockingRttMs);
   if (code != HTTP_CODE_OK) {
     Serial.printf("WIFI SYNC sample %u HTTP failed code=%d\n", sampleNumber, code);
     http.end();
@@ -274,7 +286,7 @@ void FinishStationApp::finishWifiSyncSuccess(int32_t offsetMs, uint32_t rttMs, c
   startHttpBootId_ = startBootId;
   Serial.printf("WIFI SYNC best rtt=%lu offset=%ld accuracy=%lu\n", static_cast<unsigned long>(rttMs), static_cast<long>(offsetMs), static_cast<unsigned long>(accuracyMs));
   Serial.printf("RaceClock synced once offset=%ld accuracy=%lu\n", static_cast<long>(offsetMs), static_cast<unsigned long>(accuracyMs));
-  postFinishSyncStatus();
+  pendingSyncStatusPost_ = true;
 #if ENABLE_OLED
   if (!display_.testPatternOnly()) display_.showLines({finishHeader(), "SYNCED READY", startSignalText(), "IDLE"});
 #endif
@@ -297,12 +309,12 @@ bool FinishStationApp::postFinishSyncStatus() {
   serializeJson(doc, body);
   HTTPClient http;
   http.begin("http://192.168.4.1/api/finish/sync-status");
-  http.setTimeout(500);
+  http.setTimeout(HTTP_SYNC_TIMEOUT_MS);
   http.addHeader("Content-Type", "application/json");
   const uint32_t postStartMs = millis();
   const int code = http.POST(body);
   const uint32_t postRttMs = millis() - postStartMs;
-  if (postRttMs > 500UL) Serial.printf("WARN wifi sync sample blocking rtt=%lu\n", static_cast<unsigned long>(postRttMs));
+  loopMonitor_.recordBlock("WiFiSyncHTTP", postRttMs);
   http.end();
   Serial.printf("Finish sync-status POST code=%d\n", code);
   return code >= 200 && code < 300;
@@ -871,7 +883,7 @@ void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
       showAckOkUntilMs_ = 0;
       buzzer_.beep("RUN_START");
 #if ENABLE_OLED
-      if (!display_.testPatternOnly()) display_.showLines({finishHeader(), "RIDING", String("Run #") + String(message.runNumber), formatDurationMs(elapsedAtReceiveMs).substring(0, 5), "Btn: FINISH"});
+      if (!display_.testPatternOnly()) display_.showLines({finishHeader(), "RIDING", formatDurationMs(elapsedAtReceiveMs).substring(0, 5), startSignalText()});
 #endif
     } else {
       Serial.printf("Duplicate RUN_START, ACK resent runId=%s\n", message.runId.c_str());
@@ -951,7 +963,7 @@ void FinishStationApp::updateDisplay() {
   }
 
   if (state_.isRiding()) {
-    display_.showLines({finishHeader(), "RIDING", String("Run #") + String(state_.runNumber()), formatDurationMs(state_.elapsedMs(raceClock_.nowRaceMs())).substring(0, 5), "Btn: FINISH"});
+    display_.showLines({finishHeader(), "RIDING", formatDurationMs(state_.elapsedMs(raceClock_.nowRaceMs())).substring(0, 5), startSignal});
     return;
   }
 

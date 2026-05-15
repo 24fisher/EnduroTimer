@@ -82,5 +82,6 @@ void loop() {
 #if ENABLE_WIFI && ENABLE_WEB
   web.loop();
 #endif
+  app.loopDisplayTask();
   yield();
 }

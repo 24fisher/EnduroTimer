@@ -28,10 +28,12 @@ The current Heltec V3 OLED configuration is fixed in `platformio.ini`:
 - `OLED_VEXT_ON_LEVEL=0` (active LOW)
 - OLED address: `0x3C`
 - Driver: `SSD1306_NONAME`
+- I2C mode: hardware I2C by default (`OLED_USE_SW_I2C=0`)
+- I2C clock: `OLED_I2C_CLOCK_HZ=400000`
 - Library: U8g2
 - `ARDUINO_USB_CDC_ON_BOOT=0`
 - `ARDUINO_USB_MODE=0`
-- `FIRMWARE_VERSION=0.17`
+- `FIRMWARE_VERSION=0.18`
 - `STATUS_LED_PIN=35`
 - `STATUS_LED_ACTIVE_LEVEL=1`
 
@@ -53,12 +55,28 @@ The current Heltec V3 OLED configuration is fixed in `platformio.ini`:
 - Firmware version is a manual semantic-like incremental string.
 - Initial version: `0.00`.
 - Each MR/iteration increments the string by `0.01` manually.
-- Current version: `0.17`.
-- The version is configured with `FIRMWARE_VERSION` and has a source fallback of `0.17`.
+- Current version: `0.18`.
+- The version is configured with `FIRMWARE_VERSION` and has a source fallback of `0.18`.
 - Version is shown in OLED headers, Serial boot logs, Web API status, the Web UI status block, compact `STATUS` heartbeat packets (`ver`), non-critical control messages, and the short `v` field on compact critical race packets when it fits.
 
 
 
+
+
+## v0.18 loop latency, OLED hardware I2C, one-at-a-time Wi-Fi sync, and battery output removal
+
+Firmware v0.18 keeps StartStation and FinishStation as separate applications and focuses on removing the sources of multi-second loop gaps without changing the race architecture.
+
+- `FIRMWARE_VERSION` is `0.18`; Serial boot logs show `Version: v0.18`, OLED headers show `START TERM v0.18` and `FINISH TERM v0.18`, and `/api/status.firmwareVersion` reports `0.18`.
+- OLED uses U8g2 hardware I2C by default (`OLED_USE_SW_I2C=0`) with `OLED_I2C_CLOCK_HZ=400000`. Boot logs print `OLED I2C mode: HW` and the configured clock. Software I2C remains available only for diagnostics by explicitly setting `OLED_USE_SW_I2C=1`.
+- OLED rendering is dirty/throttled: unchanged frames do not call `sendBuffer()`, idle/ready screens force-refresh only periodically, and riding/countdown screens update on meaningful timer changes instead of every loop. Slow OLED blocks above 100 ms are logged as `WARN slow block name=OLED durationMs=...`.
+- StartStation services the physical button at the top of `StartStationApp::loop()`, then the main application work runs, WebServer handling is called, and OLED rendering is deferred to `loopDisplayTask()` after Web handling. FinishStation also samples the finish button before Wi-Fi, LoRa, retries, and display work.
+- `LoopMonitor` now records the last slow block. Loop gaps above 200 ms log `WARN loop gap=...ms lastSlowBlock=...`, while slow blocks log names such as `Button`, `WebHandleClient`, `WebStatusJson`, `WebRunsJson`, `WiFiSyncHTTP`, `RadioPoll`, `RadioTx`, and `OLED`.
+- FinishStation Wi-Fi RaceClock sync remains a one-time startup sync, but HTTP samples are one-at-a-time with a 300 ms timeout and retry delay. Failed samples do not trigger a five-request blocking batch in the same loop, and the sync-status POST is retried later instead of blocking repeatedly.
+- Web UI polling avoids parallel traffic: status refreshes are guarded and run every 2000 ms, runs refreshes every 5000 ms, catalog refreshes happen only at load and after writes, and add rider/trail buttons are disabled while their POST is in flight.
+- `/api/status` is the operator status path with the firmware version, ready state, sync state, selected rider/trail, current elapsed result, last result, Finish signal/state, and other small UI fields. Full loop/button/heap/raw LoRa diagnostics remain in `/api/debug/status`.
+- Battery percentage, voltage, availability, `BAT`, `BAT:USB`, and `BAT:--` are not shown on OLED or in the normal Web UI/status path. `BatteryService` is not read by the main loop/status rendering.
+- After sync, StartStation OLED shows `FIN:-xxdBm` or `FIN:NO SIGNAL`; FinishStation OLED shows `START:-xxdBm` or `START:NO SIGNAL`. The only missing-signal text is `NO SIGNAL`.
 
 ## v0.17 Web UI stability, hidden battery UI, RSSI displays, and button latency diagnostics
 
@@ -74,8 +92,8 @@ Firmware v0.17 keeps StartStation and FinishStation as separate applications. It
 - After the one-time FinishStation Wi-Fi RaceClock sync, both OLEDs continue showing LoRa RSSI independent of Wi-Fi connection state: StartStation shows `FIN:-xxdBm` or `FIN:NO SIGNAL`; FinishStation shows `START:-xxdBm` or `START:NO SIGNAL`. The text is consistently `NO SIGNAL`.
 - The Web UI communication block shows Finish signal, Start signal as reported by FinishStation, Finish state, last LoRa packet type, and packet age.
 - Buttons use debounced short-press events on the press edge. If a short press is delayed, check Serial warnings plus `/api/debug/status` fields `loopMaxGapMs`, `loopLastGapMs`, `startButtonLastLatencyMs`, `startButtonMaxLatencyMs`, `finishButtonLastLatencyMs`, and `finishButtonMaxLatencyMs`.
-- The main loops poll buttons at the beginning of each cycle and use `LoopMonitor` to log `WARN loop gap=...ms` for gaps above 200 ms. OLED rendering logs `WARN OLED render slow durationMs=...` above 100 ms.
-- FinishStation Wi-Fi HTTP sync is a one-time startup action before Ready. It logs `WARN wifi sync sample blocking rtt=...` for slow samples, and after `syncDoneOnce=true` it performs no periodic Wi-Fi HTTP sync.
+- The main loops poll buttons at the beginning of each cycle and use `LoopMonitor` to log `WARN loop gap=...ms` for gaps above 200 ms. OLED rendering logs `WARN slow block name=OLED durationMs=...` above 100 ms.
+- FinishStation Wi-Fi HTTP sync is a one-time startup action before Ready. It logs `WARN slow block name=WiFiSyncHTTP durationMs=...` for slow samples, and after `syncDoneOnce=true` it performs no periodic Wi-Fi HTTP sync.
 - LoRa critical race packets remain compact (`RUN_START`, `RUN_START_ACK`, `FINISH`, and `FINISH_ACK` are still guarded below the critical payload limit and do not carry rider/trail names).
 
 ## v0.15 compact critical LoRa race packets
@@ -259,7 +277,7 @@ RunNumber;RunId;RunTime;Rider;Trail;RaceStartMs;FinishRaceMs;ResultMs;Result;Sta
 ### Signal, battery, and button behavior
 
 - Signal text is consistently `NO SIGNAL`, not `NO SIG`, `NO-SIG`, `NOSIG`, or `OFF`.
-- `BatteryService` is a safe abstraction shared by both stations. By default `BATTERY_ADC_ENABLED=0`, so OLED/API show USB or unknown instead of fake battery values. Battery percent requires configuring and calibrating `BATTERY_ADC_PIN`, `BATTERY_VOLTAGE_DIVIDER_RATIO`, `BATTERY_MIN_VOLTAGE`, and `BATTERY_MAX_VOLTAGE` for the actual board and wiring.
+- `BatteryService` is a safe abstraction shared by both stations. By default `BATTERY_ADC_ENABLED=0`, and normal OLED/Web/API status paths do not show or read battery values. Battery measurement remains only a dormant helper for future explicit diagnostics.
 - Main start/finish actions use debounced short press events on the pressed edge (`INPUT_PULLUP`, active LOW). Long press is not required. Holding the button does not repeat the event; the next action is possible only after release and a later press.
 - Serial heartbeat diagnostics include button raw/pressed state and timing/link details for troubleshooting.
 
