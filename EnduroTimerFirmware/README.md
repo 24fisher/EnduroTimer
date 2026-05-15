@@ -31,7 +31,7 @@ The current Heltec V3 OLED configuration is fixed in `platformio.ini`:
 - Library: U8g2
 - `ARDUINO_USB_CDC_ON_BOOT=0`
 - `ARDUINO_USB_MODE=0`
-- `FIRMWARE_VERSION=0.15`
+- `FIRMWARE_VERSION=0.17`
 - `STATUS_LED_PIN=35`
 - `STATUS_LED_ACTIVE_LEVEL=1`
 
@@ -53,11 +53,30 @@ The current Heltec V3 OLED configuration is fixed in `platformio.ini`:
 - Firmware version is a manual semantic-like incremental string.
 - Initial version: `0.00`.
 - Each MR/iteration increments the string by `0.01` manually.
-- Current version: `0.15`.
-- The version is configured with `FIRMWARE_VERSION` and has a source fallback of `0.15`.
+- Current version: `0.17`.
+- The version is configured with `FIRMWARE_VERSION` and has a source fallback of `0.17`.
 - Version is shown in OLED headers, Serial boot logs, Web API status, the Web UI status block, compact `STATUS` heartbeat packets (`ver`), non-critical control messages, and the short `v` field on compact critical race packets when it fits.
 
 
+
+
+## v0.17 Web UI stability, hidden battery UI, RSSI displays, and button latency diagnostics
+
+Firmware v0.17 keeps StartStation and FinishStation as separate applications. It focuses on Web UI write stability, lighter status traffic, removing battery information from normal operator screens, displaying LoRa signal after the one-time Wi-Fi sync, and making short button presses diagnosable.
+
+- `FIRMWARE_VERSION` is `0.17`; Serial boot logs show `Version: v0.17`, OLED headers show `START TERM v0.17` and `FINISH TERM v0.17`, and `/api/status.firmwareVersion` reports `0.17`.
+- The Web UI prevents duplicate rider/trail writes with `addRiderInFlight`, `addTrailInFlight`, and `writeInFlight` guards. One click sends at most one POST, the button is disabled while the POST is active, and timed-out writes show `Станция не ответила, повторите позже` without retrying the POST automatically.
+- Polling no longer overlaps writes: `/api/status` polls every 2000 ms, `/api/runs` polls every 5000 ms, and riders/trails/settings are fetched only on page load or after add/deactivate/save actions. Each refresh path has an in-flight guard so the synchronous ESP WebServer is not flooded by parallel GET requests.
+- Backend rider/trail creation is idempotent by display name. Existing active names are returned instead of duplicated, and inactive matching names are reactivated and saved.
+- `POST /api/riders/add` and `POST /api/trails/add` return short JSON containing only `ok` plus the saved rider/trail id, display name, and active flag. They no longer return a full station status snapshot.
+- `/api/status` is kept as the lightweight operator status. Raw LoRa payloads, heap values, boot counters, loop timing, button latency, and other diagnostics belong to `/api/debug/status`.
+- Battery percentage and voltage are hidden from OLED and the main Web UI. `BatteryService` remains available for future debug use, but normal status rendering and OLED pages do not show `BAT`, percentages, voltage, or USB battery placeholders.
+- After the one-time FinishStation Wi-Fi RaceClock sync, both OLEDs continue showing LoRa RSSI independent of Wi-Fi connection state: StartStation shows `FIN:-xxdBm` or `FIN:NO SIGNAL`; FinishStation shows `START:-xxdBm` or `START:NO SIGNAL`. The text is consistently `NO SIGNAL`.
+- The Web UI communication block shows Finish signal, Start signal as reported by FinishStation, Finish state, last LoRa packet type, and packet age.
+- Buttons use debounced short-press events on the press edge. If a short press is delayed, check Serial warnings plus `/api/debug/status` fields `loopMaxGapMs`, `loopLastGapMs`, `startButtonLastLatencyMs`, `startButtonMaxLatencyMs`, `finishButtonLastLatencyMs`, and `finishButtonMaxLatencyMs`.
+- The main loops poll buttons at the beginning of each cycle and use `LoopMonitor` to log `WARN loop gap=...ms` for gaps above 200 ms. OLED rendering logs `WARN OLED render slow durationMs=...` above 100 ms.
+- FinishStation Wi-Fi HTTP sync is a one-time startup action before Ready. It logs `WARN wifi sync sample blocking rtt=...` for slow samples, and after `syncDoneOnce=true` it performs no periodic Wi-Fi HTTP sync.
+- LoRa critical race packets remain compact (`RUN_START`, `RUN_START_ACK`, `FINISH`, and `FINISH_ACK` are still guarded below the critical payload limit and do not carry rider/trail names).
 
 ## v0.15 compact critical LoRa race packets
 

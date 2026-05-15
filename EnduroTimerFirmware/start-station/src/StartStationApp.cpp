@@ -74,12 +74,12 @@ void StartStationApp::begin() {
 
 void StartStationApp::loop() {
   const uint32_t now = clock_.nowMs();
+  loopMonitor_.tick(now);
+  updateButton(now);
+  updateLed(now);
 #if ENABLE_LORA
   pollRadio();
 #endif
-
-  updateButton(now);
-  updateLed(now);
 #if ENABLE_LORA_TIME_SYNC
   updateSync(now);
 #endif
@@ -147,7 +147,10 @@ void StartStationApp::loop() {
 #if ENABLE_OLED
   display_.update();
   if (!display_.testPatternOnly() && now - lastDisplayMs_ >= DisplayRefreshMs) {
+    const uint32_t displayStartMs = millis();
     updateDisplay();
+    const uint32_t displayDurationMs = millis() - displayStartMs;
+    if (displayDurationMs > 100UL) Serial.printf("WARN OLED render slow durationMs=%lu\n", static_cast<unsigned long>(displayDurationMs));
     lastDisplayMs_ = now;
   }
 #endif
@@ -248,16 +251,6 @@ String StartStationApp::statusJson() const {
   doc["wifiOk"] = wifiApStarted_;
   doc["webOk"] = webStarted_;
   doc["loraOk"] = radioReady_;
-  const BatteryStatus startBattery = battery_.read();
-  doc["batteryAvailable"] = startBattery.available;
-  doc["batteryVoltage"] = startBattery.available ? startBattery.voltage : 0.0F;
-  doc["batteryPercent"] = startBattery.percent;
-  doc["startBatteryAvailable"] = startBattery.available;
-  doc["startBatteryVoltage"] = startBattery.available ? startBattery.voltage : 0.0F;
-  doc["startBatteryPercent"] = startBattery.percent;
-  doc["finishBatteryAvailable"] = finishBatteryAvailable_;
-  doc["finishBatteryVoltage"] = finishBatteryVoltage_;
-  doc["finishBatteryPercent"] = finishBatteryPercent_;
   doc["finishLocalRunStartReceivedMillis"] = finishLocalRunStartReceivedMillis_;
   doc["finishLocalElapsedMs"] = finishLocalElapsedMs_;
   doc["finishRemoteStartTimestampMs"] = finishRemoteStartTimestampMs_;
@@ -326,8 +319,6 @@ String StartStationApp::statusJson() const {
   doc["lastAnyPacketMs"] = lastAnyPacketMs_;
   doc["lastRssi"] = lastRssi_;
   doc["lastSnr"] = lastSnr_;
-  doc["lastLoRaRaw"] = lastLoRaRaw_;
-  doc["lastLoRaRawShort"] = lastLoRaRaw_;
   doc["currentRunId"] = current.runId;
   doc["currentRunRaceStartTimeMs"] = current.raceStartTimeMs;
   RiderRecord selectedRider = selectRider();
@@ -357,14 +348,58 @@ String StartStationApp::statusJson() const {
   doc["lastTimingSource"] = last.timingSource;
   doc["lastTimingNote"] = last.timingNote;
   doc["uptimeMs"] = millis();
-  doc["heap"] = ESP.getFreeHeap();
-  doc["minHeap"] = ESP.getMinFreeHeap();
 
   String output;
   serializeJson(doc, output);
   return output;
 }
 
+
+
+String StartStationApp::debugStatusJson() const {
+  JsonDocument doc;
+  doc["ok"] = true;
+  doc["firmwareVersion"] = FIRMWARE_VERSION;
+  doc["heap"] = ESP.getFreeHeap();
+  doc["minHeap"] = ESP.getMinFreeHeap();
+  doc["bootId"] = bootId_;
+  doc["startHeartbeatCount"] = startHeartbeatCount_;
+  doc["finishHeartbeatCount"] = finishHeartbeatCount_;
+  doc["missedFinishStatusCount"] = missedFinishStatusCount_;
+  doc["lastLoRaRaw"] = lastLoRaRaw_;
+  doc["lastLoRaRawShort"] = lastLoRaRaw_;
+  doc["lastLoRaPacketType"] = lastFinishPacketType_;
+  doc["lastAnyPacketMs"] = lastAnyPacketMs_;
+  doc["lastRssi"] = lastRssi_;
+  doc["lastSnr"] = lastSnr_;
+  doc["remoteBootId"] = finishLink_.remoteBootId;
+  doc["remoteRebootCount"] = finishLink_.remoteRebootCount;
+  doc["finishLocalRunStartReceivedMillis"] = finishLocalRunStartReceivedMillis_;
+  doc["finishLocalElapsedMs"] = finishLocalElapsedMs_;
+  doc["finishRemoteStartTimestampMs"] = finishRemoteStartTimestampMs_;
+  doc["pendingRunStartAck"] = pendingRunStartAck_;
+  doc["runStartAckAttempts"] = runStartAckAttempts_;
+  doc["runStartAckReceived"] = runStartAckReceived_;
+  doc["runStartAckTimeout"] = runStartAckTimedOut_;
+  doc["loopLastGapMs"] = loopMonitor_.lastLoopGapMs();
+  doc["loopMaxGapMs"] = loopMonitor_.maxLoopGapMs();
+  doc["startButtonLastLatencyMs"] = startButton_.lastPressLatencyMs();
+  doc["startButtonMaxLatencyMs"] = startButton_.maxPressLatencyMs();
+  doc["finishButtonLastLatencyMs"] = finishButtonLastLatencyMs_;
+  doc["finishButtonMaxLatencyMs"] = finishButtonMaxLatencyMs_;
+  doc["finishLoopLastGapMs"] = finishLoopLastGapMs_;
+  doc["finishLoopMaxGapMs"] = finishLoopMaxGapMs_;
+  const BatteryStatus startBattery = battery_.read();
+  doc["startBatteryAvailable"] = startBattery.available;
+  doc["startBatteryVoltage"] = startBattery.available ? startBattery.voltage : 0.0F;
+  doc["startBatteryPercent"] = startBattery.percent;
+  doc["finishBatteryAvailable"] = finishBatteryAvailable_;
+  doc["finishBatteryVoltage"] = finishBatteryVoltage_;
+  doc["finishBatteryPercent"] = finishBatteryPercent_;
+  String output;
+  serializeJson(doc, output);
+  return output;
+}
 
 String StartStationApp::raceSyncJson() const {
   const uint32_t now = raceClock_.nowRaceMs();
@@ -553,9 +588,10 @@ void StartStationApp::pollRadio() {
       return;
     }
     lastFinishPacketType_ = RadioProtocol::typeToString(message.type);
-    Serial.printf("LORA RX raw=%s\n", lastLoRaRaw_.c_str());
-    Serial.printf("LORA RX type=%s rssi=%d snr=%.1f raw=%s\n", lastFinishPacketType_.c_str(), lastRssi_, static_cast<double>(lastSnr_), lastLoRaRaw_.c_str());
-    Serial.printf("LORA parsed type=%s stationId=%s runId=%s raceStartTimeMs=%lu hb=%lu\n", lastFinishPacketType_.c_str(), message.stationId.c_str(), message.runId.c_str(), static_cast<unsigned long>(message.raceStartTimeMs), static_cast<unsigned long>(message.heartbeat));
+    const bool logRawPacket = message.type != RadioMessageType::Status;
+    if (logRawPacket) Serial.printf("LORA RX raw=%s\n", lastLoRaRaw_.c_str());
+    Serial.printf("LORA RX type=%s rssi=%d snr=%.1f%s\n", lastFinishPacketType_.c_str(), lastRssi_, static_cast<double>(lastSnr_), logRawPacket ? " raw logged" : "");
+    if (logRawPacket) Serial.printf("LORA parsed type=%s stationId=%s runId=%s raceStartTimeMs=%lu hb=%lu\n", lastFinishPacketType_.c_str(), message.stationId.c_str(), message.runId.c_str(), static_cast<unsigned long>(message.raceStartTimeMs), static_cast<unsigned long>(message.heartbeat));
     if (message.type == RadioMessageType::Unknown) {
       Serial.printf("LORA unknown type=%s raw=%s\n", lastFinishPacketType_.c_str(), payload.c_str());
     }
@@ -622,7 +658,6 @@ bool StartStationApp::sendRadio(const RadioMessage& message, int* resultCode) {
 void StartStationApp::restoreRadioReceiveMode() {
 #if ENABLE_LORA
   yield();
-  delay(1);
 #endif
 }
 
@@ -836,11 +871,6 @@ void StartStationApp::sendStatus(uint32_t nowMs) {
   message.raceClockSynced = raceClock_.isSynced();
   message.raceClockNowMs = raceClock_.nowRaceMs();
   message.syncAccuracyMs = syncAccuracyMs_;
-  const BatteryStatus statusBattery = battery_.read();
-  message.hasBatteryVoltage = statusBattery.available;
-  message.batteryVoltage = statusBattery.voltage;
-  message.batteryPercent = statusBattery.percent;
-
   String preview;
   RadioProtocol::serializeCompactStatus(message, preview);
   Serial.printf("START STATUS TX compact hb=%lu len=%u\n",
@@ -953,6 +983,10 @@ void StartStationApp::handleRadioMessage(const RadioMessage& message) {
     finishLocalRunStartReceivedMillis_ = message.localRunStartReceivedMillis;
     finishLocalElapsedMs_ = message.finishLocalElapsedMs;
     finishRemoteStartTimestampMs_ = message.remoteStartTimestampMs;
+    finishLoopLastGapMs_ = message.loopLastGapMs;
+    finishLoopMaxGapMs_ = message.loopMaxGapMs;
+    finishButtonLastLatencyMs_ = message.buttonLastLatencyMs;
+    finishButtonMaxLatencyMs_ = message.buttonMaxLatencyMs;
     finishReportedStartLinkActive_ = message.startLinkActive && message.startLastSeenAgoMs <= LINK_TIMEOUT_MS;
     finishReportedStartPacketCount_ = message.startPacketCount;
     if (message.hasStartRssi && message.hasStartSnr && finishReportedStartLinkActive_) {
@@ -1114,10 +1148,7 @@ void StartStationApp::updateCountdownDisplay(uint32_t nowMs) {
 void StartStationApp::updateDisplay() {
   const RunRecord& current = state_.currentRun();
   const RunRecord& last = state_.lastRun();
-  const String runShort = current.runId.length() > 0 ? current.runId.substring(max(0, static_cast<int>(current.runId.length()) - 6)) : "-";
   const String lastResult = last.resultFormatted.length() > 0 ? last.resultFormatted : "-";
-  const BatteryStatus battery = battery_.read();
-  const String bat = batteryText(battery);
   const String fin = finishOnline() ? String("FIN:") + String(finishLink_.lastRssi) + "dBm" : String("FIN:NO SIGNAL");
   const String linkDebug = finishLink_.lastPacketType.length() > 0 ? String("PKT:") + finishLink_.lastPacketType : String("HB:") + String(finishHeartbeatCount_);
   const String discoveryLine = discoveryActive() ? String("DISCOVERY...") : linkDebug;
@@ -1128,7 +1159,7 @@ void StartStationApp::updateDisplay() {
   }
 
   if (state_.state() == StartRunState::Finished) {
-    display_.showLines({startHeader(), "FINISHED", lastResult, bat});
+    display_.showLines({startHeader(), "FINISHED", fin, lastResult});
     return;
   }
 
@@ -1136,7 +1167,7 @@ void StartStationApp::updateDisplay() {
     String anim = String("RIDING ");
     for (uint8_t i = 0; i < ridingAnimationFrame(); ++i) anim += " ";
     anim += ">";
-    display_.showLines({startHeader(), anim, formatDurationMs(raceClock_.nowRaceMs() - current.raceStartTimeMs).substring(0, 5), fin, bat});
+    display_.showLines({startHeader(), anim, fin, formatDurationMs(raceClock_.nowRaceMs() - current.raceStartTimeMs).substring(0, 5)});
     return;
   }
 
@@ -1152,9 +1183,9 @@ void StartStationApp::updateDisplay() {
 
   display_.showLines({
     startHeader(),
-    "SYNCED",
-    "READY",
-    "acc: " + String(syncAccuracyMs_) + "ms",
+    "SYNCED READY",
+    fin,
+    "Last:" + lastResult,
   });
 }
 
@@ -1391,6 +1422,24 @@ bool StartStationApp::addRider(const String& displayName, String& error, RiderRe
   name.trim();
   Serial.printf("rider add request name=%s\n", name.c_str());
   if (name.length() == 0) { error = "Rider name is required"; Serial.printf("rider add failed: %s\n", error.c_str()); return false; }
+
+  for (RiderRecord& rider : riders_) {
+    if (!rider.displayName.equalsIgnoreCase(name)) continue;
+    if (rider.isActive) {
+      Serial.printf("rider already exists name=%s, returning existing\n", name.c_str());
+      if (addedRider != nullptr) *addedRider = rider;
+      return true;
+    }
+    rider.isActive = true;
+    rider.displayName = name;
+    if (settings_.selectedRiderId.length() == 0) settings_.selectedRiderId = rider.id;
+    if (!saveRiders()) { error = "Failed to save riders"; return false; }
+    if (!saveSettings()) { error = "Failed to save settings"; Serial.printf("rider add failed: %s\n", error.c_str()); return false; }
+    Serial.printf("rider reactivated name=%s id=%s\n", name.c_str(), rider.id.c_str());
+    if (addedRider != nullptr) *addedRider = rider;
+    return true;
+  }
+
   RiderRecord newRider{makeEntityId("r"), name, true, millis()};
   riders_.push_back(newRider);
   if (settings_.selectedRiderId.length() == 0) settings_.selectedRiderId = newRider.id;
@@ -1417,6 +1466,24 @@ bool StartStationApp::addTrail(const String& displayName, String& error, TrailRe
   name.trim();
   Serial.printf("trail add request name=%s\n", name.c_str());
   if (name.length() == 0) { error = "Trail name is required"; Serial.printf("trail add failed: %s\n", error.c_str()); return false; }
+
+  for (TrailRecord& trail : trails_) {
+    if (!trail.displayName.equalsIgnoreCase(name)) continue;
+    if (trail.isActive) {
+      Serial.printf("trail already exists name=%s, returning existing\n", name.c_str());
+      if (addedTrail != nullptr) *addedTrail = trail;
+      return true;
+    }
+    trail.isActive = true;
+    trail.displayName = name;
+    if (settings_.selectedTrailId.length() == 0) settings_.selectedTrailId = trail.id;
+    if (!saveTrails()) { error = "Failed to save trails"; return false; }
+    if (!saveSettings()) { error = "Failed to save settings"; Serial.printf("trail add failed: %s\n", error.c_str()); return false; }
+    Serial.printf("trail reactivated name=%s id=%s\n", name.c_str(), trail.id.c_str());
+    if (addedTrail != nullptr) *addedTrail = trail;
+    return true;
+  }
+
   const bool isFirstTrail = trails_.empty();
   TrailRecord newTrail{makeEntityId("t"), name, true, millis()};
   trails_.push_back(newTrail);
@@ -1556,9 +1623,4 @@ String StartStationApp::formatEpochLocal(uint64_t epochMs) const {
   char buffer[24];
   snprintf(buffer, sizeof(buffer), "%04d-%02d-%02d %02d:%02d:%02d", tmValue.tm_year + 1900, tmValue.tm_mon + 1, tmValue.tm_mday, tmValue.tm_hour, tmValue.tm_min, tmValue.tm_sec);
   return String(buffer);
-}
-
-String StartStationApp::batteryText(const BatteryStatus& status) const {
-  if (status.available && status.percent >= 0) return String("BAT:") + String(status.percent) + "%";
-  return "BAT:USB";
 }

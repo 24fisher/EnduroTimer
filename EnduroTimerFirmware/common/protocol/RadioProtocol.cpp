@@ -104,6 +104,10 @@ bool RadioProtocol::serializeCompactStatus(const RadioMessage& message, String& 
   if (message.startLastSeenAgoMs > 0) doc["sa"] = message.startLastSeenAgoMs / 1000UL;
   if (message.hasFinishRssi) doc["fr"] = message.finishRssi;
   if (message.hasFinishSnr) doc["fs"] = static_cast<int>(message.finishSnr);
+  if (message.loopLastGapMs > 0) doc["llg"] = message.loopLastGapMs;
+  if (message.loopMaxGapMs > 0) doc["lmg"] = message.loopMaxGapMs;
+  if (message.buttonLastLatencyMs > 0) doc["bll"] = message.buttonLastLatencyMs;
+  if (message.buttonMaxLatencyMs > 0) doc["blm"] = message.buttonMaxLatencyMs;
 
   output = "";
   return serializeJson(doc, output) > 0;
@@ -303,6 +307,14 @@ bool RadioProtocol::deserialize(const String& input, RadioMessage& output, Strin
   if (!output.startLinkActive && compactStatus && (output.hasStartRssi || output.hasStartSnr)) output.startLinkActive = true;
   output.startPacketCount = doc["startPacketCount"] | 0;
   if (output.startPacketCount == 0) output.startPacketCount = doc["sp"] | 0;
+  output.loopLastGapMs = doc["loopLastGapMs"] | 0;
+  if (output.loopLastGapMs == 0) output.loopLastGapMs = doc["llg"] | 0;
+  output.loopMaxGapMs = doc["loopMaxGapMs"] | 0;
+  if (output.loopMaxGapMs == 0) output.loopMaxGapMs = doc["lmg"] | 0;
+  output.buttonLastLatencyMs = doc["buttonLastLatencyMs"] | 0;
+  if (output.buttonLastLatencyMs == 0) output.buttonLastLatencyMs = doc["bll"] | 0;
+  output.buttonMaxLatencyMs = doc["buttonMaxLatencyMs"] | 0;
+  if (output.buttonMaxLatencyMs == 0) output.buttonMaxLatencyMs = doc["blm"] | 0;
   if (!doc["finishRssi"].isNull()) { output.hasFinishRssi = true; output.finishRssi = doc["finishRssi"].as<int>(); }
   if (compactStatus && !doc["fr"].isNull()) { output.hasFinishRssi = true; output.finishRssi = doc["fr"].as<int>(); }
   if (!doc["finishSnr"].isNull()) { output.hasFinishSnr = true; output.finishSnr = doc["finishSnr"].as<float>(); }

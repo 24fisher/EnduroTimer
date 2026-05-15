@@ -71,10 +71,20 @@ void FinishStationApp::begin() {
 
 void FinishStationApp::loop() {
   const uint32_t now = clock_.nowMs();
+  loopMonitor_.tick(now);
+
+  uint32_t finishTimestampMs = 0;
+  if (sensor_.update(now, finishTimestampMs)) {
+    (void)finishTimestampMs;
+    Serial.printf("state=%s\n", state_.stateText().c_str());
+    Serial.printf("canFinish=%d\n", state_.canFinish() ? 1 : 0);
+    handleFinishButton(now);
+  }
+
+  updateLed(now);
 #if ENABLE_LORA
   pollRadio();
 #endif
-  updateLed(now);
   updateWifiSync(now);
 #if ENABLE_LORA_TIME_SYNC
   if (syncInProgress_ && syncReadyUntilMs_ > 0 && now > syncReadyUntilMs_ && !raceClock_.isSynced()) {
@@ -86,14 +96,6 @@ void FinishStationApp::loop() {
     Serial.println("SYNC ready timeout, waiting for new request");
   }
 #endif
-
-  uint32_t finishTimestampMs = 0;
-  if (sensor_.update(now, finishTimestampMs)) {
-    (void)finishTimestampMs;
-    Serial.println("FINISH button debounced short press");
-    Serial.printf("Finish button state=%s canFinish=%d activeRunId=%s\n", state_.stateText().c_str(), state_.canFinish() ? 1 : 0, state_.runId().c_str());
-    handleFinishButton(now);
-  }
 
   bool prioritySentThisCycle = false;
   if (!finishAckReceived_ && state_.state() == FinishRunState::FinishSent && finishAttempts_ < FINISH_MAX_RETRY_ATTEMPTS &&
@@ -132,7 +134,10 @@ void FinishStationApp::loop() {
 #if ENABLE_OLED
   display_.update();
   if (!display_.testPatternOnly() && now - lastDisplayMs_ >= DisplayRefreshMs) {
+    const uint32_t displayStartMs = millis();
     updateDisplay();
+    const uint32_t displayDurationMs = millis() - displayStartMs;
+    if (displayDurationMs > 100UL) Serial.printf("WARN OLED render slow durationMs=%lu\n", static_cast<unsigned long>(displayDurationMs));
     lastDisplayMs_ = now;
   }
 #endif
@@ -222,8 +227,11 @@ bool FinishStationApp::takeWifiSyncSample(uint8_t sampleNumber, uint32_t& rttMs,
   HTTPClient http;
   const uint32_t t0FinishLocalMs = millis();
   http.begin("http://192.168.4.1/api/time/race-sync");
+  http.setTimeout(500);
   const int code = http.GET();
   const uint32_t t3FinishLocalMs = millis();
+  const uint32_t blockingRttMs = t3FinishLocalMs - t0FinishLocalMs;
+  if (blockingRttMs > 500UL) Serial.printf("WARN wifi sync sample blocking rtt=%lu\n", static_cast<unsigned long>(blockingRttMs));
   if (code != HTTP_CODE_OK) {
     Serial.printf("WIFI SYNC sample %u HTTP failed code=%d\n", sampleNumber, code);
     http.end();
@@ -268,7 +276,7 @@ void FinishStationApp::finishWifiSyncSuccess(int32_t offsetMs, uint32_t rttMs, c
   Serial.printf("RaceClock synced once offset=%ld accuracy=%lu\n", static_cast<long>(offsetMs), static_cast<unsigned long>(accuracyMs));
   postFinishSyncStatus();
 #if ENABLE_OLED
-  if (!display_.testPatternOnly()) display_.showLines({finishHeader(), "SYNCED", "READY", "acc: " + String(syncAccuracyMs_) + "ms"});
+  if (!display_.testPatternOnly()) display_.showLines({finishHeader(), "SYNCED READY", startSignalText(), "IDLE"});
 #endif
 }
 
@@ -289,8 +297,12 @@ bool FinishStationApp::postFinishSyncStatus() {
   serializeJson(doc, body);
   HTTPClient http;
   http.begin("http://192.168.4.1/api/finish/sync-status");
+  http.setTimeout(500);
   http.addHeader("Content-Type", "application/json");
+  const uint32_t postStartMs = millis();
   const int code = http.POST(body);
+  const uint32_t postRttMs = millis() - postStartMs;
+  if (postRttMs > 500UL) Serial.printf("WARN wifi sync sample blocking rtt=%lu\n", static_cast<unsigned long>(postRttMs));
   http.end();
   Serial.printf("Finish sync-status POST code=%d\n", code);
   return code >= 200 && code < 300;
@@ -356,6 +368,9 @@ String FinishStationApp::finishHeader() const {
   return String("FINISH TERM v") + FIRMWARE_VERSION;
 }
 
+String FinishStationApp::startSignalText() const {
+  return isLinkActive(startLink_) ? String("START:") + String(startLink_.lastRssi) + "dBm" : String("START:NO SIGNAL");
+}
 
 void FinishStationApp::pollRadio() {
 #if ENABLE_LORA
@@ -377,9 +392,10 @@ void FinishStationApp::pollRadio() {
       return;
     }
     lastPacket_ = RadioProtocol::typeToString(message.type);
-    Serial.printf("LORA RX raw=%s\n", lastLoRaRaw_.c_str());
-    Serial.printf("LORA RX type=%s rssi=%d snr=%.1f raw=%s\n", lastPacket_.c_str(), lastRssi_, static_cast<double>(lastSnr_), lastLoRaRaw_.c_str());
-    Serial.printf("LORA parsed type=%s stationId=%s runId=%s raceStartTimeMs=%lu runNumber=%lu hb=%lu\n", lastPacket_.c_str(), message.stationId.c_str(), message.runId.c_str(), static_cast<unsigned long>(message.raceStartTimeMs), static_cast<unsigned long>(message.runNumber), static_cast<unsigned long>(message.heartbeat));
+    const bool logRawPacket = message.type != RadioMessageType::Status;
+    if (logRawPacket) Serial.printf("LORA RX raw=%s\n", lastLoRaRaw_.c_str());
+    Serial.printf("LORA RX type=%s rssi=%d snr=%.1f%s\n", lastPacket_.c_str(), lastRssi_, static_cast<double>(lastSnr_), logRawPacket ? " raw logged" : "");
+    if (logRawPacket) Serial.printf("LORA parsed type=%s stationId=%s runId=%s raceStartTimeMs=%lu runNumber=%lu hb=%lu\n", lastPacket_.c_str(), message.stationId.c_str(), message.runId.c_str(), static_cast<unsigned long>(message.raceStartTimeMs), static_cast<unsigned long>(message.runNumber), static_cast<unsigned long>(message.heartbeat));
     if (message.type == RadioMessageType::Unknown) {
       Serial.printf("LORA unknown type=%s raw=%s\n", lastPacket_.c_str(), payload.c_str());
     }
@@ -446,7 +462,6 @@ bool FinishStationApp::sendRadio(const RadioMessage& message, int* resultCode) {
 void FinishStationApp::restoreRadioReceiveMode() {
 #if ENABLE_LORA
   yield();
-  delay(1);
 #endif
 }
 
@@ -465,10 +480,10 @@ void FinishStationApp::sendStatus(uint32_t nowMs) {
   message.elapsedMs = state_.isRiding() ? state_.elapsedMs(raceClock_.nowRaceMs()) : 0;
   message.offsetToMasterMs = raceClock_.offsetToMasterMs();
   message.syncAccuracyMs = syncAccuracyMs_;
-  const BatteryStatus statusBattery = battery_.read();
-  message.hasBatteryVoltage = statusBattery.available;
-  message.batteryVoltage = statusBattery.voltage;
-  message.batteryPercent = statusBattery.percent;
+  message.loopLastGapMs = loopMonitor_.lastLoopGapMs();
+  message.loopMaxGapMs = loopMonitor_.maxLoopGapMs();
+  message.buttonLastLatencyMs = sensor_.lastButtonLatencyMs();
+  message.buttonMaxLatencyMs = sensor_.maxButtonLatencyMs();
   if (isLinkActive(startLink_)) {
     message.hasStartRssi = true;
     message.startRssi = startLink_.lastRssi;
@@ -891,7 +906,7 @@ void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
       Serial.printf("Last result = %s\n", lastResultFormatted_.c_str());
 #if ENABLE_OLED
       if (!display_.testPatternOnly()) {
-        display_.showLines({finishHeader(), "ACK OK", lastResultFormatted_, batteryText(battery_.read())});
+        display_.showLines({finishHeader(), "ACK OK", lastResultFormatted_, startSignalText()});
       }
 #endif
     } else {
@@ -902,11 +917,7 @@ void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
 }
 
 void FinishStationApp::updateDisplay() {
-  const String runShort = state_.runId().length() > 0 ? state_.runId().substring(max(0, static_cast<int>(state_.runId().length()) - 6)) : "-";
-  const bool startOnline = isLinkActive(startLink_);
-  const BatteryStatus battery = battery_.read();
-  const String bat = batteryText(battery);
-  const String startSignal = startOnline ? String("START:") + String(startLink_.lastRssi) + "dBm" : String("START:NO SIGNAL");
+  const String startSignal = startSignalText();
   const String linkDebug = startLink_.lastPacketType.length() > 0 ? String("PKT:") + startLink_.lastPacketType : String("HB:") + String(startHeartbeatCount_);
   if (finishLineCrossedUntilMs_ > millis()) {
     display_.showLines({finishHeader(), "FINISH LINE", "CROSSED", lastResultFormatted_});
@@ -914,7 +925,7 @@ void FinishStationApp::updateDisplay() {
   }
 
   if (showAckOkUntilMs_ > millis()) {
-    display_.showLines({finishHeader(), "ACK OK", lastResultFormatted_.length() > 0 ? lastResultFormatted_ : String("-"), bat});
+    display_.showLines({finishHeader(), "ACK OK", lastResultFormatted_.length() > 0 ? lastResultFormatted_ : String("-"), startSignal});
     return;
   }
 
@@ -951,9 +962,9 @@ void FinishStationApp::updateDisplay() {
 
   display_.showLines({
     finishHeader(),
-    "SYNCED",
-    "READY",
-    "acc: " + String(syncAccuracyMs_) + "ms",
+    "SYNCED READY",
+    startSignal,
+    "IDLE",
   });
 }
 
@@ -984,9 +995,4 @@ void FinishStationApp::logHeartbeat(uint32_t nowMs) {
                 static_cast<unsigned long>(linkAgeMs(startLink_)), startLink_.lastRssi,
                 startLink_.lastPacketType.c_str(), static_cast<unsigned long>(startHeartbeatCount_));
   lastHeartbeatMs_ = nowMs;
-}
-
-String FinishStationApp::batteryText(const BatteryStatus& status) const {
-  if (status.available && status.percent >= 0) return String("BAT:") + String(status.percent) + "%";
-  return "BAT:USB";
 }

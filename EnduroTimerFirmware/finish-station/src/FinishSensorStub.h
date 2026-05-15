@@ -18,6 +18,8 @@ public:
   bool armed() const { return armed_; }
   bool buttonPressed() const { return button_.pressed(); }
   int buttonRaw() const { return button_.rawState(); }
+  uint32_t lastButtonLatencyMs() const { return button_.lastPressLatencyMs(); }
+  uint32_t maxButtonLatencyMs() const { return button_.maxPressLatencyMs(); }
 
 private:
   bool armed_ = false;

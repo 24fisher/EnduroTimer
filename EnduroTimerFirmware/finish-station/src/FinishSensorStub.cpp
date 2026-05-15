@@ -3,9 +3,9 @@
 static constexpr uint32_t ButtonDebounceMs = 50UL;
 
 void FinishSensorStub::begin() {
-  button_.begin(FINISH_BUTTON_PIN, ButtonDebounceMs);
+  button_.begin(FINISH_BUTTON_PIN, true, ButtonDebounceMs);
   lastRawState_ = button_.rawState();
-  Serial.printf("Button: configured FINISH_BUTTON_PIN=%d INPUT_PULLUP\n", FINISH_BUTTON_PIN);
+  Serial.printf("Button: pin=%d activeLow=true debounce=%lu\n", FINISH_BUTTON_PIN, static_cast<unsigned long>(ButtonDebounceMs));
 }
 
 void FinishSensorStub::arm(const String& runId, uint32_t startTimestampMs) {
@@ -25,14 +25,11 @@ void FinishSensorStub::reset() {
 
 bool FinishSensorStub::update(uint32_t nowMs, uint32_t& finishTimestampMs) {
   const int raw = digitalRead(FINISH_BUTTON_PIN);
-  if (raw != lastRawState_) {
-    Serial.println(raw == LOW ? "FINISH button raw pressed" : "FINISH button raw released");
-    lastRawState_ = raw;
-  }
+  if (raw != lastRawState_) lastRawState_ = raw;
 
   if (!button_.update(nowMs)) return false;
 
-  Serial.println("FINISH button short press");
+  Serial.printf("FINISH short press latencyMs=%lu\n", static_cast<unsigned long>(button_.lastPressLatencyMs()));
   if (!armed_) {
     finishTimestampMs = 0;
     return true;

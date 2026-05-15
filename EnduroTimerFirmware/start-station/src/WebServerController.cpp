@@ -51,6 +51,7 @@ bool WebServerController::begin() {
   });
 
   server_.on("/api/status", HTTP_GET, [this]() { sendJson(200, app_.statusJson()); });
+  server_.on("/api/debug/status", HTTP_GET, [this]() { sendJson(200, app_.debugStatusJson()); });
   server_.on("/api/time/race-sync", HTTP_GET, [this]() { sendJson(200, app_.raceSyncJson()); });
   server_.on("/api/finish/sync-status", HTTP_POST, [this]() {
     const String body = server_.arg("plain");
@@ -136,7 +137,6 @@ bool WebServerController::begin() {
     rider["riderId"] = added.id;
     rider["displayName"] = added.displayName;
     rider["isActive"] = added.isActive;
-    rider["createdAtMs"] = added.createdAtMs;
     String output;
     serializeJson(out, output);
     sendJson(200, output);
@@ -171,7 +171,6 @@ bool WebServerController::begin() {
     trail["trailId"] = added.id;
     trail["displayName"] = added.displayName;
     trail["isActive"] = added.isActive;
-    trail["createdAtMs"] = added.createdAtMs;
     String output;
     serializeJson(out, output);
     sendJson(200, output);
@@ -212,7 +211,7 @@ bool WebServerController::begin() {
   Serial.println("Route registered: POST /api/riders/add");
   Serial.println("Route registered: GET /api/trails");
   Serial.println("Route registered: POST /api/trails/add");
-  Serial.println("Routes registered: /api/status /api/riders/add /api/trails/add /api/runs /api/export/runs.csv /api/debug/routes");
+  Serial.println("Routes registered: /api/status /api/debug/status /api/riders/add /api/trails/add /api/runs /api/export/runs.csv /api/debug/routes");
   Serial.println(webStarted_ ? "[BOOT] WebServer OK" : "[BOOT] WebServer FAIL");
   return webStarted_;
 }
