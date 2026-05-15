@@ -33,7 +33,7 @@ The current Heltec V3 OLED configuration is fixed in `platformio.ini`:
 - Library: U8g2
 - `ARDUINO_USB_CDC_ON_BOOT=0`
 - `ARDUINO_USB_MODE=0`
-- `FIRMWARE_VERSION=0.19`
+- `FIRMWARE_VERSION=0.23`
 - `STATUS_LED_PIN=35`
 - `STATUS_LED_ACTIVE_LEVEL=1`
 
@@ -55,14 +55,22 @@ The current Heltec V3 OLED configuration is fixed in `platformio.ini`:
 - Firmware version is a manual semantic-like incremental string.
 - Initial version: `0.00`.
 - Each MR/iteration increments the string by `0.01` manually.
-- Current version: `0.19`.
-- The version is configured with `FIRMWARE_VERSION` and has a source fallback of `0.19`.
+- Current version: `0.23`.
+- The version is configured with `FIRMWARE_VERSION` and has a source fallback of `0.23`.
 - Version is shown in OLED headers, Serial boot logs, Web API status, the Web UI status block, compact `STATUS` heartbeat packets (`ver`), non-critical control messages, and the short `v` field on compact critical race packets when it fits.
 
 
+## v0.23 riding animation and FinishStation last result retention
 
+Firmware v0.23 keeps StartStation and FinishStation as separate firmware applications. It only changes the Riding OLED animation and FinishStation post-finish result retention; it does not restore battery display, long press handling, periodic Wi-Fi sync, LoRa time sync, blocking LoRa polling, software I2C OLED, or Web UI race starts.
 
-
+- `FIRMWARE_VERSION` is `0.23`; Serial boot logs show `Version: v0.23`, OLED headers show `START TERM v0.23` and `FINISH TERM v0.23`, and protocol/status version fields report `0.23`.
+- The Riding screen on both terminals shows one moving `>` character. The animation is generated as an eight-character window with exactly one `>` per frame, for example `>       `, ` >      `, then continuing left-to-right and wrapping back to frame 0. It never uses `>>`, `>>>`, or accumulating arrows.
+- Riding animation is millis-based and non-blocking. `RIDING_ANIM_INTERVAL_MS` is 300 ms and `RIDING_ANIM_WIDTH` is 8, so OLED updates are only requested when the rendered lines change through the existing dirty/throttled OLED path. There is no animation `delay()`.
+- FinishStation saves the last result immediately when the finish button is accepted in `Riding`, before sending `FINISH`. The saved data includes the run id, run number, finish race timestamp, raw `resultMs`, and formatted result text.
+- `FINISH_ACK` confirms the saved result and may update `resultMs` / formatted text if the ACK carries a positive result, but it does not clear the last result. The result remains visible through `FINISH_ACK`, return to `SYNCED READY`, and `ACK TIMEOUT`.
+- FinishStation `SYNCED READY` shows `Last:<result>` after a completed run and `Last:--` before the first run. `ACK TIMEOUT` shows the same saved last result and `PRESS RESEND`.
+- Manual resend in `FinishSent` or `AckTimeout` retransmits the saved FINISH data and does not recalculate the finish timestamp or result. Serial diagnostics log that manual resend is keeping the last result.
 
 ## v0.19 non-blocking LoRa RX and loop responsiveness
 

@@ -9,6 +9,7 @@
 
 #include "RadioProtocol.h"
 #include "DisplayText.h"
+#include "RidingAnimation.h"
 #include "BuildConfig.h"
 
 #ifndef LORA_FREQUENCY_MHZ
@@ -1210,7 +1211,8 @@ void StartStationApp::updateDisplay() {
   }
 
   if (state_.state() == StartRunState::Riding) {
-    display_.showLines({startHeader(), "RIDING", formatDurationMs(raceClock_.nowRaceMs() - current.raceStartTimeMs).substring(0, 5), fin});
+    const uint32_t elapsedMs = raceClock_.nowRaceMs() - current.raceStartTimeMs;
+    display_.showLines({startHeader(), String("RIDING ") + makeMovingArrow(ridingAnimationFrame()), formatSeconds(elapsedMs), fin});
     return;
   }
 
@@ -1241,7 +1243,7 @@ String StartStationApp::finishReportedStartSignalText() const {
 }
 
 uint8_t StartStationApp::ridingAnimationFrame() const {
-  return static_cast<uint8_t>((millis() / 250UL) % 10UL);
+  return ridingAnimFrame(millis());
 }
 
 String StartStationApp::makeBootId(const char* stationId) const {
