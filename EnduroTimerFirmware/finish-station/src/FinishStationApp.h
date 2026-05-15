@@ -84,7 +84,10 @@ private:
   uint8_t finishAttempts_ = 0;
   uint8_t manualResendCount_ = 0;
   bool finishAckReceived_ = false;
+  bool lastResultValid_ = false;
   String lastFinishedRunId_;
+  uint32_t lastFinishedRunNumber_ = 0;
+  uint32_t lastFinishRaceTimeMs_ = 0;
   uint32_t lastResultMs_ = 0;
   String lastResultFormatted_;
   uint32_t localResultMs_ = 0;
