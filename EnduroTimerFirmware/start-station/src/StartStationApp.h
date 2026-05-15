@@ -52,6 +52,7 @@ public:
   void begin();
   void loop();
   void loopDisplayTask();
+  void pollRadioTask();
   void beginRadio();
 
   bool requestStartRun(String& error);
@@ -232,4 +233,9 @@ private:
   uint32_t finishLoopMaxGapMs_ = 0;
   uint32_t finishButtonLastLatencyMs_ = 0;
   uint32_t finishButtonMaxLatencyMs_ = 0;
+  uint32_t radioPollLastDurationMs_ = 0;
+  uint32_t radioPollMaxDurationMs_ = 0;
+  uint32_t radioRxPacketCount_ = 0;
+  uint32_t radioRxTimeoutCount_ = 0;
+  uint32_t radioRxNoPacketCount_ = 0;
 };

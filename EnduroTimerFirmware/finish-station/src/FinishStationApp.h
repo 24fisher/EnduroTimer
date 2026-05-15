@@ -120,4 +120,9 @@ private:
   uint32_t showNoRunUntilMs_ = 0;
   uint32_t showAckOkUntilMs_ = 0;
   uint32_t finishLineCrossedUntilMs_ = 0;
+  uint32_t radioPollLastDurationMs_ = 0;
+  uint32_t radioPollMaxDurationMs_ = 0;
+  uint32_t radioRxPacketCount_ = 0;
+  uint32_t radioRxTimeoutCount_ = 0;
+  uint32_t radioRxNoPacketCount_ = 0;
 };

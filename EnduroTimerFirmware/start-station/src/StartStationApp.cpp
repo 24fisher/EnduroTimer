@@ -30,6 +30,13 @@ static constexpr uint32_t FINISH_ACK_REPEAT_INTERVAL_MS = 250UL;
 RTC_DATA_ATTR static uint32_t startBootCounter = 0;
 #if ENABLE_LORA
 static SX1262 radio = new Module(LORA_NSS, LORA_DIO1, LORA_RST, LORA_BUSY);
+namespace {
+volatile bool radioPacketReceived = false;
+
+void IRAM_ATTR onRadioPacketReceived() {
+  radioPacketReceived = true;
+}
+}  // namespace
 #endif
 
 void StartStationApp::begin() {
@@ -39,6 +46,8 @@ void StartStationApp::begin() {
   Serial.println("Version: v" FIRMWARE_VERSION);
   Serial.println("Build: " __DATE__ " " __TIME__);
   Serial.println("Board/role: Heltec WiFi LoRa 32 V3 / StartStation");
+  Serial.println("LoRa RX mode: non-blocking");
+  Serial.printf("LoRa poll timeout: %ums\n", static_cast<unsigned>(LORA_RX_POLL_TIMEOUT_MS));
   bootId_ = makeBootId("start");
   Serial.printf("Boot counter: %lu\n", static_cast<unsigned long>(startBootCounter));
   Serial.printf("BootId: %s\n", bootId_.c_str());
@@ -77,9 +86,6 @@ void StartStationApp::loop() {
   loopMonitor_.tick(now);
   { const uint32_t blockStartMs = millis(); updateButton(now); loopMonitor_.recordBlock("Button", millis() - blockStartMs); }
   updateLed(now);
-#if ENABLE_LORA
-  { const uint32_t blockStartMs = millis(); pollRadio(); loopMonitor_.recordBlock("RadioPoll", millis() - blockStartMs); }
-#endif
 #if ENABLE_LORA_TIME_SYNC
   updateSync(now);
 #endif
@@ -99,7 +105,7 @@ void StartStationApp::loop() {
     runStartAckTimedOut_ = false;
     runStartAckAttempts_ = 0;
     lastRunStartAckMs_ = 0;
-    { const uint32_t blockStartMs = millis(); sendRunStart(runToStart); loopMonitor_.recordBlock("RadioTx", millis() - blockStartMs); }
+    { const uint32_t blockStartMs = millis(); sendRunStart(runToStart); loopMonitor_.recordBlock("RadioTx", millis() - blockStartMs, LORA_MAX_TX_DURATION_WARN_MS); }
     lastPriorityTxMs_ = now;
   }
 
@@ -120,7 +126,7 @@ void StartStationApp::loop() {
     } else if (finishAge < LINK_TIMEOUT_MS) {
       if (now - lastHelloSkipLogMs_ >= 5000UL) { Serial.printf("HELLO skipped: finish link recently active age=%lu\n", static_cast<unsigned long>(finishAge)); lastHelloSkipLogMs_ = now; }
     } else {
-      { const uint32_t blockStartMs = millis(); sendHello(now); loopMonitor_.recordBlock("RadioTx", millis() - blockStartMs); }
+      { const uint32_t blockStartMs = millis(); sendHello(now); loopMonitor_.recordBlock("RadioTx", millis() - blockStartMs, LORA_MAX_TX_DURATION_WARN_MS); }
       lastHelloSentMs_ = now;
       lastDiscoverySentMs_ = now;
       Serial.println("HELLO sent");
@@ -136,7 +142,7 @@ void StartStationApp::loop() {
       nextStartStatusDueMs_ = startStatusEarliestMs_;
       Serial.printf("START STATUS deferred after Finish STATUS until=%lu\n", static_cast<unsigned long>(startStatusEarliestMs_));
     } else {
-      { const uint32_t blockStartMs = millis(); sendStatus(now); loopMonitor_.recordBlock("RadioTx", millis() - blockStartMs); }
+      { const uint32_t blockStartMs = millis(); sendStatus(now); loopMonitor_.recordBlock("RadioTx", millis() - blockStartMs, LORA_MAX_TX_DURATION_WARN_MS); }
       lastStatusSendMs_ = now;
       scheduleNextStartStatus(now);
     }
@@ -145,6 +151,14 @@ void StartStationApp::loop() {
   state_.tickAutoReady(now);
 
   logHeartbeat(now);
+}
+
+void StartStationApp::pollRadioTask() {
+#if ENABLE_LORA
+  const uint32_t blockStartMs = millis();
+  pollRadio();
+  loopMonitor_.recordBlock("RadioPoll", millis() - blockStartMs, LORA_MAX_POLL_DURATION_WARN_MS);
+#endif
 }
 
 void StartStationApp::loopDisplayTask() {
@@ -388,6 +402,11 @@ String StartStationApp::debugStatusJson() const {
   doc["loopMaxGapMs"] = loopMonitor_.maxLoopGapMs();
   doc["lastSlowBlock"] = loopMonitor_.lastSlowBlock();
   doc["lastSlowBlockDurationMs"] = loopMonitor_.lastSlowBlockDurationMs();
+  doc["radioPollLastDurationMs"] = radioPollLastDurationMs_;
+  doc["radioPollMaxDurationMs"] = radioPollMaxDurationMs_;
+  doc["radioRxPacketCount"] = radioRxPacketCount_;
+  doc["radioRxTimeoutCount"] = radioRxTimeoutCount_;
+  doc["radioRxNoPacketCount"] = radioRxNoPacketCount_;
   doc["startButtonLastLatencyMs"] = startButton_.lastPressLatencyMs();
   doc["startButtonMaxLatencyMs"] = startButton_.maxPressLatencyMs();
   doc["finishButtonLastLatencyMs"] = finishButtonLastLatencyMs_;
@@ -500,8 +519,18 @@ void StartStationApp::beginRadio() {
   radio.setSpreadingFactor(7);
   radio.setCodingRate(5);
   radio.setOutputPower(14);
+  radio.setPacketReceivedAction(onRadioPacketReceived);
+  radioPacketReceived = false;
+  const int rxState = radio.startReceive();
+  if (rxState != RADIOLIB_ERR_NONE) {
+    Serial.printf("LoRa startReceive FAIL code=%d\n", rxState);
+    radioReady_ = false;
+    return;
+  }
   Serial.printf("LoRa OK freq=%.1f\n", static_cast<double>(LORA_FREQUENCY_MHZ));
   Serial.println("[BOOT] LoRa OK");
+  Serial.println("LoRa RX mode: non-blocking");
+  Serial.printf("LoRa poll timeout: %ums\n", static_cast<unsigned>(LORA_RX_POLL_TIMEOUT_MS));
 #else
   Serial.println("[BOOT] LoRa init skipped (ENABLE_LORA=0)");
   radioReady_ = false;
@@ -569,10 +598,22 @@ String StartStationApp::startShortHeader() const {
 void StartStationApp::pollRadio() {
 #if ENABLE_LORA
   if (!radioReady_) return;
+  const uint32_t pollStartMs = millis();
+  if (!radioPacketReceived) {
+    radioRxNoPacketCount_ += 1;
+    radioPollLastDurationMs_ = millis() - pollStartMs;
+    if (radioPollLastDurationMs_ > radioPollMaxDurationMs_) radioPollMaxDurationMs_ = radioPollLastDurationMs_;
+    return;
+  }
 
+  radioPacketReceived = false;
   String payload;
-  const int state = radio.receive(payload, 0);
+  const int state = radio.readData(payload);
+  restoreRadioReceiveMode();
+  radioPollLastDurationMs_ = millis() - pollStartMs;
+  if (radioPollLastDurationMs_ > radioPollMaxDurationMs_) radioPollMaxDurationMs_ = radioPollLastDurationMs_;
   if (state == RADIOLIB_ERR_NONE) {
+    radioRxPacketCount_ += 1;
     lastAnyPacketMs_ = millis();
     lastLoRaRaw_ = payload;
     if (lastLoRaRaw_.length() > 96) lastLoRaRaw_ = lastLoRaRaw_.substring(0, 96);
@@ -600,6 +641,10 @@ void StartStationApp::pollRadio() {
       updateFinishLink(message, lastRssi_, lastSnr_);
     }
     handleRadioMessage(message);
+  } else if (state == RADIOLIB_ERR_RX_TIMEOUT) {
+    radioRxTimeoutCount_ += 1;
+  } else {
+    Serial.printf("LORA readData failed code=%d\n", state);
   }
 #else
   (void)this;
@@ -655,6 +700,12 @@ bool StartStationApp::sendRadio(const RadioMessage& message, int* resultCode) {
 
 void StartStationApp::restoreRadioReceiveMode() {
 #if ENABLE_LORA
+  if (!radioReady_) return;
+  radioPacketReceived = false;
+  const int rxState = radio.startReceive();
+  if (rxState != RADIOLIB_ERR_NONE) {
+    Serial.printf("LoRa startReceive restore failed code=%d\n", rxState);
+  }
   yield();
 #endif
 }

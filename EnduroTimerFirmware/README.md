@@ -33,7 +33,7 @@ The current Heltec V3 OLED configuration is fixed in `platformio.ini`:
 - Library: U8g2
 - `ARDUINO_USB_CDC_ON_BOOT=0`
 - `ARDUINO_USB_MODE=0`
-- `FIRMWARE_VERSION=0.18`
+- `FIRMWARE_VERSION=0.19`
 - `STATUS_LED_PIN=35`
 - `STATUS_LED_ACTIVE_LEVEL=1`
 
@@ -55,13 +55,27 @@ The current Heltec V3 OLED configuration is fixed in `platformio.ini`:
 - Firmware version is a manual semantic-like incremental string.
 - Initial version: `0.00`.
 - Each MR/iteration increments the string by `0.01` manually.
-- Current version: `0.18`.
-- The version is configured with `FIRMWARE_VERSION` and has a source fallback of `0.18`.
+- Current version: `0.19`.
+- The version is configured with `FIRMWARE_VERSION` and has a source fallback of `0.19`.
 - Version is shown in OLED headers, Serial boot logs, Web API status, the Web UI status block, compact `STATUS` heartbeat packets (`ver`), non-critical control messages, and the short `v` field on compact critical race packets when it fits.
 
 
 
 
+
+
+## v0.19 non-blocking LoRa RX and loop responsiveness
+
+Firmware v0.19 removes the blocking LoRa receive path that could keep the main loop inside `RadioPoll` for about two seconds. StartStation and FinishStation remain separate firmware applications; Web UI start remains disabled; real E3JK/buzzer/encoder/RFID hardware is still not connected by this smoke-test firmware.
+
+- `FIRMWARE_VERSION` is `0.19`; Serial boot logs show `Version: v0.19`, OLED headers show `START TERM v0.19` and `FINISH TERM v0.19`, and `/api/status.firmwareVersion` reports `0.19`.
+- LoRa RX is initialized in RadioLib non-blocking receive mode with `startReceive()` and an RX interrupt flag. `pollRadio()` immediately returns when no packet flag is set instead of calling a blocking `receive(..., 0)` / long-timeout receive. Boot logs print `LoRa RX mode: non-blocking` and `LoRa poll timeout: 0ms`.
+- `LORA_RX_POLL_TIMEOUT_MS=0` documents that the loop does not wait for packets during radio polling. The normal RadioPoll target is below 5 ms, and `LORA_MAX_POLL_DURATION_WARN_MS=20` emits `WARN slow block name=RadioPoll durationMs=...` if polling exceeds 20 ms. The previous `durationMs=1984` symptom should disappear.
+- StartStation loop ordering keeps the physical button update first, calls WebServer handling before the non-blocking radio poll, and then performs dirty/throttled display rendering. FinishStation samples the finish button before Wi-Fi sync, radio polling, retries, and display work. Button latency above 200 ms remains a diagnostic warning through the button debouncer and debug status fields.
+- `/api/debug/status` includes local radio polling counters: `radioPollLastDurationMs`, `radioPollMaxDurationMs`, `radioRxPacketCount`, `radioRxTimeoutCount`, and `radioRxNoPacketCount`. No-packet loops are counted but not logged each iteration.
+- Slow diagnostics remain active: `RadioPoll` warns above 20 ms, `RadioTx` warns above 300 ms, loop gaps above 200 ms print `WARN loop gap=...ms lastSlowBlock=...`, and OLED render warnings remain above 100 ms.
+- Low-priority LoRa traffic remains rate-limited: FinishStation STATUS is every 5 seconds plus jitter, StartStation Ready STATUS is no more frequent than every 15 seconds plus jitter, and HELLO discovery is no more frequent than every 5 seconds only while the link is inactive.
+- FinishStation HTTP Wi-Fi sync samples use a 300 ms client timeout and wait 2000 ms after a failed sample before retrying; the OLED/status text switches to `SYNC RETRY` instead of retrying the same sample every loop. StartStation `/api/time/race-sync` stays lightweight, sends `Cache-Control: no-store`, and logs handler duration for diagnostics.
 
 ## v0.18 loop latency, OLED hardware I2C, one-at-a-time Wi-Fi sync, and battery output removal
 
@@ -339,9 +353,9 @@ Signal display rules:
 - FinishStation sends a `STATUS` heartbeat with `stationId: "finish"` every 5000 ms plus jitter in all states: `Idle`, externally displayed `Riding`, `FinishSent`, and `Error` / ACK timeout. FINISH retry packets keep priority; if a retry and STATUS would be transmitted in the same millisecond, STATUS is deferred to the next loop.
 - Any valid packet from the opposite station updates link status, not only `STATUS`. StartStation updates the FinishStation link from `STATUS`, `FINISH`, and any other valid `stationId: "finish"` packet. FinishStation updates the StartStation link from `STATUS`, `RUN_START`, `FINISH_ACK`, and any other valid `stationId: "start"` packet.
 - Every received LoRa packet logs `LORA RX type=... rssi=... snr=... raw=...`; valid opposite-station packets also log `LORA RX from=... type=... rssi=... snr=... age=0 count=...`. JSON parse failures, missing `stationId`, and unknown `type` are logged explicitly with the raw packet.
-- After every LoRa TX (`HELLO`, `HELLO_ACK`, `STATUS`, `RUN_START`, `RUN_START_ACK`, `FINISH`, or `FINISH_ACK`), the firmware yields briefly, waits 1 ms for SX1262 settle, and then lets the next polling `receive()` re-enter receive/listen mode after the short blocking transmit. Serial prints `LoRa RX mode restored` after every transmit; FinishStation STATUS is sent every five seconds plus jitter; StartStation STATUS is slower in Ready/Idle, and each STATUS heartbeat is logged.
+- After every LoRa TX (`HELLO`, `HELLO_ACK`, `STATUS`, `RUN_START`, `RUN_START_ACK`, `FINISH`, or `FINISH_ACK`), the firmware restores RadioLib non-blocking receive mode with `startReceive()` and prints `LoRa RX mode restored`. FinishStation STATUS is sent every five seconds plus jitter; StartStation STATUS is slower in Ready/Idle, and each STATUS heartbeat is logged.
 - `STATUS payload len=...` is logged for heartbeat diagnostics and whenever a STATUS payload exceeds 180 bytes. STATUS packets are serialized in a compact JSON form to keep the LoRa payload small while remaining accepted by the same deserializer.
-- StartStation and FinishStation include `version: "0.12"` and a per-boot `bootId` in `RUN_START`, `RUN_START_ACK`, `FINISH`, `FINISH_ACK`, `HELLO`, and `HELLO_ACK` payloads. Compact `STATUS` includes `ver` and `bid` for version and boot diagnostics.
+- StartStation and FinishStation include the current firmware `version` and a per-boot `bootId` in `RUN_START`, `RUN_START_ACK`, `FINISH`, `FINISH_ACK`, `HELLO`, and `HELLO_ACK` payloads. Compact `STATUS` includes `ver` and `bid` for version and boot diagnostics.
 - FinishStation includes only compact numeric reverse-link fields (`sr`, `ss`, and optionally `sa`) in `STATUS`; StartStation combines those values with local link state for `/api/status`.
 
 

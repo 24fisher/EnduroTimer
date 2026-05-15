@@ -64,7 +64,14 @@ bool WebServerController::begin() {
     if (durationMs > 100UL) Serial.printf("WARN slow block name=WebDebugStatusJson durationMs=%lu\n", static_cast<unsigned long>(durationMs));
     sendJson(200, body);
   });
-  server_.on("/api/time/race-sync", HTTP_GET, [this]() { sendJson(200, app_.raceSyncJson()); });
+  server_.on("/api/time/race-sync", HTTP_GET, [this]() {
+    const uint32_t startMs = millis();
+    String body = app_.raceSyncJson();
+    const uint32_t durationMs = millis() - startMs;
+    Serial.printf("HTTP /api/time/race-sync durationMs=%lu\n", static_cast<unsigned long>(durationMs));
+    if (durationMs > 20UL) Serial.printf("WARN slow block name=RaceSyncJson durationMs=%lu\n", static_cast<unsigned long>(durationMs));
+    sendJson(200, body);
+  });
   server_.on("/api/finish/sync-status", HTTP_POST, [this]() {
     const String body = server_.arg("plain");
     Serial.printf("HTTP POST /api/finish/sync-status body=%s\n", body.c_str());
