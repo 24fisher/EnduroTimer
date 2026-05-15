@@ -82,6 +82,9 @@ void loop() {
 #if ENABLE_WIFI && ENABLE_WEB
   web.loop();
 #endif
+#if ENABLE_LORA
+  app.pollRadioTask();
+#endif
   app.loopDisplayTask();
   yield();
 }

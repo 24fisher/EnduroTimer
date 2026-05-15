@@ -1,9 +1,21 @@
 #pragma once
 
 #ifndef FIRMWARE_VERSION
-#define FIRMWARE_VERSION "0.18"
+#define FIRMWARE_VERSION "0.19"
 #endif
 
 #ifndef ENABLE_LORA_TIME_SYNC
 #define ENABLE_LORA_TIME_SYNC 0
+#endif
+
+#ifndef LORA_RX_POLL_TIMEOUT_MS
+#define LORA_RX_POLL_TIMEOUT_MS 0
+#endif
+
+#ifndef LORA_MAX_POLL_DURATION_WARN_MS
+#define LORA_MAX_POLL_DURATION_WARN_MS 20
+#endif
+
+#ifndef LORA_MAX_TX_DURATION_WARN_MS
+#define LORA_MAX_TX_DURATION_WARN_MS 300
 #endif

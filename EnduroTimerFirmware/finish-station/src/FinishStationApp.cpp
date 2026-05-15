@@ -30,6 +30,13 @@ static constexpr uint8_t WIFI_SYNC_SAMPLE_COUNT = 5;
 RTC_DATA_ATTR static uint32_t finishBootCounter = 0;
 #if ENABLE_LORA
 static SX1262 radio = new Module(LORA_NSS, LORA_DIO1, LORA_RST, LORA_BUSY);
+namespace {
+volatile bool radioPacketReceived = false;
+
+void IRAM_ATTR onRadioPacketReceived() {
+  radioPacketReceived = true;
+}
+}  // namespace
 #endif
 
 void FinishStationApp::begin() {
@@ -39,6 +46,8 @@ void FinishStationApp::begin() {
   Serial.println("Version: v" FIRMWARE_VERSION);
   Serial.println("Build: " __DATE__ " " __TIME__);
   Serial.println("Board/role: Heltec WiFi LoRa 32 V3 / FinishStation");
+  Serial.println("LoRa RX mode: non-blocking");
+  Serial.printf("LoRa poll timeout: %ums\n", static_cast<unsigned>(LORA_RX_POLL_TIMEOUT_MS));
   bootId_ = makeBootId("finish");
   Serial.printf("Boot counter: %lu\n", static_cast<unsigned long>(finishBootCounter));
   Serial.printf("BootId: %s\n", bootId_.c_str());
@@ -88,7 +97,7 @@ void FinishStationApp::loop() {
   updateLed(now);
   { const uint32_t blockStartMs = millis(); updateWifiSync(now); loopMonitor_.recordBlock("WiFiConnect", millis() - blockStartMs); }
 #if ENABLE_LORA
-  { const uint32_t blockStartMs = millis(); pollRadio(); loopMonitor_.recordBlock("RadioPoll", millis() - blockStartMs); }
+  { const uint32_t blockStartMs = millis(); pollRadio(); loopMonitor_.recordBlock("RadioPoll", millis() - blockStartMs, LORA_MAX_POLL_DURATION_WARN_MS); }
 #endif
 #if ENABLE_LORA_TIME_SYNC
   if (syncInProgress_ && syncReadyUntilMs_ > 0 && now > syncReadyUntilMs_ && !raceClock_.isSynced()) {
@@ -104,7 +113,7 @@ void FinishStationApp::loop() {
   bool prioritySentThisCycle = false;
   if (!finishAckReceived_ && state_.state() == FinishRunState::FinishSent && finishAttempts_ < FINISH_MAX_RETRY_ATTEMPTS &&
       now - lastFinishSendMs_ >= FINISH_RETRY_INTERVAL_MS) {
-    { const uint32_t blockStartMs = millis(); sendFinish(); loopMonitor_.recordBlock("RadioTx", millis() - blockStartMs); }
+    { const uint32_t blockStartMs = millis(); sendFinish(); loopMonitor_.recordBlock("RadioTx", millis() - blockStartMs, LORA_MAX_TX_DURATION_WARN_MS); }
     prioritySentThisCycle = true;
   }
 
@@ -119,17 +128,19 @@ void FinishStationApp::loop() {
     if (priorityPending) {
       Serial.println("TX deferred HELLO because priority message pending");
     } else {
-      { const uint32_t blockStartMs = millis(); sendHello(now); loopMonitor_.recordBlock("RadioTx", millis() - blockStartMs); }
+      { const uint32_t blockStartMs = millis(); sendHello(now); loopMonitor_.recordBlock("RadioTx", millis() - blockStartMs, LORA_MAX_TX_DURATION_WARN_MS); }
       lastDiscoverySentMs_ = now;
     }
   }
 
   if (nextFinishStatusDueMs_ > 0 && now >= nextFinishStatusDueMs_) {
-    if (priorityPending) {
+    if (!syncDoneOnce_) {
+      nextFinishStatusDueMs_ = now + 1000UL;
+    } else if (priorityPending) {
       Serial.println("TX deferred STATUS because priority message pending");
       nextFinishStatusDueMs_ = now + 500UL;
     } else {
-      { const uint32_t blockStartMs = millis(); sendStatus(now); loopMonitor_.recordBlock("RadioTx", millis() - blockStartMs); }
+      { const uint32_t blockStartMs = millis(); sendStatus(now); loopMonitor_.recordBlock("RadioTx", millis() - blockStartMs, LORA_MAX_TX_DURATION_WARN_MS); }
       lastStatusMs_ = now;
       nextFinishStatusDueMs_ = now + FINISH_STATUS_INTERVAL_MS + static_cast<uint32_t>(random(0, 301));
     }
@@ -207,6 +218,11 @@ void FinishStationApp::updateWifiSync(uint32_t nowMs) {
     wifiSyncSampleIndex_ = 0;
     bestWifiSyncRttMs_ = UINT32_MAX;
     nextWifiSyncAttemptMs_ = nowMs + WIFI_SYNC_RETRY_DELAY_MS;
+    syncStatusText_ = "SYNC RETRY";
+    wifiStatusText_ = "SYNC RETRY";
+#if ENABLE_OLED
+    if (!display_.testPatternOnly()) display_.showLines({finishHeader(), "SYNC RETRY", startSignalText()});
+#endif
     return;
   }
 
@@ -343,8 +359,18 @@ void FinishStationApp::beginRadio() {
   radio.setSpreadingFactor(7);
   radio.setCodingRate(5);
   radio.setOutputPower(14);
+  radio.setPacketReceivedAction(onRadioPacketReceived);
+  radioPacketReceived = false;
+  const int rxState = radio.startReceive();
+  if (rxState != RADIOLIB_ERR_NONE) {
+    Serial.printf("LoRa startReceive FAIL code=%d\n", rxState);
+    radioReady_ = false;
+    return;
+  }
   Serial.printf("LoRa OK freq=%.1f\n", static_cast<double>(LORA_FREQUENCY_MHZ));
   Serial.println("[BOOT] LoRa OK");
+  Serial.println("LoRa RX mode: non-blocking");
+  Serial.printf("LoRa poll timeout: %ums\n", static_cast<unsigned>(LORA_RX_POLL_TIMEOUT_MS));
 #else
   Serial.println("[BOOT] LoRa init skipped (ENABLE_LORA=0)");
   radioReady_ = false;
@@ -387,10 +413,22 @@ String FinishStationApp::startSignalText() const {
 void FinishStationApp::pollRadio() {
 #if ENABLE_LORA
   if (!radioReady_) return;
+  const uint32_t pollStartMs = millis();
+  if (!radioPacketReceived) {
+    radioRxNoPacketCount_ += 1;
+    radioPollLastDurationMs_ = millis() - pollStartMs;
+    if (radioPollLastDurationMs_ > radioPollMaxDurationMs_) radioPollMaxDurationMs_ = radioPollLastDurationMs_;
+    return;
+  }
 
+  radioPacketReceived = false;
   String payload;
-  const int rxState = radio.receive(payload, 0);
+  const int rxState = radio.readData(payload);
+  restoreRadioReceiveMode();
+  radioPollLastDurationMs_ = millis() - pollStartMs;
+  if (radioPollLastDurationMs_ > radioPollMaxDurationMs_) radioPollMaxDurationMs_ = radioPollLastDurationMs_;
   if (rxState == RADIOLIB_ERR_NONE) {
+    radioRxPacketCount_ += 1;
     lastAnyPacketMs_ = millis();
     lastLoRaRaw_ = payload;
     if (lastLoRaRaw_.length() > 96) lastLoRaRaw_ = lastLoRaRaw_.substring(0, 96);
@@ -418,6 +456,10 @@ void FinishStationApp::pollRadio() {
       updateStartLink(message, lastRssi_, lastSnr_);
     }
     handleRadioMessage(message);
+  } else if (rxState == RADIOLIB_ERR_RX_TIMEOUT) {
+    radioRxTimeoutCount_ += 1;
+  } else {
+    Serial.printf("LORA readData failed code=%d\n", rxState);
   }
 #else
   (void)this;
@@ -473,6 +515,12 @@ bool FinishStationApp::sendRadio(const RadioMessage& message, int* resultCode) {
 
 void FinishStationApp::restoreRadioReceiveMode() {
 #if ENABLE_LORA
+  if (!radioReady_) return;
+  radioPacketReceived = false;
+  const int rxState = radio.startReceive();
+  if (rxState != RADIOLIB_ERR_NONE) {
+    Serial.printf("LoRa startReceive restore failed code=%d\n", rxState);
+  }
   yield();
 #endif
 }
@@ -549,7 +597,7 @@ void FinishStationApp::sendHelloAck(uint32_t nowMs) {
 
 bool FinishStationApp::discoveryActive() const {
   const bool activeRun = state_.isRiding() || state_.state() == FinishRunState::FinishSent || state_.state() == FinishRunState::AckTimeout;
-  return !activeRun && !syncInProgress_ && !isLinkActive(startLink_) && linkAgeMs(startLink_) >= LINK_TIMEOUT_MS;
+  return syncDoneOnce_ && !activeRun && !syncInProgress_ && !isLinkActive(startLink_) && linkAgeMs(startLink_) >= LINK_TIMEOUT_MS;
 }
 
 bool FinishStationApp::priorityTxPending(uint32_t nowMs) const {
