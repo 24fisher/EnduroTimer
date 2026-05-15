@@ -29,7 +29,7 @@ public:
     if (reading != lastReading_) {
       if (isPressedReading(reading)) {
         lastRawPressedMs_ = nowMs;
-        Serial.printf("BUTTON raw pressed pin=%u at ms=%lu\n", pin_, static_cast<unsigned long>(nowMs));
+        Serial.printf("BUTTON raw pressed at ms=%lu pin=%u\n", static_cast<unsigned long>(nowMs), pin_);
       } else {
         Serial.printf("BUTTON raw released pin=%u at ms=%lu\n", pin_, static_cast<unsigned long>(nowMs));
       }
@@ -48,7 +48,7 @@ public:
         lastDebouncedPressedMs_ = nowMs;
         lastPressLatencyMs_ = lastRawPressedMs_ > 0 ? nowMs - lastRawPressedMs_ : 0;
         if (lastPressLatencyMs_ > maxPressLatencyMs_) maxPressLatencyMs_ = lastPressLatencyMs_;
-        Serial.printf("BUTTON short press pin=%u latencyMs=%lu\n", pin_, static_cast<unsigned long>(lastPressLatencyMs_));
+        Serial.printf("BUTTON short press latencyMs=%lu pin=%u\n", static_cast<unsigned long>(lastPressLatencyMs_), pin_);
         if (lastPressLatencyMs_ > 200UL) {
           Serial.printf("WARN button debounce latency too high latencyMs=%lu\n", static_cast<unsigned long>(lastPressLatencyMs_));
         }

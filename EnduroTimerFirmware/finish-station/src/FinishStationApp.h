@@ -115,6 +115,7 @@ private:
   uint32_t bestWifiSyncRttMs_ = UINT32_MAX;
   int32_t bestWifiSyncOffsetMs_ = 0;
   String startHttpBootId_ = "";
+  bool pendingSyncStatusPost_ = false;
   String wifiStatusText_ = "WIFI SEARCH";
   uint32_t showNoRunUntilMs_ = 0;
   uint32_t showAckOkUntilMs_ = 0;

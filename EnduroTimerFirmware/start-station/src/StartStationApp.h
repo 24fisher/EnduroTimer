@@ -51,6 +51,7 @@ class StartStationApp {
 public:
   void begin();
   void loop();
+  void loopDisplayTask();
   void beginRadio();
 
   bool requestStartRun(String& error);
@@ -224,9 +225,6 @@ private:
   int timezoneOffsetMinutes_ = 0;
   String lastTimeSyncText_ = "";
   String timeSource_ = "NONE";
-  bool finishBatteryAvailable_ = false;
-  float finishBatteryVoltage_ = 0.0F;
-  int finishBatteryPercent_ = -1;
   uint32_t finishLocalRunStartReceivedMillis_ = 0;
   uint32_t finishLocalElapsedMs_ = 0;
   uint32_t finishRemoteStartTimestampMs_ = 0;

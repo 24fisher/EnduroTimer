@@ -75,10 +75,10 @@ void StartStationApp::begin() {
 void StartStationApp::loop() {
   const uint32_t now = clock_.nowMs();
   loopMonitor_.tick(now);
-  updateButton(now);
+  { const uint32_t blockStartMs = millis(); updateButton(now); loopMonitor_.recordBlock("Button", millis() - blockStartMs); }
   updateLed(now);
 #if ENABLE_LORA
-  pollRadio();
+  { const uint32_t blockStartMs = millis(); pollRadio(); loopMonitor_.recordBlock("RadioPoll", millis() - blockStartMs); }
 #endif
 #if ENABLE_LORA_TIME_SYNC
   updateSync(now);
@@ -99,7 +99,7 @@ void StartStationApp::loop() {
     runStartAckTimedOut_ = false;
     runStartAckAttempts_ = 0;
     lastRunStartAckMs_ = 0;
-    sendRunStart(runToStart);
+    { const uint32_t blockStartMs = millis(); sendRunStart(runToStart); loopMonitor_.recordBlock("RadioTx", millis() - blockStartMs); }
     lastPriorityTxMs_ = now;
   }
 
@@ -120,7 +120,7 @@ void StartStationApp::loop() {
     } else if (finishAge < LINK_TIMEOUT_MS) {
       if (now - lastHelloSkipLogMs_ >= 5000UL) { Serial.printf("HELLO skipped: finish link recently active age=%lu\n", static_cast<unsigned long>(finishAge)); lastHelloSkipLogMs_ = now; }
     } else {
-      sendHello(now);
+      { const uint32_t blockStartMs = millis(); sendHello(now); loopMonitor_.recordBlock("RadioTx", millis() - blockStartMs); }
       lastHelloSentMs_ = now;
       lastDiscoverySentMs_ = now;
       Serial.println("HELLO sent");
@@ -136,7 +136,7 @@ void StartStationApp::loop() {
       nextStartStatusDueMs_ = startStatusEarliestMs_;
       Serial.printf("START STATUS deferred after Finish STATUS until=%lu\n", static_cast<unsigned long>(startStatusEarliestMs_));
     } else {
-      sendStatus(now);
+      { const uint32_t blockStartMs = millis(); sendStatus(now); loopMonitor_.recordBlock("RadioTx", millis() - blockStartMs); }
       lastStatusSendMs_ = now;
       scheduleNextStartStatus(now);
     }
@@ -144,18 +144,21 @@ void StartStationApp::loop() {
 
   state_.tickAutoReady(now);
 
+  logHeartbeat(now);
+}
+
+void StartStationApp::loopDisplayTask() {
 #if ENABLE_OLED
+  const uint32_t now = clock_.nowMs();
   display_.update();
   if (!display_.testPatternOnly() && now - lastDisplayMs_ >= DisplayRefreshMs) {
     const uint32_t displayStartMs = millis();
     updateDisplay();
     const uint32_t displayDurationMs = millis() - displayStartMs;
-    if (displayDurationMs > 100UL) Serial.printf("WARN OLED render slow durationMs=%lu\n", static_cast<unsigned long>(displayDurationMs));
+    loopMonitor_.recordBlock("OLED", displayDurationMs);
     lastDisplayMs_ = now;
   }
 #endif
-
-  logHeartbeat(now);
 }
 
 bool StartStationApp::requestStartRun(String& error) {
@@ -383,19 +386,14 @@ String StartStationApp::debugStatusJson() const {
   doc["runStartAckTimeout"] = runStartAckTimedOut_;
   doc["loopLastGapMs"] = loopMonitor_.lastLoopGapMs();
   doc["loopMaxGapMs"] = loopMonitor_.maxLoopGapMs();
+  doc["lastSlowBlock"] = loopMonitor_.lastSlowBlock();
+  doc["lastSlowBlockDurationMs"] = loopMonitor_.lastSlowBlockDurationMs();
   doc["startButtonLastLatencyMs"] = startButton_.lastPressLatencyMs();
   doc["startButtonMaxLatencyMs"] = startButton_.maxPressLatencyMs();
   doc["finishButtonLastLatencyMs"] = finishButtonLastLatencyMs_;
   doc["finishButtonMaxLatencyMs"] = finishButtonMaxLatencyMs_;
   doc["finishLoopLastGapMs"] = finishLoopLastGapMs_;
   doc["finishLoopMaxGapMs"] = finishLoopMaxGapMs_;
-  const BatteryStatus startBattery = battery_.read();
-  doc["startBatteryAvailable"] = startBattery.available;
-  doc["startBatteryVoltage"] = startBattery.available ? startBattery.voltage : 0.0F;
-  doc["startBatteryPercent"] = startBattery.percent;
-  doc["finishBatteryAvailable"] = finishBatteryAvailable_;
-  doc["finishBatteryVoltage"] = finishBatteryVoltage_;
-  doc["finishBatteryPercent"] = finishBatteryPercent_;
   String output;
   serializeJson(doc, output);
   return output;
@@ -977,9 +975,6 @@ void StartStationApp::handleRadioMessage(const RadioMessage& message) {
     finishRaceClockSynced_ = message.raceClockSynced;
     finishRaceClockOffsetMs_ = message.offsetToMasterMs;
     if (message.syncAccuracyMs > 0) syncAccuracyMs_ = message.syncAccuracyMs;
-    finishBatteryAvailable_ = message.hasBatteryVoltage;
-    finishBatteryVoltage_ = message.batteryVoltage;
-    finishBatteryPercent_ = message.batteryPercent;
     finishLocalRunStartReceivedMillis_ = message.localRunStartReceivedMillis;
     finishLocalElapsedMs_ = message.finishLocalElapsedMs;
     finishRemoteStartTimestampMs_ = message.remoteStartTimestampMs;
@@ -1164,10 +1159,7 @@ void StartStationApp::updateDisplay() {
   }
 
   if (state_.state() == StartRunState::Riding) {
-    String anim = String("RIDING ");
-    for (uint8_t i = 0; i < ridingAnimationFrame(); ++i) anim += " ";
-    anim += ">";
-    display_.showLines({startHeader(), anim, fin, formatDurationMs(raceClock_.nowRaceMs() - current.raceStartTimeMs).substring(0, 5)});
+    display_.showLines({startHeader(), "RIDING", formatDurationMs(raceClock_.nowRaceMs() - current.raceStartTimeMs).substring(0, 5), fin});
     return;
   }
 
@@ -1177,7 +1169,7 @@ void StartStationApp::updateDisplay() {
   }
 
   if (!finishRaceClockSynced_ || !finishSyncDoneOnce_) {
-    display_.showLines({startHeader(), wifiApStarted_ ? String("AP EnduroTimer") : String("AP STARTING"), "WAIT FINISH", "WIFI SYNC"});
+    display_.showLines({startHeader(), "WAIT FINISH", "WIFI SYNC", fin});
     return;
   }
 
@@ -1194,7 +1186,7 @@ String StartStationApp::finishSignalText() const {
 }
 
 String StartStationApp::finishReportedStartSignalText() const {
-  return (hasFinishReportedStartSignal_ && finishReportedStartLinkActive_) ? String(finishReportedStartRssi_) + " dBm" : String("NO SIGNAL");
+  return (hasFinishReportedStartSignal_ && finishReportedStartLinkActive_) ? String(finishReportedStartRssi_) + "dBm" : String("NO SIGNAL");
 }
 
 uint8_t StartStationApp::ridingAnimationFrame() const {

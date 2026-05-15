@@ -50,8 +50,20 @@ bool WebServerController::begin() {
     if (!serveStaticFile("/index.html")) sendFallbackIndex();
   });
 
-  server_.on("/api/status", HTTP_GET, [this]() { sendJson(200, app_.statusJson()); });
-  server_.on("/api/debug/status", HTTP_GET, [this]() { sendJson(200, app_.debugStatusJson()); });
+  server_.on("/api/status", HTTP_GET, [this]() {
+    const uint32_t startMs = millis();
+    String body = app_.statusJson();
+    const uint32_t durationMs = millis() - startMs;
+    if (durationMs > 100UL) Serial.printf("WARN slow block name=WebStatusJson durationMs=%lu\n", static_cast<unsigned long>(durationMs));
+    sendJson(200, body);
+  });
+  server_.on("/api/debug/status", HTTP_GET, [this]() {
+    const uint32_t startMs = millis();
+    String body = app_.debugStatusJson();
+    const uint32_t durationMs = millis() - startMs;
+    if (durationMs > 100UL) Serial.printf("WARN slow block name=WebDebugStatusJson durationMs=%lu\n", static_cast<unsigned long>(durationMs));
+    sendJson(200, body);
+  });
   server_.on("/api/time/race-sync", HTTP_GET, [this]() { sendJson(200, app_.raceSyncJson()); });
   server_.on("/api/finish/sync-status", HTTP_POST, [this]() {
     const String body = server_.arg("plain");
@@ -111,7 +123,13 @@ bool WebServerController::begin() {
     sendJson(200, output);
   });
 
-  server_.on("/api/runs", HTTP_GET, [this]() { sendJson(200, app_.runsJson()); });
+  server_.on("/api/runs", HTTP_GET, [this]() {
+    const uint32_t startMs = millis();
+    String body = app_.runsJson();
+    const uint32_t durationMs = millis() - startMs;
+    if (durationMs > 100UL) Serial.printf("WARN slow block name=WebRunsJson durationMs=%lu\n", static_cast<unsigned long>(durationMs));
+    sendJson(200, body);
+  });
   server_.on("/api/export/runs.csv", HTTP_GET, [this]() { sendCsv(app_.runsCsv()); });
   server_.on("/api/riders", HTTP_GET, [this]() { sendJson(200, app_.ridersJson()); });
   server_.on("/api/trails", HTTP_GET, [this]() { sendJson(200, app_.trailsJson()); });
@@ -217,7 +235,10 @@ bool WebServerController::begin() {
 }
 
 void WebServerController::loop() {
+  const uint32_t startMs = millis();
   server_.handleClient();
+  const uint32_t durationMs = millis() - startMs;
+  if (durationMs > 100UL) Serial.printf("WARN slow block name=WebHandleClient durationMs=%lu\n", static_cast<unsigned long>(durationMs));
 }
 
 void WebServerController::sendJson(int code, const String& body) {
