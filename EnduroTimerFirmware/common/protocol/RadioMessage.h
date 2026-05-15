@@ -70,6 +70,10 @@ struct RadioMessage {
   uint32_t startLastSeenAgoMs = 0;
   bool startLinkActive = false;
   uint32_t startPacketCount = 0;
+  uint32_t loopLastGapMs = 0;
+  uint32_t loopMaxGapMs = 0;
+  uint32_t buttonLastLatencyMs = 0;
+  uint32_t buttonMaxLatencyMs = 0;
   bool hasFinishRssi = false;
   int finishRssi = 0;
   bool hasFinishSnr = false;

@@ -13,6 +13,7 @@
 #include "LedIndicator.h"
 #include "TimeUtils.h"
 #include "RaceClock.h"
+#include "LoopMonitor.h"
 
 class FinishStationApp {
 public:
@@ -23,7 +24,7 @@ private:
   void beginRadio();
   void updateLed(uint32_t nowMs);
   String finishHeader() const;
-  String batteryText(const BatteryStatus& status) const;
+  String startSignalText() const;
   void pollRadio();
   bool sendRadio(const RadioMessage& message, int* resultCode = nullptr);
   void restoreRadioReceiveMode();
@@ -58,6 +59,7 @@ private:
   ClockService clock_;
   RaceClock raceClock_;
   BatteryService battery_;
+  LoopMonitor loopMonitor_;
   OledDisplay display_;
   BuzzerStub buzzer_;
   LedIndicator led_;

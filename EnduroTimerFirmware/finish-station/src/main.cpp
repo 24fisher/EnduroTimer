@@ -23,7 +23,7 @@ void setup() {
 void loop() {
   static uint32_t lastLog = 0;
   const uint32_t now = millis();
-  if (now - lastLog > 1000UL) {
+  if (now - lastLog > 5000UL) {
     lastLog = now;
     Serial.print("APP alive ms=");
     Serial.println(now);

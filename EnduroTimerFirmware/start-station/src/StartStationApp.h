@@ -15,6 +15,7 @@
 #include "StartState.h"
 #include "TimeUtils.h"
 #include "RaceClock.h"
+#include "LoopMonitor.h"
 
 #ifndef START_BUTTON_PIN
 #define START_BUTTON_PIN 0
@@ -57,6 +58,7 @@ public:
   void setWifiStatus(bool apStarted, const IPAddress& ip, const String& mac);
   void setWebStatus(bool webStarted);
   String statusJson() const;
+  String debugStatusJson() const;
   String runsJson() const;
   String ridersJson() const;
   String trailsJson() const;
@@ -129,11 +131,11 @@ private:
   uint64_t currentEpochMs() const;
   String currentTimeText() const;
   String formatEpochLocal(uint64_t epochMs) const;
-  String batteryText(const BatteryStatus& status) const;
 
   ClockService clock_;
   RaceClock raceClock_;
   BatteryService battery_;
+  LoopMonitor loopMonitor_;
   OledDisplay display_;
   BuzzerStub buzzer_;
   LedIndicator led_;
@@ -228,4 +230,8 @@ private:
   uint32_t finishLocalRunStartReceivedMillis_ = 0;
   uint32_t finishLocalElapsedMs_ = 0;
   uint32_t finishRemoteStartTimestampMs_ = 0;
+  uint32_t finishLoopLastGapMs_ = 0;
+  uint32_t finishLoopMaxGapMs_ = 0;
+  uint32_t finishButtonLastLatencyMs_ = 0;
+  uint32_t finishButtonMaxLatencyMs_ = 0;
 };
