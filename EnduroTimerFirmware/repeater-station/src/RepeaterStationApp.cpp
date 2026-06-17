@@ -107,7 +107,10 @@ bool RepeaterStationApp::seenRecently(const String& mid, uint32_t nowMs) {
 }
 
 void RepeaterStationApp::remember(const String& mid, uint32_t nowMs) {
-  seen_[seenCursor_] = {mid, nowMs};
+  SeenMessage seen;
+  seen.mid = mid;
+  seen.seenMs = nowMs;
+  seen_[seenCursor_] = seen;
   seenCursor_ = (seenCursor_ + 1) % seen_.size();
 }
 
@@ -150,7 +153,13 @@ bool RepeaterStationApp::enqueueRelay(const String& payload, const String& mid, 
   }
   const int slot = freeSlot >= 0 ? freeSlot : lowSlot;
   if (slot < 0) { queueDrops_ += 1; Serial.printf("relay queue drop mid=%s\n", mid.c_str()); return false; }
-  queue_[slot] = {payload, mid, priority, hop, millis()};
+  RelayPacket packet;
+  packet.payload = payload;
+  packet.mid = mid;
+  packet.priority = priority;
+  packet.hop = hop;
+  packet.enqueueMs = millis();
+  queue_[slot] = packet;
   Serial.printf("queued relay mid=%s\n", mid.c_str());
   return true;
 }
