@@ -22,6 +22,7 @@ struct LinkStatus {
   uint32_t remoteRebootCount = 0;
   uint32_t lastBootIdChangeMs = 0;
   bool remoteRebootDetected = false;
+  bool viaRepeater = false;
 };
 
 inline bool isLinkActive(const LinkStatus& link) {

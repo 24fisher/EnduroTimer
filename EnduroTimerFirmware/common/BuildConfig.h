@@ -1,7 +1,7 @@
 #pragma once
 
 #ifndef FIRMWARE_VERSION
-#define FIRMWARE_VERSION "0.23"
+#define FIRMWARE_VERSION "0.24"
 #endif
 
 #ifndef ENABLE_LORA_TIME_SYNC
@@ -18,4 +18,20 @@
 
 #ifndef LORA_MAX_TX_DURATION_WARN_MS
 #define LORA_MAX_TX_DURATION_WARN_MS 300
+#endif
+
+#ifndef LORA_BANDWIDTH_KHZ
+#define LORA_BANDWIDTH_KHZ 125.0
+#endif
+
+#ifndef LORA_SPREADING_FACTOR
+#define LORA_SPREADING_FACTOR 10
+#endif
+
+#ifndef LORA_CODING_RATE
+#define LORA_CODING_RATE 5
+#endif
+
+#ifndef LORA_TX_POWER_DBM
+#define LORA_TX_POWER_DBM 14
 #endif

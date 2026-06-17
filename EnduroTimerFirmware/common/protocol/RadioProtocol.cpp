@@ -6,12 +6,14 @@ namespace {
 String compactStationId(const String& stationId) {
   if (stationId == "start" || stationId == "s") return "s";
   if (stationId == "finish" || stationId == "f") return "f";
+  if (stationId == "repeater" || stationId == "r") return "r";
   return stationId;
 }
 
 String fullStationId(const String& stationId) {
   if (stationId == "s") return "start";
   if (stationId == "f") return "finish";
+  if (stationId == "r") return "repeater";
   return stationId;
 }
 
@@ -24,6 +26,28 @@ String compactState(const String& state) {
   if (state == "AckTimeout" || state == "A") return "A";
   if (state == "Error" || state == "E") return "E";
   return state;
+}
+
+String routingSrcFor(const RadioMessage& message) {
+  if (message.src.length() > 0) return compactStationId(message.src);
+  return compactStationId(message.stationId);
+}
+
+String routingDstFor(const RadioMessage& message) {
+  if (message.dst.length() > 0) return compactStationId(message.dst);
+  const String src = routingSrcFor(message);
+  if (src == "s") return "f";
+  if (src == "f") return "s";
+  return "*";
+}
+
+void addRouting(JsonDocument& doc, const RadioMessage& message) {
+  if (message.messageId.length() > 0) doc["mid"] = message.messageId;
+  doc["src"] = routingSrcFor(message);
+  doc["dst"] = routingDstFor(message);
+  doc["hop"] = message.hop;
+  doc["mh"] = message.maxHops > 0 ? message.maxHops : 2;
+  if (message.via.length() > 0) doc["via"] = compactStationId(message.via);
 }
 
 String fullState(const String& state) {
@@ -87,6 +111,7 @@ RadioMessageType RadioProtocol::typeFromString(const String& type) {
 bool RadioProtocol::serializeCompactStatus(const RadioMessage& message, String& output) {
   JsonDocument doc;
   doc["t"] = "S";
+  addRouting(doc, message);
   doc["sid"] = compactStationId(message.stationId);
   if (message.version.length() > 0) doc["ver"] = message.version;
   if (message.bootId.length() > 0) doc["bid"] = message.bootId;
@@ -116,6 +141,7 @@ bool RadioProtocol::serializeCompactStatus(const RadioMessage& message, String& 
 bool RadioProtocol::serializeEmergencyStatus(const RadioMessage& message, String& output) {
   JsonDocument doc;
   doc["t"] = "S";
+  addRouting(doc, message);
   doc["sid"] = compactStationId(message.stationId);
   if (message.version.length() > 0) doc["ver"] = message.version;
   if (message.bootId.length() > 0) doc["bid"] = message.bootId;
@@ -134,39 +160,35 @@ bool RadioProtocol::serialize(const RadioMessage& message, String& output) {
   switch (message.type) {
     case RadioMessageType::RunStart:
       doc["t"] = "RS";
-      doc["sid"] = compactStationId(message.stationId);
+      addRouting(doc, message);
       if (message.runId.length() > 0) doc["rid"] = message.runId;
       if (message.runNumber > 0) doc["rn"] = message.runNumber;
       if (message.raceStartTimeMs > 0) doc["rs"] = message.raceStartTimeMs;
-      if (message.version.length() > 0) doc["v"] = message.version;
       output = "";
       return serializeJson(doc, output) > 0;
     case RadioMessageType::RunStartAck:
       doc["t"] = "RSA";
-      doc["sid"] = compactStationId(message.stationId);
+      addRouting(doc, message);
       if (message.runId.length() > 0) doc["rid"] = message.runId;
       if (message.runNumber > 0) doc["rn"] = message.runNumber;
       if (message.state.length() > 0) doc["st"] = compactState(message.state);
-      if (message.version.length() > 0) doc["v"] = message.version;
       output = "";
       return serializeJson(doc, output) > 0;
     case RadioMessageType::Finish:
       doc["t"] = "F";
-      doc["sid"] = compactStationId(message.stationId);
+      addRouting(doc, message);
       if (message.runId.length() > 0) doc["rid"] = message.runId;
       if (message.runNumber > 0) doc["rn"] = message.runNumber;
       if (message.finishRaceTimeMs > 0) doc["fr"] = message.finishRaceTimeMs;
       if (message.resultMs > 0) doc["res"] = message.resultMs;
-      if (message.version.length() > 0) doc["v"] = message.version;
       output = "";
       return serializeJson(doc, output) > 0;
     case RadioMessageType::FinishAck:
       doc["t"] = "FA";
-      doc["sid"] = compactStationId(message.stationId);
+      addRouting(doc, message);
       if (message.runId.length() > 0) doc["rid"] = message.runId;
       if (message.runNumber > 0) doc["rn"] = message.runNumber;
       if (message.resultMs > 0) doc["res"] = message.resultMs;
-      if (message.version.length() > 0) doc["v"] = message.version;
       output = "";
       return serializeJson(doc, output) > 0;
     default:
@@ -175,6 +197,11 @@ bool RadioProtocol::serialize(const RadioMessage& message, String& output) {
 
   doc["type"] = typeToString(message.type);
   doc["messageId"] = message.messageId;
+  if (message.src.length() > 0) doc["src"] = compactStationId(message.src);
+  if (message.dst.length() > 0) doc["dst"] = compactStationId(message.dst);
+  if (message.hop > 0) doc["hop"] = message.hop;
+  if (message.maxHops > 0) doc["mh"] = message.maxHops;
+  if (message.via.length() > 0) doc["via"] = compactStationId(message.via);
 
   if (message.stationId.length() > 0) doc["stationId"] = message.stationId;
   if (message.runId.length() > 0) doc["runId"] = message.runId;
@@ -234,6 +261,12 @@ bool RadioProtocol::deserialize(const String& input, RadioMessage& output, Strin
   if (output.messageId.length() == 0) output.messageId = doc["mid"] | "";
   output.stationId = doc["stationId"] | "";
   if (output.stationId.length() == 0) output.stationId = fullStationId(doc["sid"] | "");
+  output.src = compactStationId(doc["src"] | "");
+  output.dst = compactStationId(doc["dst"] | "");
+  output.via = compactStationId(doc["via"] | "");
+  output.hop = doc["hop"] | 0;
+  output.maxHops = doc["mh"] | 2;
+  if (output.stationId.length() == 0 && output.src.length() > 0) output.stationId = fullStationId(output.src);
   output.runId = doc["runId"] | "";
   if (output.runId.length() == 0) output.runId = doc["activeRunId"] | "";
   if (output.runId.length() == 0) output.runId = doc["rid"] | "";
@@ -329,6 +362,14 @@ bool RadioProtocol::deserialize(const String& input, RadioMessage& output, Strin
     output.hasBatteryVoltage = true;
     output.batteryVoltage = doc["bv"].as<float>();
     output.batteryPercent = doc["bp"] | output.batteryPercent;
+  }
+
+  if (output.messageId.length() == 0) {
+    if (compactType == "RS" && output.runId.length() > 0) output.messageId = String("RS-") + output.runId + "-" + String(output.runNumber);
+    else if (compactType == "RSA" && output.runId.length() > 0) output.messageId = String("RSA-") + output.runId + "-" + String(output.runNumber);
+    else if (compactType == "F" && output.runId.length() > 0) output.messageId = String("F-") + output.runId + "-" + String(output.runNumber);
+    else if (compactType == "FA" && output.runId.length() > 0) output.messageId = String("FA-") + output.runId + "-" + String(output.runNumber);
+    else if (compactType == "S" && output.stationId.length() > 0 && output.heartbeat > 0) output.messageId = String("S-") + compactStationId(output.stationId) + "-" + String(output.heartbeat);
   }
 
   const bool compactCritical = compactType == "RS" || compactType == "RSA" || compactType == "F" || compactType == "FA";

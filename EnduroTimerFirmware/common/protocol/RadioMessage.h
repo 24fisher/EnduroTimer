@@ -25,6 +25,11 @@ struct RadioMessage {
   RadioMessageType type = RadioMessageType::Unknown;
   String messageId;
   String stationId;
+  String src;
+  String dst;
+  String via;
+  uint8_t hop = 0;
+  uint8_t maxHops = 2;
   String runId;
   uint32_t runNumber = 0;
   String riderName;

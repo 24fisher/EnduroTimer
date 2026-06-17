@@ -516,10 +516,11 @@ void StartStationApp::beginRadio() {
     return;
   }
 
-  radio.setBandwidth(125.0);
-  radio.setSpreadingFactor(7);
-  radio.setCodingRate(5);
-  radio.setOutputPower(14);
+  radio.setBandwidth(LORA_BANDWIDTH_KHZ);
+  radio.setSpreadingFactor(LORA_SPREADING_FACTOR);
+  radio.setCodingRate(LORA_CODING_RATE);
+  radio.setOutputPower(LORA_TX_POWER_DBM);
+  Serial.printf("LoRa config freq=%.1f bw=%.1f sf=%d cr=%d txPower=%d\n", static_cast<double>(LORA_FREQUENCY_MHZ), static_cast<double>(LORA_BANDWIDTH_KHZ), LORA_SPREADING_FACTOR, LORA_CODING_RATE, LORA_TX_POWER_DBM);
   radio.setPacketReceivedAction(onRadioPacketReceived);
   radioPacketReceived = false;
   const int rxState = radio.startReceive();
@@ -806,9 +807,13 @@ void StartStationApp::sendRunStart(const RunRecord& run) {
   RadioMessage message;
   message.type = RadioMessageType::RunStart;
   message.stationId = "start";
+  message.src = "s";
+  message.dst = "f";
+  message.maxHops = 2;
   message.runId = run.runId;
   message.runNumber = run.runNumber;
   message.raceStartTimeMs = run.raceStartTimeMs;
+  message.messageId = String("RS-") + run.runId + "-" + String(runStartAckAttempts_);
   message.version = FIRMWARE_VERSION;
 
   lastRunStartSendMs_ = clock_.nowMs();
@@ -862,10 +867,14 @@ void StartStationApp::sendFinishAck(const RunRecord& run, uint8_t sequence, bool
   RadioMessage message;
   message.type = RadioMessageType::FinishAck;
   message.stationId = "start";
+  message.src = "s";
+  message.dst = "f";
+  message.maxHops = 2;
   message.runId = run.runId;
   message.runNumber = run.runNumber;
   message.version = FIRMWARE_VERSION;
   message.resultMs = run.resultMs;
+  message.messageId = String("FA-") + run.runId + "-" + String(sequence);
 
   Serial.printf("FINISH_ACK TX runId=%s resultMs=%lu\n", run.runId.c_str(), static_cast<unsigned long>(run.resultMs));
   int resultCode = 0;
@@ -913,9 +922,13 @@ void StartStationApp::sendStatus(uint32_t nowMs) {
   RadioMessage message;
   message.type = RadioMessageType::Status;
   message.stationId = "start";
+  message.src = "s";
+  message.dst = "*";
+  message.maxHops = 2;
   message.state = state_.stateText();
   message.uptimeMs = nowMs;
   message.heartbeat = startHeartbeatCount_ + 1;
+  message.messageId = String("S-s-") + String(message.heartbeat);
   message.version = FIRMWARE_VERSION;
   message.bootId = bootId_;
   message.raceClockSynced = raceClock_.isSynced();
@@ -940,6 +953,9 @@ void StartStationApp::sendHello(uint32_t nowMs) {
   RadioMessage message;
   message.type = RadioMessageType::Hello;
   message.stationId = "start";
+  message.src = "s";
+  message.dst = "*";
+  message.maxHops = 2;
   message.messageId = RadioProtocol::makeMessageId("hello");
   message.version = FIRMWARE_VERSION;
   message.bootId = bootId_;
@@ -954,6 +970,9 @@ void StartStationApp::sendHelloAck(uint32_t nowMs) {
   RadioMessage message;
   message.type = RadioMessageType::HelloAck;
   message.stationId = "start";
+  message.src = "s";
+  message.dst = "f";
+  message.maxHops = 2;
   message.messageId = RadioProtocol::makeMessageId("hello-ack");
   message.version = FIRMWARE_VERSION;
   message.bootId = bootId_;
@@ -990,6 +1009,7 @@ void StartStationApp::updateFinishLink(const RadioMessage& message, int packetRs
   const String packetType = RadioProtocol::typeToString(message.type);
   const String oldBootId = finishLink_.remoteBootId;
   const bool rebootDetected = updateLinkStatus(finishLink_, message.stationId, packetType, message.bootId, packetRssi, packetSnr);
+  finishLink_.viaRepeater = message.hop > 0 || message.via == "r";
   if (rebootDetected) {
     Serial.printf("REMOTE REBOOT detected station=finish oldBootId=%s newBootId=%s\n", oldBootId.c_str(), message.bootId.c_str());
     finishHeartbeatCount_ = 0;
@@ -1157,6 +1177,7 @@ void StartStationApp::handleRadioMessage(const RadioMessage& message) {
       scheduleFinishAckRepeats(completed);
     } else if (state_.lastRun().runId == message.runId && message.runId.length() > 0) {
       RunRecord last = state_.lastRun();
+      Serial.println("Duplicate FINISH received, ACK resent.");
       Serial.printf("Duplicate FINISH RX runId=%s, ACK resent\n", message.runId.c_str());
       sendFinishAck(last, finishAckSendCount_ == 0 ? 1 : finishAckSendCount_, true);
     } else {
@@ -1196,7 +1217,7 @@ void StartStationApp::updateDisplay() {
   const RunRecord& current = state_.currentRun();
   const RunRecord& last = state_.lastRun();
   const String lastResult = last.resultFormatted.length() > 0 ? last.resultFormatted : "-";
-  const String fin = finishOnline() ? String("FIN:") + String(finishLink_.lastRssi) + "dBm" : String("FIN:NO SIGNAL");
+  const String fin = finishOnline() ? String("FIN:") + String(finishLink_.lastRssi) + "dBm" + (finishLink_.viaRepeater ? " R" : "") : String("FIN:NO SIGNAL");
   const String linkDebug = finishLink_.lastPacketType.length() > 0 ? String("PKT:") + finishLink_.lastPacketType : String("HB:") + String(finishHeartbeatCount_);
   const String discoveryLine = discoveryActive() ? String("DISCOVERY...") : linkDebug;
 
@@ -1235,7 +1256,8 @@ void StartStationApp::updateDisplay() {
 }
 
 String StartStationApp::finishSignalText() const {
-  return linkSignalText(finishLink_);
+  if (!isLinkActive(finishLink_)) return "NO SIGNAL";
+  return String(finishLink_.lastRssi) + " dBm" + (finishLink_.viaRepeater ? " R" : "");
 }
 
 String StartStationApp::finishReportedStartSignalText() const {
