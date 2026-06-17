@@ -1,7 +1,7 @@
 #pragma once
 
 #ifndef FIRMWARE_VERSION
-#define FIRMWARE_VERSION "0.24"
+#define FIRMWARE_VERSION "0.25"
 #endif
 
 #ifndef ENABLE_LORA_TIME_SYNC

@@ -35,7 +35,7 @@ The current Heltec V3 OLED configuration is fixed in `platformio.ini`:
 - Library: U8g2
 - `ARDUINO_USB_CDC_ON_BOOT=0`
 - `ARDUINO_USB_MODE=0`
-- `FIRMWARE_VERSION=0.24`
+- `FIRMWARE_VERSION=0.25`
 - `STATUS_LED_PIN=35`
 - `STATUS_LED_ACTIVE_LEVEL=1`
 
@@ -57,9 +57,13 @@ The current Heltec V3 OLED configuration is fixed in `platformio.ini`:
 - Firmware version is a manual semantic-like incremental string.
 - Initial version: `0.00`.
 - Each MR/iteration increments the string by `0.01` manually.
-- Current version: `0.24`.
-- The version is configured with `FIRMWARE_VERSION` and has a source fallback of `0.24`.
+- Current version: `0.25`.
+- The version is configured with `FIRMWARE_VERSION` and has a source fallback of `0.25`.
 - Version is shown in OLED headers, Serial boot logs, Web API status, the Web UI status block, compact `STATUS` heartbeat packets (`ver`), non-critical control messages, and the short `v` field on compact critical race packets when it fits.
+
+## v0.25 FINISH routing aliases and RepeaterStation relay fix
+
+Firmware v0.25 keeps the compact RepeaterStation routing packets and fixes FINISH receive-path compatibility between short and long station identities. StartStation now accepts FINISH packets from `src: "f"` / `stationId: "finish"` addressed to `dst: "s"`, `dst: "start"`, `dst: "*"`, or legacy empty destinations, including packets relayed with `hop=1` and `via: "r"`. FinishStation similarly accepts FINISH_ACK packets from StartStation aliases. RepeaterStation preserves the original packet `src` while adding relay metadata.
 
 ## v0.24 RepeaterStation baseline relay
 

@@ -623,9 +623,10 @@ void StartStationApp::pollRadio() {
     lastSnr_ = radio.getSNR();
     RadioMessage message;
     String error;
+    Serial.printf("LORA RAW RX len=%u rssi=%d snr=%.1f payload=%s\n", static_cast<unsigned>(payload.length()), lastRssi_, static_cast<double>(lastSnr_), payload.c_str());
     if (!RadioProtocol::deserialize(payload, message, &error)) {
       lastFinishPacketType_ = "PARSE_FAILED";
-      Serial.printf("LORA parse failed raw=%s error=%s\n", payload.c_str(), error.c_str());
+      Serial.printf("LORA parse failed error=%s payload=%s\n", error.c_str(), payload.c_str());
       return;
     }
     lastFinishPacketType_ = RadioProtocol::typeToString(message.type);
@@ -633,13 +634,21 @@ void StartStationApp::pollRadio() {
     if (logRawPacket) Serial.printf("LORA RX raw=%s\n", lastLoRaRaw_.c_str());
     Serial.printf("LORA RX type=%s rssi=%d snr=%.1f%s\n", lastFinishPacketType_.c_str(), lastRssi_, static_cast<double>(lastSnr_), logRawPacket ? " raw logged" : "");
     if (logRawPacket) Serial.printf("LORA parsed type=%s stationId=%s runId=%s raceStartTimeMs=%lu hb=%lu\n", lastFinishPacketType_.c_str(), message.stationId.c_str(), message.runId.c_str(), static_cast<unsigned long>(message.raceStartTimeMs), static_cast<unsigned long>(message.heartbeat));
+    Serial.printf("RX parsed type=%s stationId=%s src=%s dst=%s mid=%s hop=%u mh=%u runId=%s resultMs=%lu rssi=%d snr=%.1f\n",
+                  RadioProtocol::typeToString(message.type).c_str(), message.stationId.c_str(), message.src.c_str(),
+                  message.dst.c_str(), message.messageId.c_str(), message.hop, message.maxHops,
+                  message.runId.c_str(), static_cast<unsigned long>(message.resultMs), lastRssi_, static_cast<double>(lastSnr_));
+    if (!RadioProtocol::isForStation(message, "start")) {
+      Serial.printf("RX drop: not for start dst=%s src=%s type=%s\n", message.dst.c_str(), message.src.c_str(), RadioProtocol::typeToString(message.type).c_str());
+      return;
+    }
     if (message.type == RadioMessageType::Unknown) {
       Serial.printf("LORA unknown type=%s raw=%s\n", lastFinishPacketType_.c_str(), payload.c_str());
     }
     if (message.stationId.length() == 0) {
       Serial.printf("LORA missing stationId raw=%s\n", payload.c_str());
     }
-    if (message.stationId == "finish" && message.type != RadioMessageType::Unknown) {
+    if (RadioProtocol::isFromFinish(message) && message.type != RadioMessageType::Unknown) {
       updateFinishLink(message, lastRssi_, lastSnr_);
     }
     handleRadioMessage(message);
@@ -1029,7 +1038,7 @@ void StartStationApp::updateFinishLink(const RadioMessage& message, int packetRs
 }
 
 void StartStationApp::handleRadioMessage(const RadioMessage& message) {
-  if (message.type == RadioMessageType::Status && message.stationId == "finish") {
+  if (message.type == RadioMessageType::Status && RadioProtocol::isFromFinish(message)) {
     Serial.printf("STATUS RX from=finish hb=%lu rssi=%d\n", static_cast<unsigned long>(message.heartbeat), finishLink_.lastRssi);
     finishLastStatusMs_ = message.timestampMs > 0 ? message.timestampMs : message.uptimeMs;
     previousFinishHeartbeatCount_ = finishHeartbeatCount_;
@@ -1067,7 +1076,7 @@ void StartStationApp::handleRadioMessage(const RadioMessage& message) {
     return;
   }
 
-  if (message.type == RadioMessageType::Hello && message.stationId == "finish") {
+  if (message.type == RadioMessageType::Hello && RadioProtocol::isFromFinish(message)) {
     lastHelloReceivedMs_ = millis();
     if (message.version.length() > 0) finishFirmwareVersion_ = message.version;
     if (priorityTxPending()) {
@@ -1078,7 +1087,7 @@ void StartStationApp::handleRadioMessage(const RadioMessage& message) {
     return;
   }
 
-  if (message.type == RadioMessageType::HelloAck && message.stationId == "finish") {
+  if (message.type == RadioMessageType::HelloAck && RadioProtocol::isFromFinish(message)) {
     lastHelloReceivedMs_ = millis();
     if (message.version.length() > 0) finishFirmwareVersion_ = message.version;
     return;
@@ -1134,7 +1143,7 @@ void StartStationApp::handleRadioMessage(const RadioMessage& message) {
 
 #endif
 
-  if (message.type == RadioMessageType::RunStartAck && message.stationId == "finish") {
+  if (message.type == RadioMessageType::RunStartAck && RadioProtocol::isFromFinish(message)) {
     Serial.printf("RUN_START_ACK RX runId=%s\n", message.runId.c_str());
     if (message.runId == state_.currentRun().runId && pendingRunStartAck_) {
       pendingRunStartAck_ = false;
@@ -1154,7 +1163,7 @@ void StartStationApp::handleRadioMessage(const RadioMessage& message) {
     return;
   }
 
-  if (message.type == RadioMessageType::Finish && message.stationId == "finish") {
+  if (message.type == RadioMessageType::Finish && RadioProtocol::isFromFinish(message)) {
     Serial.printf("FINISH RX raw=%s\n", lastLoRaRaw_.c_str());
     Serial.printf("FINISH RX finishRaceTimeMs=%lu raceStartTimeMs=%lu resultMs=%lu timing=%s\n",
                   static_cast<unsigned long>(message.finishRaceTimeMs),
