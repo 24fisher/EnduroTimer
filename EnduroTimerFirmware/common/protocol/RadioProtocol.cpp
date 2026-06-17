@@ -4,17 +4,11 @@
 
 namespace {
 String compactStationId(const String& stationId) {
-  if (stationId == "start" || stationId == "s") return "s";
-  if (stationId == "finish" || stationId == "f") return "f";
-  if (stationId == "repeater" || stationId == "r") return "r";
-  return stationId;
+  return RadioProtocol::compactStationCode(stationId);
 }
 
 String fullStationId(const String& stationId) {
-  if (stationId == "s") return "start";
-  if (stationId == "f") return "finish";
-  if (stationId == "r") return "repeater";
-  return stationId;
+  return RadioProtocol::normalizeStationId(stationId);
 }
 
 String compactState(const String& state) {
@@ -61,6 +55,44 @@ String fullState(const String& state) {
   return state;
 }
 }  // namespace
+
+
+String RadioProtocol::normalizeStationId(const String& value) {
+  if (value == "s" || value == "start" || value == "StartStation") return "start";
+  if (value == "f" || value == "finish" || value == "FinishStation") return "finish";
+  if (value == "r" || value == "repeater" || value == "RepeaterStation") return "repeater";
+  return value;
+}
+
+String RadioProtocol::compactStationCode(const String& value) {
+  if (value == "s" || value == "start" || value == "StartStation") return "s";
+  if (value == "f" || value == "finish" || value == "FinishStation") return "f";
+  if (value == "r" || value == "repeater" || value == "RepeaterStation") return "r";
+  return value;
+}
+
+bool RadioProtocol::isForStation(const RadioMessage& message, const String& localStation) {
+  if (message.dst.length() == 0 || message.dst == "*") return true;
+  const String localLong = normalizeStationId(localStation);
+  const String localCompact = compactStationCode(localStation);
+  const String dstLong = normalizeStationId(message.dst);
+  const String dstCompact = compactStationCode(message.dst);
+  if (dstLong == localLong || dstCompact == localCompact) return true;
+  if (localLong == "repeater" && message.hop < message.maxHops) return true;
+  return false;
+}
+
+bool RadioProtocol::isFromFinish(const RadioMessage& message) {
+  return normalizeStationId(message.stationId) == "finish" || compactStationCode(message.src) == "f";
+}
+
+bool RadioProtocol::isFromStart(const RadioMessage& message) {
+  return normalizeStationId(message.stationId) == "start" || compactStationCode(message.src) == "s";
+}
+
+bool RadioProtocol::isFromRepeater(const RadioMessage& message) {
+  return normalizeStationId(message.stationId) == "repeater" || compactStationCode(message.src) == "r";
+}
 
 String RadioProtocol::makeMessageId(const char* prefix) {
   static uint32_t sequence = 0;
@@ -260,13 +292,16 @@ bool RadioProtocol::deserialize(const String& input, RadioMessage& output, Strin
   output.messageId = doc["messageId"] | "";
   if (output.messageId.length() == 0) output.messageId = doc["mid"] | "";
   output.stationId = doc["stationId"] | "";
-  if (output.stationId.length() == 0) output.stationId = fullStationId(doc["sid"] | "");
-  output.src = compactStationId(doc["src"] | "");
+  if (output.stationId.length() == 0) output.stationId = doc["sid"] | "";
+  output.src = doc["src"] | "";
   output.dst = compactStationId(doc["dst"] | "");
   output.via = compactStationId(doc["via"] | "");
   output.hop = doc["hop"] | 0;
   output.maxHops = doc["mh"] | 2;
+  if (output.stationId.length() > 0) output.stationId = fullStationId(output.stationId);
+  if (output.src.length() > 0) output.src = compactStationId(output.src);
   if (output.stationId.length() == 0 && output.src.length() > 0) output.stationId = fullStationId(output.src);
+  if (output.src.length() == 0 && output.stationId.length() > 0) output.src = compactStationId(output.stationId);
   output.runId = doc["runId"] | "";
   if (output.runId.length() == 0) output.runId = doc["activeRunId"] | "";
   if (output.runId.length() == 0) output.runId = doc["rid"] | "";
