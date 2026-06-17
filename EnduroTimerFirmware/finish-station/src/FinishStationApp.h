@@ -45,6 +45,8 @@ private:
   bool postFinishSyncStatus();
   bool discoveryActive() const;
   bool priorityTxPending(uint32_t nowMs) const;
+  bool canSendNonCriticalLoRa(uint32_t nowMs) const;
+  void logNonCriticalDeferred(uint32_t nowMs);
   void acceptFinishButton(uint32_t nowMs);
   void handleFinishButton(uint32_t nowMs);
   void sendFinish();
@@ -76,6 +78,8 @@ private:
   uint32_t lastAnyPacketMs_ = 0;
   uint32_t lastDisplayMs_ = 0;
   uint32_t lastPriorityTxMs_ = 0;
+  uint32_t lastCriticalPacketMs_ = 0;
+  uint32_t lastNonCriticalDeferredLogMs_ = 0;
   uint32_t lastFinishSendMs_ = 0;
   uint32_t heartbeatCounter_ = 0;
   uint32_t startHeartbeatCount_ = 0;
@@ -125,6 +129,12 @@ private:
   uint32_t finishLineCrossedUntilMs_ = 0;
   uint32_t radioPollLastDurationMs_ = 0;
   uint32_t radioPollMaxDurationMs_ = 0;
+  uint32_t radioTxLastDurationMs_ = 0;
+  uint32_t radioTxMaxDurationMs_ = 0;
+  uint32_t wifiLastDurationMs_ = 0;
+  uint32_t oledLastDurationMs_ = 0;
+  bool rxRestorePending_ = false;
+  uint32_t rxRestoreFailureCount_ = 0;
   uint32_t radioRxPacketCount_ = 0;
   uint32_t radioRxTimeoutCount_ = 0;
   uint32_t radioRxNoPacketCount_ = 0;

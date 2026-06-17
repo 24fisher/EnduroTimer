@@ -94,7 +94,17 @@ void RepeaterStationApp::restoreRadioReceiveMode() {
 }
 
 bool RepeaterStationApp::relayable(RadioMessageType type) const {
-  return type == RadioMessageType::RunStart || type == RadioMessageType::RunStartAck || type == RadioMessageType::Finish || type == RadioMessageType::FinishAck || type == RadioMessageType::Status || type == RadioMessageType::Hello || type == RadioMessageType::HelloAck;
+  if (type == RadioMessageType::RunStart || type == RadioMessageType::RunStartAck ||
+      type == RadioMessageType::Finish || type == RadioMessageType::FinishAck) {
+    return true;
+  }
+#if REPEATER_RELAY_STATUS
+  if (type == RadioMessageType::Status) return true;
+#endif
+#if REPEATER_RELAY_HELLO
+  if (type == RadioMessageType::Hello || type == RadioMessageType::HelloAck) return true;
+#endif
+  return false;
 }
 
 uint8_t RepeaterStationApp::priorityFor(RadioMessageType type) const {
