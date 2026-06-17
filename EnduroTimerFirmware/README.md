@@ -1,8 +1,8 @@
 # EnduroTimer Firmware Smoke Test
 
-This folder contains the PlatformIO firmware for a two-board **Heltec WiFi LoRa 32 V3 / ESP32-S3** smoke test.
+This folder contains the PlatformIO firmware for a three-board **Heltec WiFi LoRa 32 V3 / ESP32-S3** smoke test.
 
-The firmware keeps StartStation and FinishStation as separate applications:
+The firmware keeps StartStation, RepeaterStation, and FinishStation as separate applications:
 
 ```text
 EnduroTimerFirmware/
@@ -11,6 +11,8 @@ EnduroTimerFirmware/
 ├─ start-station/
 │  ├─ src/              # StartStation app, state machine, Web API
 │  └─ data/             # LittleFS Web UI files
+├─ repeater-station/
+│  └─ src/              # RepeaterStation app and LoRa relay
 └─ finish-station/
    └─ src/              # FinishStation app, state machine, finish button stub
 ```
@@ -33,7 +35,7 @@ The current Heltec V3 OLED configuration is fixed in `platformio.ini`:
 - Library: U8g2
 - `ARDUINO_USB_CDC_ON_BOOT=0`
 - `ARDUINO_USB_MODE=0`
-- `FIRMWARE_VERSION=0.23`
+- `FIRMWARE_VERSION=0.24`
 - `STATUS_LED_PIN=35`
 - `STATUS_LED_ACTIVE_LEVEL=1`
 
@@ -55,9 +57,54 @@ The current Heltec V3 OLED configuration is fixed in `platformio.ini`:
 - Firmware version is a manual semantic-like incremental string.
 - Initial version: `0.00`.
 - Each MR/iteration increments the string by `0.01` manually.
-- Current version: `0.23`.
-- The version is configured with `FIRMWARE_VERSION` and has a source fallback of `0.23`.
+- Current version: `0.24`.
+- The version is configured with `FIRMWARE_VERSION` and has a source fallback of `0.24`.
 - Version is shown in OLED headers, Serial boot logs, Web API status, the Web UI status block, compact `STATUS` heartbeat packets (`ver`), non-critical control messages, and the short `v` field on compact critical race packets when it fits.
+
+## v0.24 RepeaterStation baseline relay
+
+Firmware v0.24 adds **RepeaterStation** as the third baseline firmware while keeping the applications separate: `start_station`, `finish_station`, and `repeater_station`. The baseline race topology is now:
+
+```text
+StartStation ⇄ RepeaterStation ⇄ FinishStation
+```
+
+Direct StartStation ⇄ FinishStation LoRa mode still works when both stations can hear each other. RepeaterStation is for normal MTB/enduro terrain where ridges and terrain breaks often make the direct link unstable. Place the repeater on a terrain break or high point where it has LoRa visibility to both StartStation and FinishStation.
+
+RepeaterStation does not count race time, does not store riders or trails, does not connect to Wi-Fi, and does not run the Web UI. It only receives and retransmits compact LoRa packets for `RUN_START`, `RUN_START_ACK`, `FINISH`, `FINISH_ACK`, `STATUS`, `HELLO`, and `HELLO_ACK`.
+
+Echo and duplicate protection uses compact routing fields:
+
+- `mid`: stable message id for packet-level dedupe.
+- `src`: original source station (`s`, `f`, or `r`).
+- `dst`: destination station (`s`, `f`, or `*`).
+- `hop`: current hop count.
+- `mh`: max hops.
+- RepeaterStation keeps a 64-entry seen cache with a 60 second TTL and does not relay packets whose `mid` was already seen.
+
+Critical race packets stay compact and target less than 120 bytes, with a hard limit of 240 bytes. Business-level dedupe remains on StartStation/FinishStation by run id and packet type, so a direct packet plus the same relayed packet does not create a second result or reset an active run. Duplicate `FINISH` packets trigger another `FINISH_ACK`; duplicate `RUN_START` packets trigger another `RUN_START_ACK`.
+
+OLED headers and Serial boot logs report v0.24:
+
+- StartStation: `START TERM v0.24`
+- FinishStation: `FINISH TERM v0.24`
+- RepeaterStation: `REPEATER v0.24`
+
+RepeaterStation OLED service screen shows Start/Finish RSSI and relay counters:
+
+```text
+REPEATER v0.24
+S:-72 F:-80
+RX:123 TX:120
+DUP:5
+```
+
+Build and upload RepeaterStation with:
+
+```bash
+pio run -e repeater_station
+pio run -e repeater_station -t upload
+```
 
 
 ## v0.23 riding animation and FinishStation last result retention
