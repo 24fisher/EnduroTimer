@@ -144,27 +144,11 @@ bool RadioProtocol::serializeCompactStatus(const RadioMessage& message, String& 
   JsonDocument doc;
   doc["t"] = "S";
   addRouting(doc, message);
-  doc["sid"] = compactStationId(message.stationId);
-  if (message.version.length() > 0) doc["ver"] = message.version;
-  if (message.bootId.length() > 0) doc["bid"] = message.bootId;
   if (message.state.length() > 0) doc["st"] = compactState(message.state);
-  if (message.runId.length() > 0) { doc["ar"] = true; doc["rid"] = message.runId.substring(max(0, static_cast<int>(message.runId.length()) - 8)); }
-  if (message.raceClockSynced) doc["rcs"] = true;
-  if (message.raceClockNowMs > 0) doc["rcn"] = message.raceClockNowMs;
-  if (message.syncAccuracyMs > 0) doc["sacc"] = message.syncAccuracyMs;
-  if (message.offsetToMasterMs != 0) doc["off"] = message.offsetToMasterMs;
-  if (message.hasBatteryVoltage) { doc["bv"] = message.batteryVoltage; doc["bp"] = message.batteryPercent; }
   if (message.heartbeat > 0) doc["hb"] = message.heartbeat;
-  if (message.uptimeMs > 0) doc["up"] = message.uptimeMs / 1000UL;
+  if (message.raceClockSynced) doc["rc"] = 1;
   if (message.hasStartRssi) doc["sr"] = message.startRssi;
-  if (message.hasStartSnr) doc["ss"] = static_cast<int>(message.startSnr);
-  if (message.startLastSeenAgoMs > 0) doc["sa"] = message.startLastSeenAgoMs / 1000UL;
-  if (message.hasFinishRssi) doc["fr"] = message.finishRssi;
-  if (message.hasFinishSnr) doc["fs"] = static_cast<int>(message.finishSnr);
-  if (message.loopLastGapMs > 0) doc["llg"] = message.loopLastGapMs;
-  if (message.loopMaxGapMs > 0) doc["lmg"] = message.loopMaxGapMs;
-  if (message.buttonLastLatencyMs > 0) doc["bll"] = message.buttonLastLatencyMs;
-  if (message.buttonMaxLatencyMs > 0) doc["blm"] = message.buttonMaxLatencyMs;
+  if (message.runNumber > 0) doc["rn"] = message.runNumber;
 
   output = "";
   return serializeJson(doc, output) > 0;
@@ -350,6 +334,7 @@ bool RadioProtocol::deserialize(const String& input, RadioMessage& output, Strin
   if (output.syncAccuracyMs == 0) output.syncAccuracyMs = doc["sacc"] | 0;
   output.raceClockSynced = doc["raceClockSynced"] | false;
   if (!output.raceClockSynced) output.raceClockSynced = doc["rcs"] | false;
+  if (!output.raceClockSynced) output.raceClockSynced = (doc["rc"] | 0) == 1;
   output.raceClockNowMs = doc["raceClockNowMs"] | 0;
   if (output.raceClockNowMs == 0) output.raceClockNowMs = doc["rcn"] | 0;
   output.localRunStartReceivedMillis = doc["localRunStartReceivedMillis"] | 0;

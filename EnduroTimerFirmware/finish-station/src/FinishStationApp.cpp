@@ -84,6 +84,12 @@ void FinishStationApp::begin() {
 void FinishStationApp::loop() {
   const uint32_t now = clock_.nowMs();
   loopMonitor_.tick(now);
+  if (loopMonitor_.lastLoopGapMs() > 200UL) {
+    Serial.printf("WARN loop gap=%lu lastBlock=%s radioTxLast=%lu radioTxMax=%lu wifiLast=%lu oledLast=%lu\n",
+                  static_cast<unsigned long>(loopMonitor_.lastLoopGapMs()), loopMonitor_.lastSlowBlock().c_str(),
+                  static_cast<unsigned long>(radioTxLastDurationMs_), static_cast<unsigned long>(radioTxMaxDurationMs_),
+                  static_cast<unsigned long>(wifiLastDurationMs_), static_cast<unsigned long>(oledLastDurationMs_));
+  }
 
   uint32_t finishTimestampMs = 0;
   const uint32_t buttonStartMs = millis();
@@ -93,13 +99,33 @@ void FinishStationApp::loop() {
     Serial.printf("canFinish=%d\n", state_.canFinish() ? 1 : 0);
     handleFinishButton(now);
   }
-  loopMonitor_.recordBlock("Button", millis() - buttonStartMs);
+  const uint32_t buttonDurationMs = millis() - buttonStartMs;
+  loopMonitor_.recordBlock("Button", buttonDurationMs);
+  if (sensor_.lastButtonLatencyMs() > 100UL) {
+    Serial.printf("WARN button latency=%lu max=%lu state=%s\n",
+                  static_cast<unsigned long>(sensor_.lastButtonLatencyMs()),
+                  static_cast<unsigned long>(sensor_.maxButtonLatencyMs()), state_.stateText().c_str());
+  }
 
-  updateLed(now);
-  { const uint32_t blockStartMs = millis(); updateWifiSync(now); loopMonitor_.recordBlock("WiFiConnect", millis() - blockStartMs); }
 #if ENABLE_LORA
   { const uint32_t blockStartMs = millis(); pollRadio(); loopMonitor_.recordBlock("RadioPoll", millis() - blockStartMs, LORA_MAX_POLL_DURATION_WARN_MS); }
 #endif
+
+  bool prioritySentThisCycle = false;
+  if (!finishAckReceived_ && state_.state() == FinishRunState::FinishSent && finishAttempts_ < FINISH_MAX_RETRY_ATTEMPTS &&
+      now - lastFinishSendMs_ >= FINISH_RETRY_INTERVAL_MS) {
+    { const uint32_t blockStartMs = millis(); sendFinish(); radioTxLastDurationMs_ = millis() - blockStartMs; if (radioTxLastDurationMs_ > radioTxMaxDurationMs_) radioTxMaxDurationMs_ = radioTxLastDurationMs_; loopMonitor_.recordBlock("RadioTx", radioTxLastDurationMs_, LORA_MAX_TX_DURATION_WARN_MS); }
+    prioritySentThisCycle = true;
+  }
+
+  if (!finishAckReceived_ && state_.state() == FinishRunState::FinishSent && finishAttempts_ >= FINISH_MAX_RETRY_ATTEMPTS &&
+      now - lastFinishSendMs_ >= FINISH_RETRY_INTERVAL_MS) {
+    Serial.printf("FINISH_ACK timeout: sent %u/%u.\n", finishAttempts_, FINISH_MAX_RETRY_ATTEMPTS);
+    state_.ackTimeout();
+  }
+
+  updateLed(now);
+  { const uint32_t blockStartMs = millis(); updateWifiSync(now); wifiLastDurationMs_ = millis() - blockStartMs; loopMonitor_.recordBlock("WiFiConnect", wifiLastDurationMs_); }
 #if ENABLE_LORA_TIME_SYNC
   if (syncInProgress_ && syncReadyUntilMs_ > 0 && now > syncReadyUntilMs_ && !raceClock_.isSynced()) {
     syncInProgress_ = false;
@@ -111,49 +137,38 @@ void FinishStationApp::loop() {
   }
 #endif
 
-  bool prioritySentThisCycle = false;
-  if (!finishAckReceived_ && state_.state() == FinishRunState::FinishSent && finishAttempts_ < FINISH_MAX_RETRY_ATTEMPTS &&
-      now - lastFinishSendMs_ >= FINISH_RETRY_INTERVAL_MS) {
-    { const uint32_t blockStartMs = millis(); sendFinish(); loopMonitor_.recordBlock("RadioTx", millis() - blockStartMs, LORA_MAX_TX_DURATION_WARN_MS); }
-    prioritySentThisCycle = true;
-  }
-
-  if (!finishAckReceived_ && state_.state() == FinishRunState::FinishSent && finishAttempts_ >= FINISH_MAX_RETRY_ATTEMPTS &&
-      now - lastFinishSendMs_ >= FINISH_RETRY_INTERVAL_MS) {
-    Serial.printf("FINISH_ACK timeout: sent %u/%u.\n", finishAttempts_, FINISH_MAX_RETRY_ATTEMPTS);
-    state_.ackTimeout();
-  }
-
-  const bool priorityPending = prioritySentThisCycle || priorityTxPending(now);
-  if (discoveryActive() && now - lastDiscoverySentMs_ >= LINK_DISCOVERY_INTERVAL_MS) {
-    if (priorityPending) {
-      Serial.println("TX deferred HELLO because priority message pending");
+  const bool nonCriticalAllowed = canSendNonCriticalLoRa(now) && !prioritySentThisCycle;
+#if FINISH_HELLO_ENABLED
+  if (discoveryActive() && now - lastDiscoverySentMs_ >= FINISH_DISCOVERY_INTERVAL_MS) {
+    if (!nonCriticalAllowed) {
+      logNonCriticalDeferred(now);
     } else {
-      { const uint32_t blockStartMs = millis(); sendHello(now); loopMonitor_.recordBlock("RadioTx", millis() - blockStartMs, LORA_MAX_TX_DURATION_WARN_MS); }
+      { const uint32_t blockStartMs = millis(); sendHello(now); radioTxLastDurationMs_ = millis() - blockStartMs; if (radioTxLastDurationMs_ > radioTxMaxDurationMs_) radioTxMaxDurationMs_ = radioTxLastDurationMs_; loopMonitor_.recordBlock("RadioTx", radioTxLastDurationMs_, LORA_MAX_TX_DURATION_WARN_MS); }
       lastDiscoverySentMs_ = now;
     }
   }
+#endif
 
+#if FINISH_STATUS_ENABLED
   if (nextFinishStatusDueMs_ > 0 && now >= nextFinishStatusDueMs_) {
-    if (!syncDoneOnce_) {
+    if (!nonCriticalAllowed) {
+      logNonCriticalDeferred(now);
       nextFinishStatusDueMs_ = now + 1000UL;
-    } else if (priorityPending) {
-      Serial.println("TX deferred STATUS because priority message pending");
-      nextFinishStatusDueMs_ = now + 500UL;
     } else {
-      { const uint32_t blockStartMs = millis(); sendStatus(now); loopMonitor_.recordBlock("RadioTx", millis() - blockStartMs, LORA_MAX_TX_DURATION_WARN_MS); }
+      { const uint32_t blockStartMs = millis(); sendStatus(now); radioTxLastDurationMs_ = millis() - blockStartMs; if (radioTxLastDurationMs_ > radioTxMaxDurationMs_) radioTxMaxDurationMs_ = radioTxLastDurationMs_; loopMonitor_.recordBlock("RadioTx", radioTxLastDurationMs_, LORA_MAX_TX_DURATION_WARN_MS); }
       lastStatusMs_ = now;
       nextFinishStatusDueMs_ = now + FINISH_STATUS_INTERVAL_MS + static_cast<uint32_t>(random(0, 301));
     }
   }
+#endif
 
 #if ENABLE_OLED
   display_.update();
   if (!display_.testPatternOnly() && now - lastDisplayMs_ >= DisplayRefreshMs) {
     const uint32_t displayStartMs = millis();
     updateDisplay();
-    const uint32_t displayDurationMs = millis() - displayStartMs;
-    loopMonitor_.recordBlock("OLED", displayDurationMs);
+    oledLastDurationMs_ = millis() - displayStartMs;
+    loopMonitor_.recordBlock("OLED", oledLastDurationMs_);
     lastDisplayMs_ = now;
   }
 #endif
@@ -415,6 +430,12 @@ String FinishStationApp::startSignalText() const {
 void FinishStationApp::pollRadio() {
 #if ENABLE_LORA
   if (!radioReady_) return;
+  if (rxRestorePending_) {
+    const int rxState = radio.startReceive();
+    Serial.printf("LoRa RX restore retry result=%d\n", rxState);
+    rxRestorePending_ = rxState != RADIOLIB_ERR_NONE;
+    if (rxRestorePending_) rxRestoreFailureCount_ += 1;
+  }
   const uint32_t pollStartMs = millis();
   if (!radioPacketReceived) {
     radioRxNoPacketCount_ += 1;
@@ -445,13 +466,27 @@ void FinishStationApp::pollRadio() {
     }
     lastPacket_ = RadioProtocol::typeToString(message.type);
     const bool logRawPacket = message.type != RadioMessageType::Status;
-    if (logRawPacket) Serial.printf("LORA RX raw=%s\n", lastLoRaRaw_.c_str());
-    Serial.printf("LORA RX type=%s rssi=%d snr=%.1f%s\n", lastPacket_.c_str(), lastRssi_, static_cast<double>(lastSnr_), logRawPacket ? " raw logged" : "");
-    if (logRawPacket) Serial.printf("LORA parsed type=%s stationId=%s runId=%s raceStartTimeMs=%lu runNumber=%lu hb=%lu\n", lastPacket_.c_str(), message.stationId.c_str(), message.runId.c_str(), static_cast<unsigned long>(message.raceStartTimeMs), static_cast<unsigned long>(message.runNumber), static_cast<unsigned long>(message.heartbeat));
+    if (logRawPacket) {
+      Serial.printf("FINISH RAW RX len=%u rssi=%d snr=%.1f payload=%s\n",
+                    static_cast<unsigned>(payload.length()), lastRssi_, static_cast<double>(lastSnr_), payload.c_str());
+      Serial.printf("FINISH RX parsed type=%s stationId=%s src=%s dst=%s mid=%s hop=%u mh=%u runId=%s raceStart=%lu\n",
+                    lastPacket_.c_str(), message.stationId.c_str(), message.src.c_str(), message.dst.c_str(),
+                    message.messageId.c_str(), message.hop, message.maxHops, message.runId.c_str(),
+                    static_cast<unsigned long>(message.raceStartTimeMs));
+    }
     if (!RadioProtocol::isForStation(message, "finish")) {
       Serial.printf("RX drop: not for finish dst=%s src=%s type=%s\n", message.dst.c_str(), message.src.c_str(), RadioProtocol::typeToString(message.type).c_str());
       return;
     }
+    if (message.type == RadioMessageType::RunStart && !RadioProtocol::isFromStart(message)) {
+      Serial.printf("RX drop: RUN_START not from start stationId=%s src=%s\n", message.stationId.c_str(), message.src.c_str());
+      return;
+    }
+    const bool criticalPacket = message.type == RadioMessageType::RunStart ||
+                                message.type == RadioMessageType::RunStartAck ||
+                                message.type == RadioMessageType::Finish ||
+                                message.type == RadioMessageType::FinishAck;
+    if (criticalPacket) lastCriticalPacketMs_ = millis();
     if (message.type == RadioMessageType::Unknown) {
       Serial.printf("LORA unknown type=%s raw=%s\n", lastPacket_.c_str(), payload.c_str());
     }
@@ -505,7 +540,19 @@ bool FinishStationApp::sendRadio(const RadioMessage& message, int* resultCode) {
     if (resultCode != nullptr) *resultCode = -998;
     return false;
   }
+  const uint32_t txStart = millis();
   const int result = radio.transmit(payload);
+  const uint32_t txDuration = millis() - txStart;
+  radioTxLastDurationMs_ = txDuration;
+  if (txDuration > radioTxMaxDurationMs_) radioTxMaxDurationMs_ = txDuration;
+  Serial.printf("LoRa TX type=%s len=%u duration=%lu result=%d\n",
+                typeText.c_str(), static_cast<unsigned>(payload.length()),
+                static_cast<unsigned long>(txDuration), result);
+  if (txDuration > 300UL) {
+    Serial.printf("WARN slow LoRa TX type=%s duration=%lu len=%u\n", typeText.c_str(),
+                  static_cast<unsigned long>(txDuration), static_cast<unsigned>(payload.length()));
+  }
+  if (message.type == RadioMessageType::Status && txDuration > 300UL) Serial.println("WARN STATUS airtime too high, reduce payload or interval");
   if (resultCode != nullptr) *resultCode = result;
   restoreRadioReceiveMode();
   const bool logTxMode = true;
@@ -528,8 +575,12 @@ void FinishStationApp::restoreRadioReceiveMode() {
   if (!radioReady_) return;
   radioPacketReceived = false;
   const int rxState = radio.startReceive();
+  Serial.printf("LoRa RX restore after TX result=%d\n", rxState);
+  rxRestorePending_ = rxState != RADIOLIB_ERR_NONE;
   if (rxState != RADIOLIB_ERR_NONE) {
-    Serial.printf("LoRa startReceive restore failed code=%d\n", rxState);
+    rxRestoreFailureCount_ += 1;
+    Serial.printf("LoRa startReceive restore failed code=%d failures=%lu\n", rxState,
+                  static_cast<unsigned long>(rxRestoreFailureCount_));
   }
   yield();
 #endif
@@ -543,33 +594,20 @@ void FinishStationApp::sendStatus(uint32_t nowMs) {
   message.dst = "*";
   message.maxHops = 2;
   message.state = state_.stateText();
-  message.uptimeMs = nowMs;
   message.heartbeat = heartbeatCounter_ + 1;
   message.messageId = String("S-f-") + String(message.heartbeat);
-  message.version = FIRMWARE_VERSION;
-  message.bootId = bootId_;
   message.raceClockSynced = raceClock_.isSynced();
-  message.raceClockNowMs = raceClock_.nowRaceMs();
-  if (state_.runId().length() > 0) { message.runId = state_.runId(); message.runNumber = state_.runNumber(); }
-  message.elapsedMs = state_.isRiding() ? state_.elapsedMs(raceClock_.nowRaceMs()) : 0;
-  message.offsetToMasterMs = raceClock_.offsetToMasterMs();
-  message.syncAccuracyMs = syncAccuracyMs_;
-  message.loopLastGapMs = loopMonitor_.lastLoopGapMs();
-  message.loopMaxGapMs = loopMonitor_.maxLoopGapMs();
-  message.buttonLastLatencyMs = sensor_.lastButtonLatencyMs();
-  message.buttonMaxLatencyMs = sensor_.maxButtonLatencyMs();
+  if (state_.runNumber() > 0) message.runNumber = state_.runNumber();
   if (isLinkActive(startLink_)) {
     message.hasStartRssi = true;
     message.startRssi = startLink_.lastRssi;
-    message.hasStartSnr = true;
-    message.startSnr = startLink_.lastSnr;
-    message.startLastSeenAgoMs = linkAgeMs(startLink_);
   }
 
   String preview;
   RadioProtocol::serializeCompactStatus(message, preview);
   Serial.printf("FINISH STATUS TX compact hb=%lu len=%u\n",
                 static_cast<unsigned long>(message.heartbeat), static_cast<unsigned>(preview.length()));
+  if (preview.length() > 120U) Serial.printf("WARN FINISH STATUS payload too large len=%u\n", static_cast<unsigned>(preview.length()));
 
   int resultCode = 0;
   if (sendRadio(message, &resultCode)) {
@@ -625,6 +663,26 @@ bool FinishStationApp::priorityTxPending(uint32_t nowMs) const {
   return priorityTxRecently ||
          (!finishAckReceived_ && state_.state() == FinishRunState::FinishSent &&
           (finishAttempts_ < FINISH_MAX_RETRY_ATTEMPTS || nowMs - lastFinishSendMs_ < FINISH_RETRY_INTERVAL_MS));
+}
+
+bool FinishStationApp::canSendNonCriticalLoRa(uint32_t nowMs) const {
+  if (!radioReady_) return false;
+  if (!syncDoneOnce_) return false;
+  if (state_.state() == FinishRunState::Riding) return false;
+  if (state_.state() == FinishRunState::FinishSent) return false;
+  if (state_.state() == FinishRunState::AckTimeout) return false;
+  if (priorityTxPending(nowMs)) return false;
+  if (lastPriorityTxMs_ > 0 && nowMs - lastPriorityTxMs_ < 1500UL) return false;
+  if (lastCriticalPacketMs_ > 0 && nowMs - lastCriticalPacketMs_ < 1500UL) return false;
+  if (lastAnyPacketMs_ > 0 && nowMs - lastAnyPacketMs_ < 1500UL) return false;
+  if (syncInProgress_) return false;
+  return true;
+}
+
+void FinishStationApp::logNonCriticalDeferred(uint32_t nowMs) {
+  if (nowMs - lastNonCriticalDeferredLogMs_ < 5000UL) return;
+  lastNonCriticalDeferredLogMs_ = nowMs;
+  Serial.println("FINISH non-critical TX deferred: RX priority");
 }
 
 #if ENABLE_LORA_TIME_SYNC
@@ -936,6 +994,7 @@ void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
     Serial.printf("parsed type=RUN_START stationId=%s runId=%s raceStartTimeMs=%lu runNumber=%lu\n", message.stationId.c_str(), message.runId.c_str(), static_cast<unsigned long>(message.raceStartTimeMs), static_cast<unsigned long>(message.runNumber));
     Serial.printf("RUN_START duplicate? %s\n", duplicate ? "yes" : "no");
     if (!raceClock_.isSynced() || !syncDoneOnce_) {
+      Serial.println("RX drop: raceClock not synced");
       Serial.println("RUN_START ignored: race clock not synced");
 #if ENABLE_OLED
       if (!display_.testPatternOnly()) display_.showLines({finishHeader(), "NO TIME SYNC"});
@@ -943,10 +1002,12 @@ void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
       return;
     }
     if (message.runId.length() == 0) {
+      Serial.println("RX drop: missing runId");
       Serial.println("RUN_START invalid: missing runId");
       return;
     }
     if (message.raceStartTimeMs == 0) {
+      Serial.println("RX drop: missing raceStartTimeMs");
       Serial.println("RUN_START invalid: missing raceStartTimeMs");
       return;
     }
@@ -954,6 +1015,9 @@ void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
       const uint32_t nowRaceMs = raceClock_.nowRaceMs();
       remoteStartTimestampMs_ = message.raceStartTimeMs;
       const uint32_t elapsedAtReceiveMs = nowRaceMs >= remoteStartTimestampMs_ ? nowRaceMs - remoteStartTimestampMs_ : 0;
+      Serial.printf("RUN_START accepted runId=%s raceStart=%lu localRaceNow=%lu\n",
+                    message.runId.c_str(), static_cast<unsigned long>(message.raceStartTimeMs),
+                    static_cast<unsigned long>(nowRaceMs));
       Serial.printf("raceStartTimeMs=%lu\n", static_cast<unsigned long>(remoteStartTimestampMs_));
       Serial.printf("nowRaceMs=%lu\n", static_cast<unsigned long>(nowRaceMs));
       Serial.printf("elapsedAtReceiveMs=%lu\n", static_cast<unsigned long>(elapsedAtReceiveMs));
@@ -975,6 +1039,7 @@ void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
       if (!display_.testPatternOnly()) display_.showLines({finishHeader(), String("RIDING ") + makeMovingArrow(ridingAnimationFrame()), formatSeconds(elapsedAtReceiveMs), startSignalText()});
 #endif
     } else {
+      Serial.println("RX drop: duplicate RUN_START");
       Serial.println("Duplicate RUN_START received, ACK resent.");
       Serial.printf("Duplicate RUN_START, ACK resent runId=%s\n", message.runId.c_str());
     }

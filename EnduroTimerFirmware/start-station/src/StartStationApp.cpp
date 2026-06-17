@@ -829,6 +829,9 @@ void StartStationApp::sendRunStart(const RunRecord& run) {
   String rawPayload;
   RadioProtocol::serialize(message, rawPayload);
   Serial.printf("RUN_START TX runId=%s raceStartTimeMs=%lu runNumber=%lu\n", run.runId.c_str(), static_cast<unsigned long>(run.raceStartTimeMs), static_cast<unsigned long>(run.runNumber));
+  Serial.printf("RUN_START TX attempt=%u len=%u runId=%s raceStart=%lu\n",
+                runStartAckAttempts_, static_cast<unsigned>(rawPayload.length()),
+                run.runId.c_str(), static_cast<unsigned long>(run.raceStartTimeMs));
   Serial.printf("RUN_START compact payload len=%u\n", static_cast<unsigned>(rawPayload.length()));
   if (rawPayload.length() > MAX_LORA_PAYLOAD_WARN) {
     Serial.printf("RUN_START compact payload warning len=%u limit=%u\n", static_cast<unsigned>(rawPayload.length()), MAX_LORA_PAYLOAD_WARN);
