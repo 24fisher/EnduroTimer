@@ -17,7 +17,11 @@ int32_t RaceClock::offsetToMasterMs() const {
 }
 
 uint32_t RaceClock::nowRaceMs() const {
-  return static_cast<uint32_t>(static_cast<int64_t>(millis()) + static_cast<int64_t>(offsetToMasterMs_));
+  return raceMsFromLocalMillis(millis());
+}
+
+uint32_t RaceClock::raceMsFromLocalMillis(uint32_t localMillis) const {
+  return static_cast<uint32_t>(static_cast<int64_t>(localMillis) + static_cast<int64_t>(offsetToMasterMs_));
 }
 
 void RaceClock::setOffsetToMaster(int32_t offsetMs) {

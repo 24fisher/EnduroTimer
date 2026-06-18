@@ -85,6 +85,7 @@
 
 static constexpr uint32_t OledI2cClockHz = OLED_I2C_CLOCK_HZ;
 static constexpr uint16_t OledI2cTimeoutMs = 50;
+static constexpr uint32_t OledMinRenderIntervalMs = 100UL;
 static const uint8_t OledAddressCandidates[] = {0x3C, 0x3D};
 
 #if OLED_DRIVER_TYPE == SSD1306_VCOMH0
@@ -223,6 +224,12 @@ bool OledDisplay::begin() {
   lastLines_.clear();
   lastFrameKey_ = String();
   lastRenderMs_ = 0;
+  pendingFrameType_ = PendingFrameType::None;
+  pendingLines_.clear();
+  pendingCountdownText_ = String();
+  pendingCountdownRole_ = String();
+  pendingFrameKey_ = String();
+  displayDirty_ = false;
   lastInvertTestMs = 0;
 
 #if !ENABLE_OLED
@@ -278,6 +285,10 @@ bool OledDisplay::begin() {
 void OledDisplay::update() {
   if (!initialized_ || u8g2 == nullptr) return;
 
+  if (displayDirty_ && millis() - lastRenderMs_ >= OledMinRenderIntervalMs) {
+    renderPendingFrame();
+  }
+
 #if OLED_INVERT_TEST
   const uint32_t now = millis();
   if (now - lastInvertTestMs >= 1000UL) {
@@ -303,29 +314,21 @@ void OledDisplay::showLines(const std::vector<String>& lines) {
   normalized.reserve(lines.size());
   for (const String& line : lines) normalized.push_back(line.length() > 0 ? line : String("-"));
 
-  const uint32_t now = millis();
-  bool changed = normalized.size() != lastLines_.size();
+  bool changed = pendingFrameType_ != PendingFrameType::Lines || normalized.size() != pendingLines_.size();
   if (!changed) {
     for (size_t i = 0; i < normalized.size(); ++i) {
-      if (normalized[i] != lastLines_[i]) { changed = true; break; }
+      if (normalized[i] != pendingLines_[i]) {
+        changed = true;
+        break;
+      }
     }
   }
-  if (!changed && now - lastRenderMs_ < 2000UL) return;
+  if (!changed) return;
 
-  u8g2->clearBuffer();
-  u8g2->setFont(u8g2_font_6x10_tf);
-
-  int y = 10;
-  for (const String& visibleLine : normalized) {
-    u8g2->drawStr(0, y, visibleLine.c_str());
-    y += 10;
-    if (y > 64) break;
-  }
-
-  u8g2->sendBuffer();
-  lastLines_ = normalized;
-  lastFrameKey_ = "lines";
-  lastRenderMs_ = now;
+  pendingFrameType_ = PendingFrameType::Lines;
+  pendingLines_ = normalized;
+  pendingFrameKey_ = "lines";
+  displayDirty_ = true;
 }
 
 void OledDisplay::showBoot(const String& role) {
@@ -351,21 +354,62 @@ void OledDisplay::showCountdown(const String& text, const String& role) {
   if (!initialized_ || u8g2 == nullptr || testPatternOnly()) return;
 
   const String frameKey = String("countdown|") + role + "|" + text;
-  const uint32_t now = millis();
-  if (frameKey == lastFrameKey_ && now - lastRenderMs_ < 1000UL) return;
+  if (pendingFrameType_ == PendingFrameType::Countdown && frameKey == pendingFrameKey_) return;
 
-  u8g2->clearBuffer();
-  u8g2->setFont(u8g2_font_6x10_tf);
-  u8g2->drawStr(0, 9, role.length() > 0 ? role.c_str() : "START");
-  u8g2->setFont(u8g2_font_logisoso46_tf);
-  const int16_t width = u8g2->getStrWidth(text.c_str());
-  int16_t x = (128 - width) / 2;
-  if (x < 0) x = 0;
-  u8g2->drawStr(x, 60, text.c_str());
+  pendingFrameType_ = PendingFrameType::Countdown;
+  pendingCountdownText_ = text;
+  pendingCountdownRole_ = role;
+  pendingFrameKey_ = frameKey;
+  displayDirty_ = true;
+}
+
+void OledDisplay::renderPendingFrame() {
+  if (!displayDirty_ || pendingFrameType_ == PendingFrameType::None) return;
+  if (pendingFrameKey_ == lastFrameKey_ && pendingFrameType_ == PendingFrameType::Countdown) {
+    displayDirty_ = false;
+    return;
+  }
+
+  if (pendingFrameType_ == PendingFrameType::Lines) {
+    bool changed = pendingLines_.size() != lastLines_.size() || lastFrameKey_ != "lines";
+    if (!changed) {
+      for (size_t i = 0; i < pendingLines_.size(); ++i) {
+        if (pendingLines_[i] != lastLines_[i]) {
+          changed = true;
+          break;
+        }
+      }
+    }
+    if (!changed) {
+      displayDirty_ = false;
+      return;
+    }
+
+    u8g2->clearBuffer();
+    u8g2->setFont(u8g2_font_6x10_tf);
+    int y = 10;
+    for (const String& visibleLine : pendingLines_) {
+      u8g2->drawStr(0, y, visibleLine.c_str());
+      y += 10;
+      if (y > 64) break;
+    }
+    lastLines_ = pendingLines_;
+  } else {
+    u8g2->clearBuffer();
+    u8g2->setFont(u8g2_font_6x10_tf);
+    u8g2->drawStr(0, 9, pendingCountdownRole_.length() > 0 ? pendingCountdownRole_.c_str() : "START");
+    u8g2->setFont(u8g2_font_logisoso46_tf);
+    const int16_t width = u8g2->getStrWidth(pendingCountdownText_.c_str());
+    int16_t x = (128 - width) / 2;
+    if (x < 0) x = 0;
+    u8g2->drawStr(x, 60, pendingCountdownText_.c_str());
+    lastLines_.clear();
+  }
+
   u8g2->sendBuffer();
-  lastLines_.clear();
-  lastFrameKey_ = frameKey;
-  lastRenderMs_ = now;
+  lastFrameKey_ = pendingFrameKey_;
+  lastRenderMs_ = millis();
+  displayDirty_ = false;
 }
 
 void OledDisplay::showFinishLineCrossed() {

@@ -24,6 +24,7 @@ static constexpr int LORA_BUSY = 13;
 static constexpr uint8_t FINISH_MAX_RETRY_ATTEMPTS = 15;
 static constexpr uint32_t FINISH_RETRY_INTERVAL_MS = 1000UL;
 static constexpr uint32_t DisplayRefreshMs = 200UL;
+static constexpr uint32_t ButtonDebounceMs = 40UL;
 static constexpr uint32_t WIFI_RETRY_INTERVAL_MS = 2000UL;
 static constexpr uint32_t WIFI_SYNC_RETRY_DELAY_MS = 2000UL;
 static constexpr uint32_t HTTP_SYNC_TIMEOUT_MS = 300UL;
@@ -55,6 +56,8 @@ void FinishStationApp::begin() {
   Serial.printf("Chip: %s rev %u cores=%u efuseMac=%llX\n", ESP.getChipModel(), ESP.getChipRevision(), ESP.getChipCores(), ESP.getEfuseMac());
   Serial.println("Power save: disabled");
 
+  configureButton();
+
 #if ENABLE_OLED
   Serial.println("[BOOT] OLED init...");
   oledReady_ = display_.begin();
@@ -67,9 +70,6 @@ void FinishStationApp::begin() {
   oledReady_ = false;
 #endif
 
-  Serial.println("[BOOT] Finish button init...");
-  sensor_.begin();
-  Serial.println("[BOOT] Finish button OK");
   buzzer_.begin();
   battery_.begin();
   led_.begin();
@@ -91,21 +91,7 @@ void FinishStationApp::loop() {
                   static_cast<unsigned long>(wifiLastDurationMs_), static_cast<unsigned long>(oledLastDurationMs_));
   }
 
-  uint32_t finishTimestampMs = 0;
-  const uint32_t buttonStartMs = millis();
-  if (sensor_.update(now, finishTimestampMs)) {
-    (void)finishTimestampMs;
-    Serial.printf("state=%s\n", state_.stateText().c_str());
-    Serial.printf("canFinish=%d\n", state_.canFinish() ? 1 : 0);
-    handleFinishButton(now);
-  }
-  const uint32_t buttonDurationMs = millis() - buttonStartMs;
-  loopMonitor_.recordBlock("Button", buttonDurationMs);
-  if (sensor_.lastButtonLatencyMs() > 100UL) {
-    Serial.printf("WARN button latency=%lu max=%lu state=%s\n",
-                  static_cast<unsigned long>(sensor_.lastButtonLatencyMs()),
-                  static_cast<unsigned long>(sensor_.maxButtonLatencyMs()), state_.stateText().c_str());
-  }
+  processInputEvents();
 
 #if ENABLE_LORA
   { const uint32_t blockStartMs = millis(); pollRadio(); loopMonitor_.recordBlock("RadioPoll", millis() - blockStartMs, LORA_MAX_POLL_DURATION_WARN_MS); }
@@ -782,11 +768,40 @@ void FinishStationApp::sendRunStartAck(const RadioMessage& runStart) {
   }
 }
 
-void FinishStationApp::acceptFinishButton(uint32_t nowMs) {
+void FinishStationApp::configureButton() {
+  const bool queueReady = inputEventQueue_.begin(16);
+  const bool taskReady = queueReady && finishButtonInputTask_.begin(
+      FINISH_BUTTON_PIN, InputEventType::FinishButtonPressed, inputEventQueue_,
+      true, ButtonDebounceMs, 2UL, 5, 1);
+  Serial.printf("Button: FINISH_BUTTON_PIN=%d activeLow=true debounce=%lu task=%s queue=%s\n",
+                FINISH_BUTTON_PIN, static_cast<unsigned long>(ButtonDebounceMs),
+                taskReady ? "OK" : "FAIL", queueReady ? "OK" : "FAIL");
+}
+
+void FinishStationApp::processInputEvents() {
+  InputEvent event;
+  while (inputEventQueue_.pop(event)) {
+    const uint32_t processedAtMs = millis();
+    inputCaptureToProcessLatencyMs_ = processedAtMs - event.localMillis;
+    if (inputCaptureToProcessLatencyMs_ > maxInputCaptureToProcessLatencyMs_) {
+      maxInputCaptureToProcessLatencyMs_ = inputCaptureToProcessLatencyMs_;
+    }
+    if (inputCaptureToProcessLatencyMs_ > 100UL) {
+      Serial.printf("WARN input latency=%lu event=FinishButtonPressed state=%s\n",
+                    static_cast<unsigned long>(inputCaptureToProcessLatencyMs_),
+                    state_.stateText().c_str());
+    }
+    if (event.type == InputEventType::FinishButtonPressed) {
+      handleFinishButton(event, processedAtMs);
+    }
+  }
+}
+
+void FinishStationApp::acceptFinishButton(uint32_t capturedLocalMillis, uint32_t processedAtMs) {
   Serial.println("FINISH button short press");
   Serial.printf("canFinish=%s\n", state_.canFinish() ? "true" : "false");
   Serial.printf("Finish accepted runId=%s\n", state_.runId().c_str());
-  const uint32_t finishRaceTimeMs = raceClock_.nowRaceMs();
+  const uint32_t finishRaceTimeMs = raceClock_.raceMsFromLocalMillis(capturedLocalMillis);
   finishLocalElapsedMs_ = finishRaceTimeMs >= state_.raceStartTimeMs() ? finishRaceTimeMs - state_.raceStartTimeMs() : 0;
   const uint32_t finishTimestampMs = finishRaceTimeMs;
   localResultMs_ = finishLocalElapsedMs_;
@@ -807,7 +822,7 @@ void FinishStationApp::acceptFinishButton(uint32_t nowMs) {
   finishAttempts_ = 0;
   manualResendCount_ = 0;
   lastFinishSendMs_ = 0;
-  finishLineCrossedUntilMs_ = nowMs + 2000UL;
+  finishLineCrossedUntilMs_ = processedAtMs + 2000UL;
   led_.flash(2, 100, 120);
 #if ENABLE_OLED
   if (!display_.testPatternOnly()) {
@@ -817,23 +832,26 @@ void FinishStationApp::acceptFinishButton(uint32_t nowMs) {
   sendFinish();
 }
 
-void FinishStationApp::handleFinishButton(uint32_t nowMs) {
+void FinishStationApp::handleFinishButton(const InputEvent& event, uint32_t processedAtMs) {
+  Serial.printf("FINISH button pressed capturedMs=%lu raw=%lu\n",
+                static_cast<unsigned long>(event.localMillis),
+                static_cast<unsigned long>(event.rawGpio));
   Serial.printf("current finish state=%s canFinish=%s active runId=%s\n", state_.stateText().c_str(), state_.canFinish() ? "true" : "false", state_.runId().c_str());
   if (!raceClock_.isSynced() || !syncDoneOnce_) {
     Serial.println("Finish button ignored: wifi sync not ready");
     return;
   }
   if (state_.canFinish()) {
-    acceptFinishButton(nowMs);
+    acceptFinishButton(event.localMillis, processedAtMs);
     return;
   }
   if (state_.state() == FinishRunState::FinishSent || state_.state() == FinishRunState::AckTimeout) {
-    resendFinishFromButton(nowMs);
+    resendFinishFromButton(processedAtMs);
     return;
   }
   if (state_.state() == FinishRunState::Idle) {
     Serial.println("FINISH button ignored: no active run");
-    showNoRunUntilMs_ = nowMs + 1500UL;
+    showNoRunUntilMs_ = processedAtMs + 1500UL;
 #if ENABLE_OLED
     if (!display_.testPatternOnly()) display_.showLines({finishHeader(), "NO ACTIVE RUN"});
 #endif
@@ -1024,7 +1042,6 @@ void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
       state_.startRun(message.runId, message.runNumber, String("Run ") + String(message.runNumber), "", remoteStartTimestampMs_, nowRaceMs);
       Serial.println("Finish state -> Riding");
       Serial.printf("localRunStartReceivedMillis=%lu\n", static_cast<unsigned long>(nowRaceMs));
-      sensor_.arm(message.runId, remoteStartTimestampMs_);
       finishAttempts_ = 0;
       manualResendCount_ = 0;
       finishAckReceived_ = false;
@@ -1062,7 +1079,6 @@ void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
       lastResultValid_ = true;
       lastFinishedRunId_ = message.runId;
       if (message.runNumber > 0) lastFinishedRunNumber_ = message.runNumber;
-      sensor_.reset();
       state_.ackFinish();
       finishAttempts_ = 0;
       manualResendCount_ = 0;
@@ -1156,10 +1172,19 @@ void FinishStationApp::logHeartbeat(uint32_t nowMs) {
 
   String heartbeatState = state_.stateText();
   heartbeatState.toUpperCase();
-  Serial.printf("FINISH BUTTON raw=%d pressed=%d state=%s\n", sensor_.buttonRaw(), sensor_.buttonPressed() ? 1 : 0, state_.stateText().c_str());
+  Serial.printf("FINISH BUTTON raw=%d pressed=%d state=%s\n", finishButtonInputTask_.rawGpio(), finishButtonInputTask_.isPressed() ? 1 : 0, state_.stateText().c_str());
   Serial.printf("FINISH alive state=%s uptime=%lu heap=%lu minHeap=%lu buttonRaw=%d buttonPressed=%s canFinish=%s localRunStartReceivedMillis=%lu finishLocalElapsedMs=%lu remoteStartTimestampMs=%lu\n", heartbeatState.c_str(),
                 static_cast<unsigned long>(nowMs), static_cast<unsigned long>(ESP.getFreeHeap()),
-                static_cast<unsigned long>(ESP.getMinFreeHeap()), sensor_.buttonRaw(), sensor_.buttonPressed() ? "true" : "false", state_.canFinish() ? "true" : "false", static_cast<unsigned long>(state_.localRunStartReceivedMillis()), static_cast<unsigned long>(finishLocalElapsedMs_), static_cast<unsigned long>(remoteStartTimestampMs_));
+                static_cast<unsigned long>(ESP.getMinFreeHeap()), finishButtonInputTask_.rawGpio(), finishButtonInputTask_.isPressed() ? "true" : "false", state_.canFinish() ? "true" : "false", static_cast<unsigned long>(state_.localRunStartReceivedMillis()), static_cast<unsigned long>(finishLocalElapsedMs_), static_cast<unsigned long>(remoteStartTimestampMs_));
+  Serial.printf("FINISH INPUT queueDepth=%lu dropped=%lu latency=%lu maxLatency=%lu debounceLatency=%lu maxDebounceLatency=%lu loopGap=%lu maxLoopGap=%lu\n",
+                static_cast<unsigned long>(inputEventQueue_.depth()),
+                static_cast<unsigned long>(inputEventQueue_.droppedInputEvents()),
+                static_cast<unsigned long>(inputCaptureToProcessLatencyMs_),
+                static_cast<unsigned long>(maxInputCaptureToProcessLatencyMs_),
+                static_cast<unsigned long>(finishButtonInputTask_.lastDebounceLatencyMs()),
+                static_cast<unsigned long>(finishButtonInputTask_.maxDebounceLatencyMs()),
+                static_cast<unsigned long>(loopMonitor_.lastLoopGapMs()),
+                static_cast<unsigned long>(loopMonitor_.maxLoopGapMs()));
   Serial.printf("FINISH LINK DEBUG:\n  finishHbSent=%lu\n  startActive=%d\n  startAge=%lu\n  startRssi=%d\n  startLastType=%s\n  startHbReceived=%lu\n",
                 static_cast<unsigned long>(heartbeatCounter_), isLinkActive(startLink_) ? 1 : 0,
                 static_cast<unsigned long>(linkAgeMs(startLink_)), startLink_.lastRssi,

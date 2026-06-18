@@ -6,8 +6,9 @@
 #include <vector>
 
 #include "BatteryService.h"
-#include "ButtonDebouncer.h"
+#include "ButtonInputTask.h"
 #include "BuzzerStub.h"
+#include "InputEventQueue.h"
 #include "OledDisplay.h"
 #include "RadioMessage.h"
 #include "LinkStatus.h"
@@ -77,7 +78,8 @@ public:
 
 private:
   void configureButton();
-  void updateButton(uint32_t nowMs);
+  void processInputEvents();
+  void handleStartButtonEvent(const InputEvent& event);
   void updateLed(uint32_t nowMs);
   String startHeader() const;
   String startShortHeader() const;
@@ -138,6 +140,8 @@ private:
   RaceClock raceClock_;
   BatteryService battery_;
   LoopMonitor loopMonitor_;
+  InputEventQueue inputEventQueue_;
+  ButtonInputTask startButtonInputTask_;
   OledDisplay display_;
   BuzzerStub buzzer_;
   LedIndicator led_;
@@ -213,7 +217,8 @@ private:
   String lastLoRaRaw_ = "-";
   int lastRssi_ = 0;
   float lastSnr_ = 0.0F;
-  ButtonDebouncer startButton_;
+  uint32_t inputCaptureToProcessLatencyMs_ = 0;
+  uint32_t maxInputCaptureToProcessLatencyMs_ = 0;
   String lastCountdownText_;
   uint32_t lastHeartbeatMs_ = 0;
   std::vector<RiderRecord> riders_;

@@ -4,9 +4,10 @@
 #include <RadioLib.h>
 
 #include "BatteryService.h"
+#include "ButtonInputTask.h"
 #include "BuzzerStub.h"
-#include "FinishSensorStub.h"
 #include "FinishState.h"
+#include "InputEventQueue.h"
 #include "OledDisplay.h"
 #include "RadioMessage.h"
 #include "LinkStatus.h"
@@ -14,6 +15,10 @@
 #include "TimeUtils.h"
 #include "RaceClock.h"
 #include "LoopMonitor.h"
+
+#ifndef FINISH_BUTTON_PIN
+#define FINISH_BUTTON_PIN 0
+#endif
 
 class FinishStationApp {
 public:
@@ -47,8 +52,10 @@ private:
   bool priorityTxPending(uint32_t nowMs) const;
   bool canSendNonCriticalLoRa(uint32_t nowMs) const;
   void logNonCriticalDeferred(uint32_t nowMs);
-  void acceptFinishButton(uint32_t nowMs);
-  void handleFinishButton(uint32_t nowMs);
+  void configureButton();
+  void processInputEvents();
+  void acceptFinishButton(uint32_t capturedLocalMillis, uint32_t processedAtMs);
+  void handleFinishButton(const InputEvent& event, uint32_t processedAtMs);
   void sendFinish();
   void resendFinishFromButton(uint32_t nowMs);
   uint8_t ridingAnimationFrame() const;
@@ -62,10 +69,11 @@ private:
   RaceClock raceClock_;
   BatteryService battery_;
   LoopMonitor loopMonitor_;
+  InputEventQueue inputEventQueue_;
+  ButtonInputTask finishButtonInputTask_;
   OledDisplay display_;
   BuzzerStub buzzer_;
   LedIndicator led_;
-  FinishSensorStub sensor_;
   FinishState state_;
 
   bool oledReady_ = false;
@@ -133,6 +141,8 @@ private:
   uint32_t radioTxMaxDurationMs_ = 0;
   uint32_t wifiLastDurationMs_ = 0;
   uint32_t oledLastDurationMs_ = 0;
+  uint32_t inputCaptureToProcessLatencyMs_ = 0;
+  uint32_t maxInputCaptureToProcessLatencyMs_ = 0;
   bool rxRestorePending_ = false;
   uint32_t rxRestoreFailureCount_ = 0;
   uint32_t radioRxPacketCount_ = 0;

@@ -8,6 +8,7 @@ public:
   uint32_t localMillis() const;
   bool isSynced() const;
   uint32_t nowRaceMs() const;
+  uint32_t raceMsFromLocalMillis(uint32_t localMillis) const;
   int32_t offsetToMasterMs() const;
   void setOffsetToMaster(int32_t offsetMs);
   void markSynced(uint32_t accuracyMs = 0);

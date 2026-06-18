@@ -20,9 +20,23 @@ public:
   void showResult(const String& result, const String& detail = String());
 
 private:
+  enum class PendingFrameType {
+    None,
+    Lines,
+    Countdown
+  };
+
+  void renderPendingFrame();
+
   bool initialized_ = false;
   uint8_t address_ = 0;
   std::vector<String> lastLines_;
   String lastFrameKey_;
   uint32_t lastRenderMs_ = 0;
+  PendingFrameType pendingFrameType_ = PendingFrameType::None;
+  std::vector<String> pendingLines_;
+  String pendingCountdownText_;
+  String pendingCountdownRole_;
+  String pendingFrameKey_;
+  bool displayDirty_ = false;
 };

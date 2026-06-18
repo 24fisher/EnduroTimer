@@ -21,7 +21,7 @@ static constexpr int LORA_DIO1 = 14;
 static constexpr int LORA_RST = 12;
 static constexpr int LORA_BUSY = 13;
 static constexpr uint32_t DisplayRefreshMs = 250UL;
-static constexpr uint32_t ButtonDebounceMs = 50UL;
+static constexpr uint32_t ButtonDebounceMs = 40UL;
 static constexpr uint32_t SYNC_PING_RETRY_INTERVAL_MS = 1000UL;
 static constexpr uint8_t SYNC_MAX_ATTEMPTS = 8;
 static constexpr uint32_t RUN_START_RETRY_INTERVAL_MS = 700UL;
@@ -55,6 +55,8 @@ void StartStationApp::begin() {
   Serial.printf("Chip: %s rev %u cores=%u efuseMac=%llX\n", ESP.getChipModel(), ESP.getChipRevision(), ESP.getChipCores(), ESP.getEfuseMac());
   Serial.println("Power save: disabled");
 
+  configureButton();
+
 #if ENABLE_OLED
   Serial.println("[BOOT] OLED init...");
   oledReady_ = display_.begin();
@@ -67,8 +69,6 @@ void StartStationApp::begin() {
   oledReady_ = false;
 #endif
 
-  configureButton();
-  Serial.println("[BOOT] Button OK");
   buzzer_.begin();
   battery_.begin();
   led_.begin();
@@ -85,7 +85,7 @@ void StartStationApp::begin() {
 void StartStationApp::loop() {
   const uint32_t now = clock_.nowMs();
   loopMonitor_.tick(now);
-  { const uint32_t blockStartMs = millis(); updateButton(now); loopMonitor_.recordBlock("Button", millis() - blockStartMs); }
+  processInputEvents();
   updateLed(now);
 #if ENABLE_LORA_TIME_SYNC
   updateSync(now);
@@ -408,8 +408,12 @@ String StartStationApp::debugStatusJson() const {
   doc["radioRxPacketCount"] = radioRxPacketCount_;
   doc["radioRxTimeoutCount"] = radioRxTimeoutCount_;
   doc["radioRxNoPacketCount"] = radioRxNoPacketCount_;
-  doc["startButtonLastLatencyMs"] = startButton_.lastPressLatencyMs();
-  doc["startButtonMaxLatencyMs"] = startButton_.maxPressLatencyMs();
+  doc["inputEventQueueDepth"] = inputEventQueue_.depth();
+  doc["droppedInputEvents"] = inputEventQueue_.droppedInputEvents();
+  doc["inputCaptureToProcessLatencyMs"] = inputCaptureToProcessLatencyMs_;
+  doc["maxInputCaptureToProcessLatencyMs"] = maxInputCaptureToProcessLatencyMs_;
+  doc["startButtonLastLatencyMs"] = startButtonInputTask_.lastDebounceLatencyMs();
+  doc["startButtonMaxLatencyMs"] = startButtonInputTask_.maxDebounceLatencyMs();
   doc["finishButtonLastLatencyMs"] = finishButtonLastLatencyMs_;
   doc["finishButtonMaxLatencyMs"] = finishButtonMaxLatencyMs_;
   doc["finishLoopLastGapMs"] = finishLoopLastGapMs_;
@@ -540,16 +544,37 @@ void StartStationApp::beginRadio() {
 }
 
 void StartStationApp::configureButton() {
-  pinMode(START_BUTTON_PIN, INPUT_PULLUP);
-  startButton_.begin(START_BUTTON_PIN, ButtonDebounceMs);
-  Serial.printf("Button: configured START_BUTTON_PIN=%d INPUT_PULLUP\n", START_BUTTON_PIN);
+  const bool queueReady = inputEventQueue_.begin(16);
+  const bool taskReady = queueReady && startButtonInputTask_.begin(
+      START_BUTTON_PIN, InputEventType::StartButtonPressed, inputEventQueue_,
+      true, ButtonDebounceMs, 2UL, 5, 1);
+  Serial.printf("Button: START_BUTTON_PIN=%d activeLow=true debounce=%lu task=%s queue=%s\n",
+                START_BUTTON_PIN, static_cast<unsigned long>(ButtonDebounceMs),
+                taskReady ? "OK" : "FAIL", queueReady ? "OK" : "FAIL");
 }
 
-void StartStationApp::updateButton(uint32_t nowMs) {
-  startButton_.update(nowMs);
-  if (!startButton_.wasShortPressed()) return;
+void StartStationApp::processInputEvents() {
+  InputEvent event;
+  while (inputEventQueue_.pop(event)) {
+    inputCaptureToProcessLatencyMs_ = millis() - event.localMillis;
+    if (inputCaptureToProcessLatencyMs_ > maxInputCaptureToProcessLatencyMs_) {
+      maxInputCaptureToProcessLatencyMs_ = inputCaptureToProcessLatencyMs_;
+    }
+    if (inputCaptureToProcessLatencyMs_ > 100UL) {
+      Serial.printf("WARN input latency=%lu event=StartButtonPressed state=%s\n",
+                    static_cast<unsigned long>(inputCaptureToProcessLatencyMs_),
+                    state_.stateText().c_str());
+    }
+    if (event.type == InputEventType::StartButtonPressed) {
+      handleStartButtonEvent(event);
+    }
+  }
+}
 
-  Serial.println("START button short press event");
+void StartStationApp::handleStartButtonEvent(const InputEvent& event) {
+  Serial.printf("START button pressed capturedMs=%lu raw=%lu\n",
+                static_cast<unsigned long>(event.localMillis),
+                static_cast<unsigned long>(event.rawGpio));
   if (!raceClock_.isSynced() || !finishRaceClockSynced_ || !finishSyncDoneOnce_) {
     Serial.println("Start button ignored: wifi sync not ready");
     return;
@@ -1296,7 +1321,15 @@ void StartStationApp::logHeartbeat(uint32_t nowMs) {
   heartbeatState.toUpperCase();
   Serial.printf("START alive state=%s uptime=%lu heap=%lu minHeap=%lu finishOnline=%s buttonRaw=%d buttonPressed=%s\n", heartbeatState.c_str(),
                 static_cast<unsigned long>(nowMs), static_cast<unsigned long>(ESP.getFreeHeap()),
-                static_cast<unsigned long>(ESP.getMinFreeHeap()), finishOnline() ? "true" : "false", startButton_.raw(), startButton_.isPressed() ? "true" : "false");
+                static_cast<unsigned long>(ESP.getMinFreeHeap()), finishOnline() ? "true" : "false",
+                startButtonInputTask_.rawGpio(), startButtonInputTask_.isPressed() ? "true" : "false");
+  Serial.printf("START INPUT queueDepth=%lu dropped=%lu latency=%lu maxLatency=%lu loopGap=%lu maxLoopGap=%lu\n",
+                static_cast<unsigned long>(inputEventQueue_.depth()),
+                static_cast<unsigned long>(inputEventQueue_.droppedInputEvents()),
+                static_cast<unsigned long>(inputCaptureToProcessLatencyMs_),
+                static_cast<unsigned long>(maxInputCaptureToProcessLatencyMs_),
+                static_cast<unsigned long>(loopMonitor_.lastLoopGapMs()),
+                static_cast<unsigned long>(loopMonitor_.maxLoopGapMs()));
   Serial.printf("START LINK DEBUG:\n  startHbSent=%lu\n  finishActive=%d\n  finishAge=%lu\n  finishRssi=%d\n  finishLastType=%s\n  finishHbReceived=%lu\n",
                 static_cast<unsigned long>(startHeartbeatCount_), finishOnline() ? 1 : 0,
                 static_cast<unsigned long>(finishLastSeenAgoMs()), finishLink_.lastRssi,
