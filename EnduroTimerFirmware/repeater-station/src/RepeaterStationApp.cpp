@@ -32,6 +32,7 @@ void RepeaterStationApp::begin() {
   Serial.println(oledReady_ ? "OLED OK" : "OLED FAIL");
   if (oledReady_) display_.showBootScreen(String("REPEATER v") + FIRMWARE_VERSION);
 #endif
+  battery_.begin();
   beginRadio();
 }
 
@@ -57,6 +58,7 @@ void RepeaterStationApp::beginRadio() {
 void RepeaterStationApp::loop() {
   const uint32_t now = millis();
   loopMonitor_.tick(now);
+  battery_.update(now);
   const uint32_t pollStart = millis();
   pollRadioNonBlocking();
   loopMonitor_.recordBlock("RadioPoll", millis() - pollStart, LORA_MAX_POLL_DURATION_WARN_MS);
@@ -131,14 +133,27 @@ void RepeaterStationApp::handlePacket(const String& payload, int rssi, float snr
   String error;
   if (!RadioProtocol::deserialize(payload, msg, &error)) { Serial.printf("RX parse failed error=%s\n", error.c_str()); return; }
   const String type = RadioProtocol::typeToString(msg.type);
-  Serial.printf("RX type=%s mid=%s src=%s dst=%s hop=%u rssi=%d\n", type.c_str(), msg.messageId.c_str(), msg.src.c_str(), msg.dst.c_str(), msg.hop, rssi);
+  Serial.printf("REPEATER RX type=%s src=%s dst=%s hop=%u rssi=%d\n",
+                type.c_str(), msg.src.c_str(), msg.dst.c_str(), msg.hop, rssi);
+  if (msg.type == RadioMessageType::RunStart) lastCriticalType_ = "RS";
+  else if (msg.type == RadioMessageType::RunStartAck) lastCriticalType_ = "RSA";
+  else if (msg.type == RadioMessageType::Finish) lastCriticalType_ = "F";
+  else if (msg.type == RadioMessageType::FinishAck) lastCriticalType_ = "FA";
   if (msg.src == "s") { startSeen_ = true; startRssi_ = rssi; }
   if (msg.src == "f") { finishSeen_ = true; finishRssi_ = rssi; }
   if (msg.messageId.length() == 0) { Serial.println("RX warning: missing mid, not relayed"); return; }
   const uint32_t now = millis();
-  if (seenRecently(msg.messageId, now)) { duplicateCount_ += 1; Serial.printf("duplicate ignored mid=%s\n", msg.messageId.c_str()); return; }
+  if (seenRecently(msg.messageId, now)) {
+    duplicateCount_ += 1;
+    Serial.printf("REPEATER DROP duplicate mid=%s\n", msg.messageId.c_str());
+    return;
+  }
   remember(msg.messageId, now);
-  if (msg.hop >= msg.maxHops) { hopLimitDrops_ += 1; Serial.printf("hop limit drop mid=%s\n", msg.messageId.c_str()); return; }
+  if (msg.hop >= msg.maxHops) {
+    hopLimitDrops_ += 1;
+    Serial.printf("REPEATER DROP hop limit mid=%s\n", msg.messageId.c_str());
+    return;
+  }
   if (msg.src == "r" || msg.dst == "r" || !relayable(msg.type)) return;
   if (msg.type == RadioMessageType::Status) {
     uint32_t& last = msg.src == "s" ? lastStatusRelayStartMs : lastStatusRelayFinishMs;
@@ -151,10 +166,10 @@ void RepeaterStationApp::handlePacket(const String& payload, int rssi, float snr
   doc["via"] = "r";
   String out;
   serializeJson(doc, out);
-  enqueueRelay(out, msg.messageId, priorityFor(msg.type), msg.hop + 1);
+  enqueueRelay(out, msg, priorityFor(msg.type), msg.hop + 1);
 }
 
-bool RepeaterStationApp::enqueueRelay(const String& payload, const String& mid, uint8_t priority, uint8_t hop) {
+bool RepeaterStationApp::enqueueRelay(const String& payload, const RadioMessage& message, uint8_t priority, uint8_t hop) {
   int freeSlot = -1;
   int lowSlot = -1;
   for (size_t i = 0; i < queue_.size(); ++i) {
@@ -162,43 +177,76 @@ bool RepeaterStationApp::enqueueRelay(const String& payload, const String& mid, 
     if (queue_[i].priority > priority) lowSlot = i;
   }
   const int slot = freeSlot >= 0 ? freeSlot : lowSlot;
-  if (slot < 0) { queueDrops_ += 1; Serial.printf("relay queue drop mid=%s\n", mid.c_str()); return false; }
+  if (slot < 0) { queueDrops_ += 1; Serial.printf("relay queue drop mid=%s\n", message.messageId.c_str()); return false; }
   RelayPacket packet;
   packet.payload = payload;
-  packet.mid = mid;
+  packet.mid = message.messageId;
+  packet.type = RadioProtocol::typeToString(message.type);
+  packet.src = message.src;
+  packet.dst = message.dst;
   packet.priority = priority;
   packet.hop = hop;
   packet.enqueueMs = millis();
   queue_[slot] = packet;
-  Serial.printf("queued relay mid=%s\n", mid.c_str());
+  Serial.printf("queued relay mid=%s\n", message.messageId.c_str());
   return true;
 }
 
 void RepeaterStationApp::processRelayQueue() {
 #if ENABLE_LORA
   if (!radioReady_) return;
+  bool criticalPending = false;
+  for (const auto& packet : queue_) {
+    if (packet.payload.length() > 0 && packet.priority == 1) {
+      criticalPending = true;
+      break;
+    }
+  }
   int best = -1;
-  for (size_t i = 0; i < queue_.size(); ++i) if (queue_[i].payload.length() > 0 && (best < 0 || queue_[i].priority < queue_[best].priority)) best = i;
+  for (size_t i = 0; i < queue_.size(); ++i) {
+    if (queue_[i].payload.length() == 0) continue;
+    if (criticalPending && queue_[i].priority != 1) continue;
+    if (queue_[i].priority != 1 && lastCriticalRelayMs_ > 0 &&
+        millis() - lastCriticalRelayMs_ < LORA_POST_PRIORITY_QUIET_MS) continue;
+    if (best < 0 || queue_[i].priority < queue_[best].priority) best = i;
+  }
   if (best < 0) return;
   RelayPacket pkt = queue_[best];
   queue_[best] = RelayPacket{};
   const int tx = radio.transmit(pkt.payload);
   restoreRadioReceiveMode();
-  if (tx == RADIOLIB_ERR_NONE) { txCount_ += 1; Serial.printf("relayed mid=%s hop=%u\n", pkt.mid.c_str(), pkt.hop); }
+  if (tx == RADIOLIB_ERR_NONE) {
+    txCount_ += 1;
+    if (pkt.priority == 1) lastCriticalRelayMs_ = millis();
+    Serial.printf("REPEATER TX type=%s src=%s dst=%s hop=%u\n",
+                  pkt.type.c_str(), pkt.src.c_str(), pkt.dst.c_str(), pkt.hop);
+  }
   else { queueDrops_ += 1; Serial.printf("relay TX failed mid=%s code=%d\n", pkt.mid.c_str(), tx); }
 #endif
 }
 
 String RepeaterStationApp::rssiText(const char* label, bool seen, int rssi) const {
-  return String(label) + (seen ? String(rssi) : String("NO SIGNAL"));
+  return String(label) + (seen ? String(rssi) : String("--"));
 }
 
 void RepeaterStationApp::updateDisplay() {
 #if ENABLE_OLED
+  const uint32_t dropCount = duplicateCount_ + hopLimitDrops_ + queueDrops_;
+  String batteryLine = "BAT: --%";
+  if (battery_.isValid()) {
+    const uint32_t mv = battery_.voltageMv();
+    char voltageText[8];
+    snprintf(voltageText, sizeof(voltageText), "%lu.%02luV",
+             static_cast<unsigned long>(mv / 1000UL),
+             static_cast<unsigned long>((mv % 1000UL) / 10UL));
+    batteryLine = String("BAT: ") + String(battery_.percent()) + "% " + voltageText;
+  }
   display_.showLines({String("REPEATER v") + FIRMWARE_VERSION,
+                      "MODE: RELAY",
                       rssiText("S:", startSeen_, startRssi_) + " " + rssiText("F:", finishSeen_, finishRssi_),
-                      String("RX:") + rxCount_ + " TX:" + txCount_,
-                      String("DUP:") + duplicateCount_});
+                      String("RX:") + rxCount_ + " TX:" + txCount_ + " D:" + dropCount,
+                      String("LAST: ") + lastCriticalType_,
+                      batteryLine});
 #endif
 }
 

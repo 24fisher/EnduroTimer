@@ -3,7 +3,7 @@
 #include <Arduino.h>
 #include <RadioLib.h>
 
-#include "BatteryService.h"
+#include "BatteryMonitor.h"
 #include "ButtonInputTask.h"
 #include "BuzzerStub.h"
 #include "FinishState.h"
@@ -26,10 +26,14 @@ public:
   void loop();
 
 private:
+  static constexpr uint32_t FINISH_ACK_LISTEN_WINDOW_MS = 1500UL;
+  static constexpr uint32_t FINISH_RETRY_INTERVAL_MS = 2000UL;
+
   void beginRadio();
   void updateLed(uint32_t nowMs);
   String finishHeader() const;
   String startSignalText() const;
+  String batteryText() const;
   void pollRadio();
   bool sendRadio(const RadioMessage& message, int* resultCode = nullptr);
   void restoreRadioReceiveMode();
@@ -67,7 +71,7 @@ private:
 
   ClockService clock_;
   RaceClock raceClock_;
-  BatteryService battery_;
+  BatteryMonitor battery_;
   LoopMonitor loopMonitor_;
   InputEventQueue inputEventQueue_;
   ButtonInputTask finishButtonInputTask_;
@@ -89,6 +93,8 @@ private:
   uint32_t lastCriticalPacketMs_ = 0;
   uint32_t lastNonCriticalDeferredLogMs_ = 0;
   uint32_t lastFinishSendMs_ = 0;
+  uint32_t finishAckListenUntilMs_ = 0;
+  uint32_t lastFinishRetryDiagnosticMs_ = 0;
   uint32_t heartbeatCounter_ = 0;
   uint32_t startHeartbeatCount_ = 0;
   uint32_t lastHeartbeatMs_ = 0;
@@ -107,6 +113,7 @@ private:
   uint32_t remoteStartTimestampMs_ = 0;
   String lastPacket_ = "-";
   String lastRunStartAckRunId_;
+  uint32_t lastRunStartAckSentMs_ = 0;
   uint32_t lastRunStartRxMs_ = 0;
   uint32_t lastStatusRidingWarnMs_ = 0;
   String lastLoRaRaw_ = "-";

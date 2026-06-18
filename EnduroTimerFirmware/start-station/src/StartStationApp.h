@@ -5,7 +5,7 @@
 #include <RadioLib.h>
 #include <vector>
 
-#include "BatteryService.h"
+#include "BatteryMonitor.h"
 #include "ButtonInputTask.h"
 #include "BuzzerStub.h"
 #include "InputEventQueue.h"
@@ -83,6 +83,7 @@ private:
   void updateLed(uint32_t nowMs);
   String startHeader() const;
   String startShortHeader() const;
+  String batteryText() const;
   void pollRadio();
   bool sendRadio(const RadioMessage& message, int* resultCode = nullptr);
   void restoreRadioReceiveMode();
@@ -138,7 +139,7 @@ private:
 
   ClockService clock_;
   RaceClock raceClock_;
-  BatteryService battery_;
+  BatteryMonitor battery_;
   LoopMonitor loopMonitor_;
   InputEventQueue inputEventQueue_;
   ButtonInputTask startButtonInputTask_;
@@ -174,6 +175,8 @@ private:
   bool runStartAckTimedOut_ = false;
   uint8_t runStartAckAttempts_ = 0;
   uint32_t lastRunStartSendMs_ = 0;
+  uint32_t runStartAckListenUntilMs_ = 0;
+  uint32_t lastRunStartRetryDiagnosticMs_ = 0;
   uint32_t lastRunStartAckMs_ = 0;
   uint32_t lastAnyPacketMs_ = 0;
   String finishState_ = "Unknown";
@@ -186,6 +189,9 @@ private:
   uint32_t syncAccuracyMs_ = 0;
   String finishWifiIp_ = "";
   String finishHttpBootId_ = "";
+  bool finishBatteryValid_ = false;
+  int finishBatteryPercent_ = -1;
+  uint32_t finishBatteryVoltageMv_ = 0;
   uint32_t lastFinishWifiSyncStatusMs_ = 0;
   uint32_t lastSyncMs_ = 0;
   String syncStatusText_ = "SYNC REQUIRED";

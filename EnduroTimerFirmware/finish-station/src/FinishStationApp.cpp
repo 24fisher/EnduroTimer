@@ -22,7 +22,8 @@ static constexpr int LORA_DIO1 = 14;
 static constexpr int LORA_RST = 12;
 static constexpr int LORA_BUSY = 13;
 static constexpr uint8_t FINISH_MAX_RETRY_ATTEMPTS = 15;
-static constexpr uint32_t FINISH_RETRY_INTERVAL_MS = 1000UL;
+static constexpr uint32_t RUN_START_ACK_DUPLICATE_MIN_INTERVAL_MS = 2500UL;
+static constexpr uint32_t MIN_HELLO_INTERVAL_MS = 120000UL;
 static constexpr uint32_t DisplayRefreshMs = 200UL;
 static constexpr uint32_t ButtonDebounceMs = 40UL;
 static constexpr uint32_t WIFI_RETRY_INTERVAL_MS = 2000UL;
@@ -84,6 +85,7 @@ void FinishStationApp::begin() {
 void FinishStationApp::loop() {
   const uint32_t now = clock_.nowMs();
   loopMonitor_.tick(now);
+  battery_.update(now);
   if (loopMonitor_.lastLoopGapMs() > 200UL) {
     Serial.printf("WARN loop gap=%lu lastBlock=%s radioTxLast=%lu radioTxMax=%lu wifiLast=%lu oledLast=%lu\n",
                   static_cast<unsigned long>(loopMonitor_.lastLoopGapMs()), loopMonitor_.lastSlowBlock().c_str(),
@@ -98,16 +100,39 @@ void FinishStationApp::loop() {
 #endif
 
   bool prioritySentThisCycle = false;
-  if (!finishAckReceived_ && state_.state() == FinishRunState::FinishSent && finishAttempts_ < FINISH_MAX_RETRY_ATTEMPTS &&
-      now - lastFinishSendMs_ >= FINISH_RETRY_INTERVAL_MS) {
-    { const uint32_t blockStartMs = millis(); sendFinish(); radioTxLastDurationMs_ = millis() - blockStartMs; if (radioTxLastDurationMs_ > radioTxMaxDurationMs_) radioTxMaxDurationMs_ = radioTxLastDurationMs_; loopMonitor_.recordBlock("RadioTx", radioTxLastDurationMs_, LORA_MAX_TX_DURATION_WARN_MS); }
-    prioritySentThisCycle = true;
-  }
+  const uint32_t finishRetryNow = clock_.nowMs();
+  if (!finishAckReceived_ && state_.state() == FinishRunState::FinishSent) {
+    const bool ackListenWindowExpired =
+        finishAckListenUntilMs_ == 0 || static_cast<int32_t>(finishRetryNow - finishAckListenUntilMs_) >= 0;
+    const bool retryIntervalElapsed =
+        lastFinishSendMs_ == 0 || finishRetryNow - lastFinishSendMs_ >= FINISH_RETRY_INTERVAL_MS;
+    const bool logRetryDiagnostic =
+        lastFinishRetryDiagnosticMs_ == 0 || finishRetryNow - lastFinishRetryDiagnosticMs_ >= 500UL;
 
-  if (!finishAckReceived_ && state_.state() == FinishRunState::FinishSent && finishAttempts_ >= FINISH_MAX_RETRY_ATTEMPTS &&
-      now - lastFinishSendMs_ >= FINISH_RETRY_INTERVAL_MS) {
-    Serial.printf("FINISH_ACK timeout: sent %u/%u.\n", finishAttempts_, FINISH_MAX_RETRY_ATTEMPTS);
-    state_.ackTimeout();
+    if (finishAttempts_ < FINISH_MAX_RETRY_ATTEMPTS) {
+      if (!ackListenWindowExpired) {
+        if (logRetryDiagnostic) {
+          Serial.println("FINISH retry skipped: waiting ACK window");
+          lastFinishRetryDiagnosticMs_ = finishRetryNow;
+        }
+      } else if (!retryIntervalElapsed) {
+        if (logRetryDiagnostic) {
+          Serial.println("FINISH retry skipped: retry interval not elapsed");
+          lastFinishRetryDiagnosticMs_ = finishRetryNow;
+        }
+      } else {
+        { const uint32_t blockStartMs = millis(); sendFinish(); radioTxLastDurationMs_ = millis() - blockStartMs; if (radioTxLastDurationMs_ > radioTxMaxDurationMs_) radioTxMaxDurationMs_ = radioTxLastDurationMs_; loopMonitor_.recordBlock("RadioTx", radioTxLastDurationMs_, LORA_MAX_TX_DURATION_WARN_MS); }
+        prioritySentThisCycle = true;
+      }
+    } else if (!ackListenWindowExpired) {
+      if (logRetryDiagnostic) {
+        Serial.println("FINISH_ACK timeout delayed until listen window expires");
+        lastFinishRetryDiagnosticMs_ = finishRetryNow;
+      }
+    } else {
+      Serial.printf("FINISH_ACK timeout: sent %u/%u.\n", finishAttempts_, FINISH_MAX_RETRY_ATTEMPTS);
+      state_.ackTimeout();
+    }
   }
 
   updateLed(now);
@@ -125,7 +150,9 @@ void FinishStationApp::loop() {
 
   const bool nonCriticalAllowed = canSendNonCriticalLoRa(now) && !prioritySentThisCycle;
 #if FINISH_HELLO_ENABLED_CFG
-  if (discoveryActive() && now - lastDiscoverySentMs_ >= FINISH_DISCOVERY_INTERVAL_MS_CFG) {
+  const uint32_t helloIntervalMs =
+      FINISH_DISCOVERY_INTERVAL_MS_CFG < MIN_HELLO_INTERVAL_MS ? MIN_HELLO_INTERVAL_MS : FINISH_DISCOVERY_INTERVAL_MS_CFG;
+  if (discoveryActive() && now - lastDiscoverySentMs_ >= helloIntervalMs) {
     if (!nonCriticalAllowed) {
       logNonCriticalDeferred(now);
     } else {
@@ -322,6 +349,9 @@ bool FinishStationApp::postFinishSyncStatus() {
   doc["offsetToMasterMs"] = raceClock_.offsetToMasterMs();
   doc["syncAccuracyMs"] = syncAccuracyMs_;
   doc["finishIp"] = WiFi.localIP().toString();
+  doc["batteryValid"] = battery_.isValid();
+  doc["batteryPercent"] = battery_.isValid() ? battery_.percent() : -1;
+  doc["batteryVoltageMv"] = battery_.isValid() ? battery_.voltageMv() : 0;
   doc["uptimeMs"] = millis();
   String body;
   serializeJson(doc, body);
@@ -540,14 +570,16 @@ bool FinishStationApp::sendRadio(const RadioMessage& message, int* resultCode) {
   }
   if (message.type == RadioMessageType::Status && txDuration > 300UL) Serial.println("WARN STATUS airtime too high, reduce payload or interval");
   if (resultCode != nullptr) *resultCode = result;
-  restoreRadioReceiveMode();
-  const bool logTxMode = true;
-  Serial.println("LoRa RX mode restored");
+  const bool finishTx = message.type == RadioMessageType::Finish;
+  if (!finishTx) {
+    restoreRadioReceiveMode();
+    Serial.println("LoRa RX mode restored");
+  }
   if (result != RADIOLIB_ERR_NONE) {
     Serial.printf("[FinishStation] LoRa TX failed: %d\n", result);
     return false;
   }
-  if (logTxMode) Serial.printf("LoRa TX %s ok\n", typeText.c_str());
+  Serial.printf("LoRa TX %s ok\n", typeText.c_str());
   return true;
 #else
   (void)message;
@@ -623,6 +655,7 @@ void FinishStationApp::sendHello(uint32_t nowMs) {
 }
 
 void FinishStationApp::sendHelloAck(uint32_t nowMs) {
+#if HELLO_ACK_ENABLED_CFG
   RadioMessage message;
   message.type = RadioMessageType::HelloAck;
   message.messageId = RadioProtocol::makeMessageId("hello-ack");
@@ -637,6 +670,10 @@ void FinishStationApp::sendHelloAck(uint32_t nowMs) {
   if (sendRadio(message)) {
     Serial.printf("FINISH HELLO_ACK sent bootId=%s\n", bootId_.c_str());
   }
+#else
+  (void)nowMs;
+  Serial.println("TX deferred HELLO_ACK because disabled");
+#endif
 }
 
 bool FinishStationApp::discoveryActive() const {
@@ -668,7 +705,11 @@ bool FinishStationApp::canSendNonCriticalLoRa(uint32_t nowMs) const {
 void FinishStationApp::logNonCriticalDeferred(uint32_t nowMs) {
   if (nowMs - lastNonCriticalDeferredLogMs_ < 5000UL) return;
   lastNonCriticalDeferredLogMs_ = nowMs;
-  Serial.println("FINISH non-critical TX deferred: RX priority");
+  if (state_.state() == FinishRunState::FinishSent || state_.state() == FinishRunState::AckTimeout) {
+    Serial.println("TX deferred STATUS because FINISH pending ACK");
+  } else {
+    Serial.println("FINISH non-critical TX deferred: RX priority");
+  }
 }
 
 #if ENABLE_LORA_TIME_SYNC
@@ -762,7 +803,10 @@ void FinishStationApp::sendRunStartAck(const RadioMessage& runStart) {
   Serial.printf("RUN_START_ACK TX runId=%s runNumber=%lu\n", message.runId.c_str(), static_cast<unsigned long>(message.runNumber));
   Serial.printf("TX priority RUN_START_ACK runId=%s\n", message.runId.c_str());
   lastPriorityTxMs_ = clock_.nowMs();
-  if (sendRadio(message)) {
+  const bool sent = sendRadio(message);
+  lastRunStartAckSentMs_ = clock_.nowMs();
+  lastPriorityTxMs_ = lastRunStartAckSentMs_;
+  if (sent) {
     lastRunStartAckRunId_ = message.runId;
     Serial.printf("RUN_START_ACK compact TX ok runId=%s\n", message.runId.c_str());
   }
@@ -822,6 +866,8 @@ void FinishStationApp::acceptFinishButton(uint32_t capturedLocalMillis, uint32_t
   finishAttempts_ = 0;
   manualResendCount_ = 0;
   lastFinishSendMs_ = 0;
+  finishAckListenUntilMs_ = 0;
+  lastFinishRetryDiagnosticMs_ = 0;
   finishLineCrossedUntilMs_ = processedAtMs + 2000UL;
   led_.flash(2, 100, 120);
 #if ENABLE_OLED
@@ -875,8 +921,6 @@ void FinishStationApp::sendFinish() {
   message.resultMs = localResultMs_ > 0 ? localResultMs_ : lastResultMs_;
   message.messageId = String("F-") + message.runId + "-" + String(finishAttempts_ + 1);
   finishAttempts_ += 1;
-  lastFinishSendMs_ = clock_.nowMs();
-  lastPriorityTxMs_ = lastFinishSendMs_;
   Serial.printf("FINISH TX attempt=%u/%u runId=%s resultMs=%lu mid=%s src=%s dst=%s hop=%u mh=%u\n",
                 finishAttempts_, FINISH_MAX_RETRY_ATTEMPTS, message.runId.c_str(),
                 static_cast<unsigned long>(message.resultMs), message.messageId.c_str(), message.src.c_str(),
@@ -885,7 +929,15 @@ void FinishStationApp::sendFinish() {
   String payloadPreview;
   RadioProtocol::serialize(message, payloadPreview);
   int resultCode = 0;
-  if (sendRadio(message, &resultCode)) {
+  const bool sent = sendRadio(message, &resultCode);
+  restoreRadioReceiveMode();
+  Serial.println("LoRa RX mode restored");
+  lastFinishSendMs_ = clock_.nowMs();
+  lastPriorityTxMs_ = lastFinishSendMs_;
+  finishAckListenUntilMs_ = lastFinishSendMs_ + FINISH_ACK_LISTEN_WINDOW_MS;
+  lastFinishRetryDiagnosticMs_ = 0;
+  Serial.printf("FINISH ACK listen window until=%lu\n", static_cast<unsigned long>(finishAckListenUntilMs_));
+  if (sent) {
     Serial.printf("FINISH TX OK payloadLen=%u\n", static_cast<unsigned>(payloadPreview.length()));
     Serial.printf("[FinishStation] FINISH sent: run=%s attempt=%u/%u\n", message.runId.c_str(),
                   finishAttempts_, FINISH_MAX_RETRY_ATTEMPTS);
@@ -902,6 +954,11 @@ void FinishStationApp::resendFinishFromButton(uint32_t nowMs) {
     return;
   }
   const bool resendAfterTimeout = state_.state() == FinishRunState::AckTimeout;
+  if (!resendAfterTimeout && finishAckListenUntilMs_ > 0 &&
+      static_cast<int32_t>(nowMs - finishAckListenUntilMs_) < 0) {
+    Serial.println("FINISH retry skipped: waiting ACK window");
+    return;
+  }
   if (resendAfterTimeout) {
     finishAttempts_ = 0;
     state_.markFinishSent(state_.finishTimestampMs());
@@ -942,6 +999,14 @@ void FinishStationApp::updateStartLink(const RadioMessage& message, int packetRs
 }
 
 void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
+  const bool finishAckOnlyMode =
+      state_.state() == FinishRunState::FinishSent || state_.state() == FinishRunState::AckTimeout;
+  if (finishAckOnlyMode && message.type != RadioMessageType::FinishAck) {
+    Serial.printf("RX type=%s while state=%s; TX response suppressed waiting FINISH_ACK\n",
+                  RadioProtocol::typeToString(message.type).c_str(), state_.stateText().c_str());
+    return;
+  }
+
   if (message.type == RadioMessageType::Status && RadioProtocol::isFromStart(message)) {
     startHeartbeatCount_ = message.heartbeat;
     Serial.printf("STATUS RX from=start hb=%lu rssi=%d\n", static_cast<unsigned long>(message.heartbeat), startLink_.lastRssi);
@@ -962,7 +1027,9 @@ void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
 
   if (message.type == RadioMessageType::Hello && RadioProtocol::isFromStart(message)) {
     lastHelloReceivedMs_ = millis();
-    if (priorityTxPending(millis())) {
+    if (!HELLO_ACK_ENABLED_CFG) {
+      Serial.println("TX deferred HELLO_ACK because disabled");
+    } else if (priorityTxPending(millis())) {
       Serial.println("TX deferred HELLO_ACK because priority message pending");
     } else {
       sendHelloAck(millis());
@@ -1048,15 +1115,23 @@ void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
       localResultMs_ = 0;
       finishLocalElapsedMs_ = 0;
       lastFinishSendMs_ = 0;
+      finishAckListenUntilMs_ = 0;
+      lastFinishRetryDiagnosticMs_ = 0;
       finishLineCrossedUntilMs_ = 0;
       showNoRunUntilMs_ = 0;
       showAckOkUntilMs_ = 0;
+      lastRunStartAckSentMs_ = 0;
       buzzer_.beep("RUN_START");
 #if ENABLE_OLED
       if (!display_.testPatternOnly()) display_.showLines({finishHeader(), String("RIDING ") + makeMovingArrow(ridingAnimationFrame()), formatSeconds(elapsedAtReceiveMs), startSignalText()});
 #endif
     } else {
       Serial.println("RX drop: duplicate RUN_START");
+      if (lastRunStartAckSentMs_ > 0 &&
+          millis() - lastRunStartAckSentMs_ < RUN_START_ACK_DUPLICATE_MIN_INTERVAL_MS) {
+        Serial.println("Duplicate RUN_START ACK suppressed by rate limit");
+        return;
+      }
       Serial.println("Duplicate RUN_START received, ACK resent.");
       Serial.printf("Duplicate RUN_START, ACK resent runId=%s\n", message.runId.c_str());
     }
@@ -1068,6 +1143,8 @@ void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
     Serial.printf("FINISH_ACK RX runId=%s resultMs=%lu\n", message.runId.c_str(), static_cast<unsigned long>(message.resultMs));
     const String expectedRunId = state_.runId().length() > 0 ? state_.runId() : lastFinishedRunId_;
     if (message.runId == expectedRunId && message.runId.length() > 0) {
+      const String matchedState = state_.stateText();
+      Serial.printf("FINISH_ACK RX matched while state=%s\n", matchedState.c_str());
       Serial.println(state_.runId().length() > 0 ? "FINISH_ACK matched active run" : "FINISH_ACK matched last finished run");
       finishAckReceived_ = true;
       if (message.resultMs > 0) lastResultMs_ = message.resultMs;
@@ -1083,6 +1160,8 @@ void FinishStationApp::handleRadioMessage(const RadioMessage& message) {
       finishAttempts_ = 0;
       manualResendCount_ = 0;
       lastFinishSendMs_ = 0;
+      finishAckListenUntilMs_ = 0;
+      lastFinishRetryDiagnosticMs_ = 0;
       finishLineCrossedUntilMs_ = 0;
       showAckOkUntilMs_ = millis() + 2000UL;
       Serial.printf("FINISH_ACK matched runId=%s ackResultMs=%lu\n", message.runId.c_str(), static_cast<unsigned long>(message.resultMs));
@@ -1106,43 +1185,43 @@ void FinishStationApp::updateDisplay() {
   const String startSignal = startSignalText();
   const String linkDebug = startLink_.lastPacketType.length() > 0 ? String("PKT:") + startLink_.lastPacketType : String("HB:") + String(startHeartbeatCount_);
   if (finishLineCrossedUntilMs_ > millis()) {
-    display_.showLines({finishHeader(), "FINISH LINE", "CROSSED", lastResultFormatted_});
+    display_.showLines({finishHeader(), "FINISH LINE", "CROSSED", lastResultFormatted_, batteryText()});
     return;
   }
 
   if (showAckOkUntilMs_ > millis()) {
-    display_.showLines({finishHeader(), "ACK OK", lastResultFormatted_.length() > 0 ? lastResultFormatted_ : String("-"), startSignal});
+    display_.showLines({finishHeader(), "ACK OK", lastResultFormatted_.length() > 0 ? lastResultFormatted_ : String("-"), startSignal, batteryText()});
     return;
   }
 
   if (showNoRunUntilMs_ > millis()) {
-    display_.showLines({finishHeader(), "NO ACTIVE RUN", "Press START"});
+    display_.showLines({finishHeader(), "NO ACTIVE RUN", "Press START", batteryText()});
     return;
   }
 
   if (state_.state() == FinishRunState::AckTimeout) {
-    display_.showLines({finishHeader(), "ACK TIMEOUT", String("Last:") + (lastResultValid_ ? lastResultFormatted_ : String("--")), "PRESS RESEND"});
+    display_.showLines({finishHeader(), "ACK TIMEOUT", String("Last:") + (lastResultValid_ ? lastResultFormatted_ : String("--")), "PRESS RESEND", batteryText()});
     return;
   }
 
   if (state_.state() == FinishRunState::Error) {
-    display_.showLines({finishHeader(), "ERROR", startSignal, linkDebug});
+    display_.showLines({finishHeader(), "ERROR", startSignal, linkDebug, batteryText()});
     return;
   }
 
   if (!raceClock_.isSynced() || !syncDoneOnce_) {
-    if (!wifiConnected_) display_.showLines({finishHeader(), "WIFI SEARCH", "EnduroTimer"});
-    else display_.showLines({finishHeader(), "WIFI OK", "SYNC TIME"});
+    if (!wifiConnected_) display_.showLines({finishHeader(), "WIFI SEARCH", "EnduroTimer", batteryText()});
+    else display_.showLines({finishHeader(), "WIFI OK", "SYNC TIME", batteryText()});
     return;
   }
 
   if (state_.isRiding()) {
-    display_.showLines({finishHeader(), String("RIDING ") + makeMovingArrow(ridingAnimationFrame()), formatSeconds(state_.elapsedMs(raceClock_.nowRaceMs())), startSignal});
+    display_.showLines({finishHeader(), String("RIDING ") + makeMovingArrow(ridingAnimationFrame()), formatSeconds(state_.elapsedMs(raceClock_.nowRaceMs())), startSignal, batteryText()});
     return;
   }
 
   if (state_.state() == FinishRunState::FinishSent) {
-    display_.showLines({finishHeader(), "FINISH SENT", lastResultFormatted_.length() > 0 ? lastResultFormatted_ : String("-"), "Sent: " + String(finishAttempts_) + "/" + String(FINISH_MAX_RETRY_ATTEMPTS)});
+    display_.showLines({finishHeader(), "FINISH SENT", lastResultFormatted_.length() > 0 ? lastResultFormatted_ : String("-"), "Sent: " + String(finishAttempts_) + "/" + String(FINISH_MAX_RETRY_ATTEMPTS), batteryText()});
     return;
   }
 
@@ -1151,7 +1230,12 @@ void FinishStationApp::updateDisplay() {
     "SYNCED READY",
     String("Last:") + (lastResultValid_ ? lastResultFormatted_ : String("--")),
     startSignal,
+    batteryText(),
   });
+}
+
+String FinishStationApp::batteryText() const {
+  return battery_.isValid() ? String("BAT ") + String(battery_.percent()) + "%" : String("BAT --%");
 }
 
 uint8_t FinishStationApp::ridingAnimationFrame() const {
