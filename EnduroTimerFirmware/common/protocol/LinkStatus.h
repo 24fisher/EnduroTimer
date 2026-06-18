@@ -1,8 +1,12 @@
-#pragma once
+﻿#pragma once
 
 #include <Arduino.h>
 
-static constexpr uint32_t FINISH_STATUS_INTERVAL_MS = 5000UL;
+#ifndef FINISH_STATUS_INTERVAL_MS_CFG
+#define FINISH_STATUS_INTERVAL_MS_CFG 5000UL
+#endif
+
+static constexpr uint32_t FINISH_STATUS_INTERVAL_MS = FINISH_STATUS_INTERVAL_MS_CFG;
 static constexpr uint32_t START_STATUS_READY_INTERVAL_MS = 15000UL;
 static constexpr uint32_t START_STATUS_ACTIVE_INTERVAL_MS = 7000UL;
 static constexpr uint32_t LINK_HEARTBEAT_INTERVAL_MS = FINISH_STATUS_INTERVAL_MS;
@@ -58,3 +62,4 @@ inline bool updateLinkStatus(LinkStatus& link, const String& stationId, const St
   if (bootId.length() > 0) link.remoteBootId = bootId;
   return rebootDetected;
 }
+

@@ -1,4 +1,4 @@
-#include "FinishStationApp.h"
+﻿#include "FinishStationApp.h"
 
 #include <SPI.h>
 #include <esp_system.h>
@@ -138,8 +138,8 @@ void FinishStationApp::loop() {
 #endif
 
   const bool nonCriticalAllowed = canSendNonCriticalLoRa(now) && !prioritySentThisCycle;
-#if FINISH_HELLO_ENABLED
-  if (discoveryActive() && now - lastDiscoverySentMs_ >= FINISH_DISCOVERY_INTERVAL_MS) {
+#if FINISH_HELLO_ENABLED_CFG
+  if (discoveryActive() && now - lastDiscoverySentMs_ >= FINISH_DISCOVERY_INTERVAL_MS_CFG) {
     if (!nonCriticalAllowed) {
       logNonCriticalDeferred(now);
     } else {
@@ -149,7 +149,7 @@ void FinishStationApp::loop() {
   }
 #endif
 
-#if FINISH_STATUS_ENABLED
+#if FINISH_STATUS_ENABLED_CFG
   if (nextFinishStatusDueMs_ > 0 && now >= nextFinishStatusDueMs_) {
     if (!nonCriticalAllowed) {
       logNonCriticalDeferred(now);
@@ -157,7 +157,7 @@ void FinishStationApp::loop() {
     } else {
       { const uint32_t blockStartMs = millis(); sendStatus(now); radioTxLastDurationMs_ = millis() - blockStartMs; if (radioTxLastDurationMs_ > radioTxMaxDurationMs_) radioTxMaxDurationMs_ = radioTxLastDurationMs_; loopMonitor_.recordBlock("RadioTx", radioTxLastDurationMs_, LORA_MAX_TX_DURATION_WARN_MS); }
       lastStatusMs_ = now;
-      nextFinishStatusDueMs_ = now + FINISH_STATUS_INTERVAL_MS + static_cast<uint32_t>(random(0, 301));
+      nextFinishStatusDueMs_ = now + FINISH_STATUS_INTERVAL_MS_CFG + static_cast<uint32_t>(random(0, 301));
     }
   }
 #endif
@@ -1166,3 +1166,4 @@ void FinishStationApp::logHeartbeat(uint32_t nowMs) {
                 startLink_.lastPacketType.c_str(), static_cast<unsigned long>(startHeartbeatCount_));
   lastHeartbeatMs_ = nowMs;
 }
+

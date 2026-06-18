@@ -1,4 +1,4 @@
-#include "RepeaterStationApp.h"
+﻿#include "RepeaterStationApp.h"
 
 #include <ArduinoJson.h>
 #include <SPI.h>
@@ -98,10 +98,10 @@ bool RepeaterStationApp::relayable(RadioMessageType type) const {
       type == RadioMessageType::Finish || type == RadioMessageType::FinishAck) {
     return true;
   }
-#if REPEATER_RELAY_STATUS
+#if REPEATER_RELAY_STATUS_CFG
   if (type == RadioMessageType::Status) return true;
 #endif
-#if REPEATER_RELAY_HELLO
+#if REPEATER_RELAY_HELLO_CFG
   if (type == RadioMessageType::Hello || type == RadioMessageType::HelloAck) return true;
 #endif
   return false;
@@ -210,3 +210,4 @@ void RepeaterStationApp::logCounters(uint32_t nowMs) {
                 startSeen_ ? String(startRssi_).c_str() : "NO SIGNAL", finishSeen_ ? String(finishRssi_).c_str() : "NO SIGNAL",
                 static_cast<unsigned long>(loopMonitor_.maxLoopGapMs()), static_cast<unsigned long>(radioPollMaxDurationMs_));
 }
+
