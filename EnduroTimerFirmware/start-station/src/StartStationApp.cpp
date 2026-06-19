@@ -93,6 +93,7 @@ void StartStationApp::loop() {
 #if ENABLE_LORA_TIME_SYNC
   updateSync(now);
 #endif
+  clearStaleRunStartPending();
 
   RunRecord runToStart;
   updateCountdownDisplay(now);
@@ -964,6 +965,32 @@ void StartStationApp::retryRunStartAck(uint32_t nowMs) {
   sendRunStart(state_.currentRun());
 }
 
+void StartStationApp::confirmRunStartByFinish(const String& runId) {
+  pendingRunStartAck_ = false;
+  runStartAckReceived_ = true;
+  runStartAckTimedOut_ = false;
+  runStartAckListenUntilMs_ = 0;
+  lastRunStartRetryDiagnosticMs_ = 0;
+  lastRunStartAckMs_ = millis();
+  Serial.printf("RUN_START implicitly confirmed by FINISH runId=%s\n", runId.c_str());
+  Serial.println("RUN_START retry stopped by FINISH");
+}
+
+void StartStationApp::clearStaleRunStartPending() {
+  const StartRunState currentState = state_.state();
+  if (!pendingRunStartAck_ ||
+      (currentState != StartRunState::Finished && currentState != StartRunState::Ready)) {
+    return;
+  }
+
+  Serial.printf("WARN stale RUN_START pending cleared state=%s\n", state_.stateText().c_str());
+  pendingRunStartAck_ = false;
+  runStartAckReceived_ = true;
+  runStartAckTimedOut_ = false;
+  runStartAckListenUntilMs_ = 0;
+  lastRunStartRetryDiagnosticMs_ = 0;
+}
+
 bool StartStationApp::priorityTxPending() const {
   const uint32_t nowMs = millis();
   const bool priorityTxRecently = lastPriorityTxMs_ > 0 && nowMs - lastPriorityTxMs_ < LORA_POST_PRIORITY_QUIET_MS;
@@ -1295,6 +1322,7 @@ void StartStationApp::handleRadioMessage(const RadioMessage& message) {
     Serial.printf("FINISH parsed runId=%s source=%s\n", message.runId.c_str(), message.source.c_str());
     RunRecord completed;
     if (state_.completeRunSynced(message.runId, message.finishRaceTimeMs, message.resultMs, message.source.length() > 0 ? message.source : String("FINISH_COMPACT"), message.syncAccuracyMs > 0 ? message.syncAccuracyMs : syncAccuracyMs_, completed)) {
+      confirmRunStartByFinish(message.runId);
       Serial.printf("FINISH resultMs=%lu\n", static_cast<unsigned long>(completed.resultMs));
       Serial.printf("FINISH accepted runId=%s resultMs=%lu\n", completed.runId.c_str(), static_cast<unsigned long>(completed.resultMs));
       Serial.printf("run saved to recentRuns count=%u\n", static_cast<unsigned>(state_.runs().size()));
@@ -1309,9 +1337,10 @@ void StartStationApp::handleRadioMessage(const RadioMessage& message) {
       scheduleFinishAckRepeats(completed);
     } else if (state_.lastRun().runId == message.runId && message.runId.length() > 0) {
       RunRecord last = state_.lastRun();
+      confirmRunStartByFinish(message.runId);
       Serial.println("Duplicate FINISH received, ACK resent.");
       Serial.printf("Duplicate FINISH RX runId=%s, ACK resent\n", message.runId.c_str());
-      sendFinishAck(last, finishAckSendCount_ == 0 ? 1 : finishAckSendCount_, true);
+      scheduleFinishAckRepeats(last);
     } else {
       Serial.println("[StartStation] FINISH ignored: unknown runId or state mismatch");
     }

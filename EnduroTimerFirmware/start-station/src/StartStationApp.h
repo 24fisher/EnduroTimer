@@ -89,6 +89,8 @@ private:
   void restoreRadioReceiveMode();
   void sendRunStart(const RunRecord& run);
   void retryRunStartAck(uint32_t nowMs);
+  void confirmRunStartByFinish(const String& runId);
+  void clearStaleRunStartPending();
 #if ENABLE_LORA_TIME_SYNC
   void startSync(uint32_t nowMs);
   void updateSync(uint32_t nowMs);
