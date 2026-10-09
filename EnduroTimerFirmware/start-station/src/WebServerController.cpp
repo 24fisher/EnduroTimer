@@ -80,7 +80,7 @@ bool WebServerController::begin() {
     sendJson(200, String("{\"ok\":true}"));
   });
   server_.on("/api/debug/routes", HTTP_GET, [this]() {
-    sendJson(200, String("{\"ok\":true,\"routes\":[\"/api/status\",\"/api/riders/add\",\"/api/trails/add\",\"/api/runs\",\"/api/export/runs.csv\"]}"));
+    sendJson(200, String("{\"ok\":true,\"routes\":[\"/api/status\",\"/api/start\",\"/api/start/cancel\",\"/api/runs/start\",\"/api/riders/add\",\"/api/trails/add\",\"/api/runs\",\"/api/export/runs.csv\"]}"));
   });
 
   server_.on("/api/time/sync", HTTP_POST, [this]() {
@@ -102,7 +102,7 @@ bool WebServerController::begin() {
     sendJson(200, output);
   });
 
-  server_.on("/api/runs/start", HTTP_POST, [this]() {
+  const auto startCountdown = [this]() {
 #if ENABLE_WEB_START
     String error;
     if (!app_.requestStartRun(error)) {
@@ -116,8 +116,20 @@ bool WebServerController::begin() {
     serializeJson(doc, output);
     sendJson(200, output);
 #else
-    sendError(403, "Start is only available from hardware button");
+    sendError(403, "Web START disabled in this build");
 #endif
+  };
+  server_.on("/api/runs/start", HTTP_POST, startCountdown);
+  server_.on("/api/start", HTTP_POST, startCountdown);
+  server_.on("/api/start/cancel", HTTP_POST, [this]() {
+    String error;
+    if (!app_.cancelStart(error)) { sendError(409, error); return; }
+    JsonDocument doc;
+    doc["ok"] = true;
+    doc["state"] = app_.stateText();
+    String output;
+    serializeJson(doc, output);
+    sendJson(200, output);
   });
 
   server_.on("/api/system/reset", HTTP_POST, [this]() {
@@ -236,7 +248,7 @@ bool WebServerController::begin() {
   Serial.println("Route registered: POST /api/riders/add");
   Serial.println("Route registered: GET /api/trails");
   Serial.println("Route registered: POST /api/trails/add");
-  Serial.println("Routes registered: /api/status /api/debug/status /api/riders/add /api/trails/add /api/runs /api/export/runs.csv /api/debug/routes");
+  Serial.println("Routes registered: /api/start /api/start/cancel /api/runs/start /api/status /api/debug/status /api/riders/add /api/trails/add /api/runs /api/export/runs.csv /api/debug/routes");
   Serial.println(webStarted_ ? "[BOOT] WebServer OK" : "[BOOT] WebServer FAIL");
   return webStarted_;
 }

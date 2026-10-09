@@ -14,6 +14,7 @@ String fullStationId(const String& stationId) {
 String compactState(const String& state) {
   if (state == "Ready" || state == "R") return "R";
   if (state == "Countdown" || state == "C") return "C";
+  if (state == "WaitingStartGate" || state == "W") return "W";
   if (state == "Riding" || state == "G") return "G";
   if (state == "Idle" || state == "I") return "I";
   if (state == "FinishSent" || state == "F") return "F";
@@ -47,6 +48,7 @@ void addRouting(JsonDocument& doc, const RadioMessage& message) {
 String fullState(const String& state) {
   if (state == "R") return "Ready";
   if (state == "C") return "Countdown";
+  if (state == "W") return "WaitingStartGate";
   if (state == "G") return "Riding";
   if (state == "I") return "Idle";
   if (state == "F") return "FinishSent";

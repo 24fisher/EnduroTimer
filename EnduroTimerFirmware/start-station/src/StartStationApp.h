@@ -57,6 +57,8 @@ public:
   void beginRadio();
 
   bool requestStartRun(String& error);
+  bool cancelStart(String& error);
+  String stateText() const { return state_.stateText(); }
   void resetSystem();
   void setWifiStatus(bool apStarted, const IPAddress& ip, const String& mac);
   void setWebStatus(bool webStarted);
@@ -80,6 +82,7 @@ private:
   void configureButton();
   void processInputEvents();
   void handleStartButtonEvent(const InputEvent& event);
+  void startRaceFromGateTrigger(uint32_t capturedLocalMs);
   void updateLed(uint32_t nowMs);
   String startHeader() const;
   String startShortHeader() const;

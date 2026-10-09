@@ -19,6 +19,40 @@ EnduroTimerFirmware/
 
 The smoke test still does **not** connect a real E3JK sensor, buzzer GPIO, encoder, or RFID reader. Those parts remain stubs.
 
+## v0.33 Web countdown and physical start gate
+
+`Ready -> Web START -> Countdown (3, 2, 1) -> GO / WaitingStartGate -> GPIO0 edge -> Riding`.
+GO arms the gate; it never sets race timestamps or sends RUN_START. The OLED shows
+`WAIT GATE`, rider, trail, and battery; the Web UI shows «Ожидание стартовых ворот».
+«ОТМЕНИТЬ СТАРТ» is available during countdown and waiting. Cancellation clears the
+pending run without creating a result or sending a race packet. Gate edges in other
+states, and pre-GO edges delivered after debounce, are ignored. A held gate must
+be released and pressed again. GPIO0 remains active LOW with INPUT_PULLUP.
+
+The accepted event's captured local timestamp is converted with
+`RaceClock::raceMsFromLocalMillis`, excluding debounce/queue delay. Calendar time
+and RTC are not used for sport timing. RUN_START ACK retries retain that timestamp.
+FinishStation enters Riding only on RUN_START. STATUS encodes WaitingStartGate as W.
+`/api/status` includes waitingStartGate, countdownActive, raceTimerStarted,
+startInputRaw, startInputPressed, canStartCountdown, canCancelStart, and readyBlockReason.
+
+After flashing firmware, also upload the changed Web UI with
+`python -m platformio run -e start_station -t uploadfs`.
+
+Hardware acceptance checks (require real boards; not covered by desktop builds):
+
+- A: Web START, then cancel during countdown: Ready, no RUN_START/result; Finish not Riding.
+- B: Wait for WAIT GATE, then cancel: same outcome; OLED returns to Ready.
+- C: Web START, wait for gate, pulse GPIO0 to GND, then finish: one race starts from
+  the gate timestamp, excluding both countdown and waiting time.
+- D: Pulse the gate in Ready, Countdown, and Riding: ignored, no new race or timestamp.
+  Hold LOW across GO, and test an edge just before GO: neither should start a race.
+- E: POST /api/start/cancel while Riding or Finished: HTTP 409 with
+  `Race already started; use DNF/cancel run flow instead`; run remains intact.
+
+Older version sections below describe historical behavior; this flow supersedes
+their hardware-button countdown and GO-start descriptions.
+
 ## Known working OLED and serial configuration
 
 The current Heltec V3 OLED configuration is fixed in `platformio.ini`:
@@ -35,7 +69,7 @@ The current Heltec V3 OLED configuration is fixed in `platformio.ini`:
 - Library: U8g2
 - `ARDUINO_USB_CDC_ON_BOOT=0`
 - `ARDUINO_USB_MODE=0`
-- `FIRMWARE_VERSION=0.25`
+- `FIRMWARE_VERSION=0.33`
 - `STATUS_LED_PIN=35`
 - `STATUS_LED_ACTIVE_LEVEL=1`
 
@@ -43,8 +77,8 @@ The current Heltec V3 OLED configuration is fixed in `platformio.ini`:
 
 ## Current hardware-test behavior
 
-- A run starts **only from the physical StartStation button**. The Web UI no longer starts runs.
-- `ENABLE_WEB_START=0` is set for StartStation. `POST /api/runs/start` remains present for future debug, but returns HTTP 403 by default with `Start is only available from hardware button`.
+- Web START starts the countdown. At GO, StartStation enters `WaitingStartGate`; only a new debounced GPIO0 LOW edge starts the race and sends `RUN_START`.
+- `ENABLE_WEB_START=1`: `POST /api/start` and `/api/runs/start` start countdown only. `POST /api/start/cancel` cancels Countdown/WaitingStartGate, is idempotent in Ready, and rejects Riding/Finished with HTTP 409.
 - FinishStation completes a run with the physical finish button while the lower terminal is in the `Riding` state (`canFinish() == true`). Manual finish is accepted only in `Riding`; Idle presses show `NO ACTIVE RUN`, and FinishSent/AckTimeout presses resend the saved FINISH packet without changing the timestamp.
 - Buttons use debounced short press events with `INPUT_PULLUP`; one press creates one start or finish event.
 - Countdown, timers, finish retries, OLED refresh, WebServer handling, and LoRa polling are all millis-based and should not block the main loop.
@@ -498,7 +532,7 @@ Export endpoint:
 - Web UI and JSON API
 - LoRa at 868.0 MHz
 - Physical start button on `START_BUTTON_PIN=0` with `INPUT_PULLUP`
-- `ENABLE_WEB_START=0`
+- `ENABLE_WEB_START=1`
 - `BuzzerStub` only
 
 Flash firmware and upload the Web UI filesystem:
@@ -582,7 +616,8 @@ Returns current status, for example:
 
 ### Other endpoints
 
-- `POST /api/runs/start` — disabled by default with HTTP 403 unless `ENABLE_WEB_START=1` is compiled.
+- `POST /api/start` or `/api/runs/start` — start countdown only.
+- `POST /api/start/cancel` — cancel the pending start; HTTP 409 after the race starts.
 - `POST /api/system/reset` — clears the active run and returns StartStation to `Ready`.
 - `GET /api/runs` — recent finished runs in RAM, populated immediately after a valid `FINISH` message.
 - `GET /api/export/runs.csv` — finished run CSV download from `/runs.csv`.

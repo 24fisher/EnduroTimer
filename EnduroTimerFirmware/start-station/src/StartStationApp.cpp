@@ -95,27 +95,16 @@ void StartStationApp::loop() {
 #endif
   clearStaleRunStartPending();
 
-  RunRecord runToStart;
+  const bool wasCountdown = state_.state() == StartRunState::Countdown;
+  state_.updateCountdown(clock_.nowMs());
   updateCountdownDisplay(now);
-  if (state_.updateCountdown(now, runToStart)) {
-    Serial.printf("COUNTDOWN GO at raceMs=%lu\n", static_cast<unsigned long>(raceClock_.nowRaceMs()));
-    const uint32_t raceStartTimeMs = raceClock_.nowRaceMs();
-    state_.setRaceStartTime(raceStartTimeMs, syncAccuracyMs_);
-    runToStart = state_.currentRun();
-    Serial.printf("RUN GO timestamp startTimestampMs=%lu raceStartTimeMs=%lu\n", static_cast<unsigned long>(runToStart.startTimestampMs), static_cast<unsigned long>(runToStart.raceStartTimeMs));
-    Serial.printf("RUN_START build runId=%s raceStartTimeMs=%lu\n", runToStart.runId.c_str(), static_cast<unsigned long>(runToStart.raceStartTimeMs));
+  if (wasCountdown && state_.state() == StartRunState::WaitingStartGate) {
+    Serial.println("COUNTDOWN GO; WaitingStartGate");
     buzzer_.beep("GO");
-    pendingRunStartAck_ = true;
-    runStartAckReceived_ = false;
-    runStartAckTimedOut_ = false;
-    runStartAckAttempts_ = 0;
-    lastRunStartAckMs_ = 0;
-    runStartAckListenUntilMs_ = 0;
-    lastRunStartRetryDiagnosticMs_ = 0;
-    { const uint32_t blockStartMs = millis(); sendRunStart(runToStart); loopMonitor_.recordBlock("RadioTx", millis() - blockStartMs, LORA_MAX_TX_DURATION_WARN_MS); }
+    updateDisplay();
   }
 
-  retryRunStartAck(now);
+  retryRunStartAck(clock_.nowMs());
   processFinishAckRepeats(now);
 
   const bool priorityPending = priorityTxPending();
@@ -192,7 +181,8 @@ void StartStationApp::loopDisplayTask() {
 }
 
 bool StartStationApp::requestStartRun(String& error) {
-  Serial.printf("START BUTTON pressed at ms=%lu\n", static_cast<unsigned long>(millis()));
+  Serial.printf("Web START requested at ms=%lu\n", static_cast<unsigned long>(millis()));
+  if (!radioReady_) { error = "LoRa not ready"; return false; }
   Serial.println("Start run requested");
   if (!raceClock_.isSynced() || !finishRaceClockSynced_ || !finishSyncDoneOnce_) {
     error = "Finish Wi-Fi RaceClock sync required";
@@ -212,6 +202,26 @@ bool StartStationApp::requestStartRun(String& error) {
   }
   lastCountdownText_ = "";
   updateCountdownDisplay(millis());
+  return true;
+}
+
+bool StartStationApp::cancelStart(String& error) {
+  const String previousState = state_.stateText();
+  if (!state_.cancelPendingStart(error)) {
+    Serial.printf("start cancel rejected from state=%s reason=%s\n", previousState.c_str(), error.c_str());
+    return false;
+  }
+  pendingRunStartAck_ = false;
+  runStartAckReceived_ = false;
+  runStartAckTimedOut_ = false;
+  runStartAckAttempts_ = 0;
+  lastRunStartAckMs_ = 0;
+  lastRunStartSendMs_ = 0;
+  runStartAckListenUntilMs_ = 0;
+  lastRunStartRetryDiagnosticMs_ = 0;
+  lastCountdownText_ = "";
+  updateDisplay();
+  Serial.printf("start cancelled from state=%s\n", previousState.c_str());
   return true;
 }
 
@@ -280,7 +290,16 @@ String StartStationApp::statusJson() const {
   String readyBlockReason = "";
   if (!radioReady_) readyBlockReason = "LoRa not ready";
   else if (!finishRaceClockSynced_ || !finishSyncDoneOnce_) readyBlockReason = "Waiting FinishStation Wi-Fi sync";
+  else if (!raceClock_.isSynced()) readyBlockReason = "Start RaceClock not synced";
+  else if (state_.state() != StartRunState::Ready) readyBlockReason = "Run already active";
   doc["readyBlockReason"] = readyBlockReason;
+  doc["waitingStartGate"] = state_.state() == StartRunState::WaitingStartGate;
+  doc["countdownActive"] = state_.state() == StartRunState::Countdown;
+  doc["raceTimerStarted"] = state_.state() == StartRunState::Riding || state_.state() == StartRunState::Finished || current.raceStartTimeMs > 0;
+  doc["startInputRaw"] = startButtonInputTask_.rawGpio();
+  doc["startInputPressed"] = startButtonInputTask_.isPressed();
+  doc["canStartCountdown"] = state_.state() == StartRunState::Ready && systemReadyForRace;
+  doc["canCancelStart"] = state_.state() == StartRunState::Countdown || state_.state() == StartRunState::WaitingStartGate;
   doc["bootId"] = bootId_;
   doc["buildDate"] = __DATE__;
   doc["buildTime"] = __TIME__;
@@ -604,23 +623,40 @@ void StartStationApp::processInputEvents() {
 }
 
 void StartStationApp::handleStartButtonEvent(const InputEvent& event) {
-  Serial.printf("START button pressed capturedMs=%lu raw=%lu\n",
-                static_cast<unsigned long>(event.localMillis),
-                static_cast<unsigned long>(event.rawGpio));
-  if (!raceClock_.isSynced() || !finishRaceClockSynced_ || !finishSyncDoneOnce_) {
-    Serial.println("Start button ignored: wifi sync not ready");
+  if (state_.state() != StartRunState::WaitingStartGate) {
+    Serial.printf("start gate ignored because state=%s\n", state_.stateText().c_str());
     return;
   }
-
-  if (state_.state() != StartRunState::Ready) {
-    Serial.printf("button ignored: state=%s\n", state_.stateText().c_str());
+  // A pre-GO edge may arrive after GO because debounce runs in another task.
+  if (static_cast<int32_t>(event.localMillis - state_.goTimestampMs()) < 0) {
+    Serial.println("start gate ignored because state=Countdown at captured edge");
     return;
   }
+  startRaceFromGateTrigger(event.localMillis);
+}
 
-  String error;
-  if (!requestStartRun(error)) {
-    Serial.printf("button ignored: state=%s error=%s\n", state_.stateText().c_str(), error.c_str());
+void StartStationApp::startRaceFromGateTrigger(uint32_t capturedLocalMs) {
+  if (state_.state() != StartRunState::WaitingStartGate) {
+    Serial.printf("start gate ignored because state=%s\n", state_.stateText().c_str());
+    return;
   }
+  // Use the captured physical edge, excluding debounce and queue latency.
+  const uint32_t raceStartTimeMs = raceClock_.raceMsFromLocalMillis(capturedLocalMs);
+  RunRecord runToStart;
+  if (!state_.startRidingFromGate(raceStartTimeMs, syncAccuracyMs_, runToStart)) return;
+  Serial.printf("start gate accepted, raceStartTimeMs=%lu, runId=%s\n",
+                static_cast<unsigned long>(raceStartTimeMs), runToStart.runId.c_str());
+  buzzer_.beep("START GATE");
+  pendingRunStartAck_ = true;
+  runStartAckReceived_ = false;
+  runStartAckTimedOut_ = false;
+  runStartAckAttempts_ = 0;
+  lastRunStartAckMs_ = 0;
+  lastRunStartSendMs_ = 0;
+  runStartAckListenUntilMs_ = 0;
+  lastRunStartRetryDiagnosticMs_ = 0;
+  { const uint32_t blockStartMs = millis(); sendRunStart(runToStart); loopMonitor_.recordBlock("RadioTx", millis() - blockStartMs, LORA_MAX_TX_DURATION_WARN_MS); }
+  updateDisplay();
 }
 
 void StartStationApp::updateLed(uint32_t nowMs) {
@@ -633,6 +669,7 @@ void StartStationApp::updateLed(uint32_t nowMs) {
       mode = (finishOnline() || state_.state() != StartRunState::Ready || (syncInProgress_ && finishLastSeenAgoMs() < LINK_TIMEOUT_MS)) ? LedMode::ReadySlowBlink : LedMode::NoSignalBlink;
       break;
     case StartRunState::Countdown:
+    case StartRunState::WaitingStartGate:
       mode = LedMode::CountdownFastBlink;
       break;
     case StartRunState::Riding:
@@ -1125,13 +1162,13 @@ void StartStationApp::sendHelloAck(uint32_t nowMs) {
 }
 
 bool StartStationApp::discoveryActive() const {
-  const bool activeRun = state_.state() == StartRunState::Countdown || state_.state() == StartRunState::Riding || state_.state() == StartRunState::Finished;
+  const bool activeRun = state_.state() == StartRunState::Countdown || state_.state() == StartRunState::WaitingStartGate || state_.state() == StartRunState::Riding || state_.state() == StartRunState::Finished;
   const uint32_t finishAge = finishLastSeenAgoMs();
   return !activeRun && !pendingRunStartAck_ && !syncInProgress_ && !isLinkActive(finishLink_) && finishAge >= LINK_TIMEOUT_MS;
 }
 
 bool StartStationApp::startStatusActiveMode() const {
-  return syncInProgress_ || pendingRunStartAck_ || state_.state() == StartRunState::Countdown || state_.state() == StartRunState::Riding || state_.state() == StartRunState::Finished;
+  return syncInProgress_ || pendingRunStartAck_ || state_.state() == StartRunState::Countdown || state_.state() == StartRunState::WaitingStartGate || state_.state() == StartRunState::Riding || state_.state() == StartRunState::Finished;
 }
 
 uint32_t StartStationApp::nextStartStatusDelayMs() const {
@@ -1384,6 +1421,11 @@ void StartStationApp::updateDisplay() {
 
   if (state_.state() == StartRunState::Countdown) {
     display_.showCountdown(state_.countdownText(millis()), startShortHeader());
+    return;
+  }
+
+  if (state_.state() == StartRunState::WaitingStartGate) {
+    display_.showLines({startHeader(), "WAIT GATE", "Rider: " + current.riderName, "Trail: " + current.trailName, batteryText()});
     return;
   }
 
