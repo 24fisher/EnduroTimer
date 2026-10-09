@@ -20,7 +20,7 @@ bool StartState::startCountdown(uint32_t runNumber, const String& startedAtText,
   currentRun_.startedAtEpochMs = startedAtEpochMs;
   currentRun_.startedAtText = startedAtText.length() > 0 ? startedAtText : String("TIME NOT SYNCED");
   currentRun_.timingSource = "PENDING";
-  currentRun_.timingNote = "Start timestamp will be fixed on GO; countdown is not part of result";
+  currentRun_.timingNote = "Start timestamp will be fixed on physical start gate trigger";
   currentRun_.status = "Countdown";
   countdownActive_ = true;
   countdownStepIndex_ = 0;
@@ -49,36 +49,52 @@ void StartState::setError() {
   state_ = StartRunState::Error;
 }
 
-bool StartState::updateCountdown(uint32_t nowMs, RunRecord& runToStart) {
-  if (state_ != StartRunState::Countdown || !countdownActive_) return false;
-
-  if (nowMs - countdownStepStartedMs_ < countdownStepDurationMs(countdownStepIndex_)) return false;
-
+void StartState::updateCountdown(uint32_t nowMs) {
+  if (state_ != StartRunState::Countdown || !countdownActive_) return;
+  if (nowMs - countdownStepStartedMs_ < countdownStepDurationMs(countdownStepIndex_)) return;
   countdownStepIndex_ += 1;
-  if (countdownStepIndex_ < CountdownStepCount) {
+  if (countdownStepIndex_ < CountdownStepCount - 1) {
     countdownStepStartedMs_ = nowMs;
     countdownText_ = countdownStepText(countdownStepIndex_);
-    return false;
+    return;
   }
-
   countdownActive_ = false;
   countdownText_ = "";
   goTimestampMs_ = nowMs;
-  currentRun_.startTimestampMs = nowMs;
-  currentRun_.timingSource = "RUNNING";
-  currentRun_.timingNote = "Countdown excluded; raceStartTimeMs will be fixed from synced RaceClock";
+  currentRun_.timingSource = "WAITING_START_GATE";
+  currentRun_.timingNote = "Countdown completed; race time starts on start gate trigger";
+  currentRun_.status = "WaitingStartGate";
+  state_ = StartRunState::WaitingStartGate;
+}
+
+bool StartState::startRidingFromGate(uint32_t raceStartTimeMs, uint32_t syncAccuracyMs, RunRecord& runToStart) {
+  if (state_ != StartRunState::WaitingStartGate) return false;
+  currentRun_.raceStartTimeMs = raceStartTimeMs;
+  currentRun_.startTimestampMs = raceStartTimeMs;
+  currentRun_.syncAccuracyMs = syncAccuracyMs;
+  currentRun_.timingSource = "WIFI_SYNCED_RACE_CLOCK_ONCE";
+  currentRun_.timingNote = "Sport result starts on physical start gate trigger";
   currentRun_.status = "Riding";
   state_ = StartRunState::Riding;
   runToStart = currentRun_;
   return true;
 }
 
-void StartState::setRaceStartTime(uint32_t raceStartTimeMs, uint32_t syncAccuracyMs) {
-  currentRun_.raceStartTimeMs = raceStartTimeMs;
-  currentRun_.startTimestampMs = raceStartTimeMs;
-  currentRun_.syncAccuracyMs = syncAccuracyMs;
-  currentRun_.timingSource = "WIFI_SYNCED_RACE_CLOCK_ONCE";
-  currentRun_.timingNote = "Sport result uses synced relative RaceClock; browser time is stats only";
+bool StartState::cancelPendingStart(String& error) {
+  switch (state_) {
+    case StartRunState::Countdown:
+    case StartRunState::WaitingStartGate:
+    case StartRunState::Ready:
+      resetActiveRun();
+      return true;
+    case StartRunState::Riding:
+    case StartRunState::Finished:
+      error = "Race already started; use DNF/cancel run flow instead";
+      return false;
+    default:
+      error = "Cannot cancel start in state=" + stateText();
+      return false;
+  }
 }
 
 bool StartState::completeRun(const String& runId, uint32_t finishTimestampMs, const String& source, RunRecord& completedRun) {
@@ -145,6 +161,7 @@ String StartState::stateText() const {
     case StartRunState::Boot: return "Boot";
     case StartRunState::Ready: return "Ready";
     case StartRunState::Countdown: return "Countdown";
+    case StartRunState::WaitingStartGate: return "WaitingStartGate";
     case StartRunState::Riding: return "Riding";
     case StartRunState::Finished: return "Finished";
     case StartRunState::Error: return "Error";

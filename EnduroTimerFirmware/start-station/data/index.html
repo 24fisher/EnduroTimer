@@ -9,7 +9,7 @@
 <body>
   <main class="shell">
     <section class="hero card">
-      <div><p class="eyebrow">Heltec WiFi LoRa 32 V3</p><h1>EnduroTimer StartStation</h1><p class="muted">Hardware-button start, LoRa finish, LittleFS CSV results.</p></div>
+      <div><p class="eyebrow">Heltec WiFi LoRa 32 V3</p><h1>EnduroTimer StartStation</h1><p class="muted">Web countdown, physical start gate, LoRa finish, LittleFS CSV results.</p></div>
       <div id="stateBadge" class="badge">Boot</div>
     </section>
 
@@ -78,10 +78,11 @@
         <p>Rider: <strong id="riderName">Test Rider</strong></p>
         <p>Current trail: <strong id="trailName">Default trail</strong></p><p>Текущая трасса: <strong id="selectedTrailName">Default trail</strong></p>
         <p>Current run: <code id="runId">—</code></p>
-        <p class="muted">Старт заезда — только кнопкой на верхнем терминале.</p>
+        <p class="muted">START запускает отсчёт. Время заезда начинается только на стартовых воротах.</p>
         <p class="muted">Финиш — кнопкой на нижнем терминале.</p>
       </div>
-      <div class="buttons"><button id="resetBtn" class="secondary">Reset system</button><a class="button secondary" href="/api/export/runs.csv">Скачать CSV</a></div>
+      <p id="startGateStatus" role="status" aria-live="polite"></p>
+      <div class="buttons"><button id="startBtn" type="button" disabled>START</button><button id="cancelStartBtn" type="button" class="secondary" hidden>ОТМЕНИТЬ СТАРТ</button><button id="resetBtn" class="secondary">Reset system</button><a class="button secondary" href="/api/export/runs.csv">Скачать CSV</a></div>
       <p id="message" class="message"></p>
     </section>
 

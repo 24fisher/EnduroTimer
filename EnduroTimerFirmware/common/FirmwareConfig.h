@@ -1,6 +1,6 @@
 ﻿#pragma once
 
-#define ENDURO_TIMER_FIRMWARE_VERSION "0.32"
+#define ENDURO_TIMER_FIRMWARE_VERSION "0.33"
 
 #if defined(START_STATION)
   #define ENDURO_TIMER_FIRMWARE_ROLE "StartStation"

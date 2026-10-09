@@ -9,6 +9,7 @@ enum class StartRunState {
   Boot,
   Ready,
   Countdown,
+  WaitingStartGate,
   Riding,
   Finished,
   Error
@@ -42,8 +43,9 @@ public:
   bool startCountdown(uint32_t runNumber, const String& startedAtText, uint64_t startedAtEpochMs, const String& riderId, const String& riderName, const String& trailId, const String& trailName, String& error);
   void resetActiveRun();
   void setError();
-  bool updateCountdown(uint32_t nowMs, RunRecord& runToStart);
-  void setRaceStartTime(uint32_t raceStartTimeMs, uint32_t syncAccuracyMs);
+  void updateCountdown(uint32_t nowMs);
+  bool startRidingFromGate(uint32_t raceStartTimeMs, uint32_t syncAccuracyMs, RunRecord& runToStart);
+  bool cancelPendingStart(String& error);
   bool completeRun(const String& runId, uint32_t finishTimestampMs, const String& source, RunRecord& completedRun);
   bool completeRunSynced(const String& runId, uint32_t finishRaceTimeMs, uint32_t resultMs, const String& source, uint32_t syncAccuracyMs, RunRecord& completedRun);
   void tickAutoReady(uint32_t nowMs);

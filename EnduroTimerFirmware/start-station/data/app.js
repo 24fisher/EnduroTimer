@@ -1,4 +1,4 @@
-console.log("EnduroTimer UI loaded v0.18");
+console.log("EnduroTimer UI loaded v0.33");
 const $ = (id) => document.getElementById(id);
 let consecutiveFetchErrors = 0;
 let riders = [];
@@ -8,6 +8,8 @@ let timeSyncedOnce = false;
 let addRiderInFlight = false;
 let addTrailInFlight = false;
 let writeInFlight = false;
+let startActionInFlight = false;
+let latestStartStatus = null;
 let statusRefreshInFlight = false;
 let runsRefreshInFlight = false;
 let catalogsRefreshInFlight = false;
@@ -53,7 +55,9 @@ function ageText(ageMs) {
 }
 
 function renderStatus(status) {
-  $('stateBadge').textContent = status.countdownText || status.state;
+  latestStartStatus = status;
+  renderStartControls();
+  $('stateBadge').textContent = status.waitingStartGate ? 'Ожидание стартовых ворот' : status.countdownText || status.state;
   $('stateBadge').className = `badge state-${String(status.state).toLowerCase()}`;
   const finishFirmware = status.finishFirmwareVersion ? ` · Finish firmware: ${status.finishFirmwareVersion}` : '';
   $('firmwareVersions').textContent = `Start firmware: ${status.firmwareVersion || '—'}${finishFirmware}`;
@@ -162,7 +166,7 @@ async function refreshStatus() {
   statusRefreshInFlight = true;
   try {
     const status = await api('/api/status');
-    renderStatus(status);
+    if (!startActionInFlight) renderStatus(status);
     if (consecutiveFetchErrors > 0) showMessage('Web connection restored.');
     consecutiveFetchErrors = 0;
   } catch (error) {
@@ -292,7 +296,41 @@ async function addTrail() {
   }
 }
 
+function renderStartControls() {
+  const status = latestStartStatus || {};
+  $('startBtn').disabled = startActionInFlight || !status.canStartCountdown;
+  $('cancelStartBtn').hidden = !status.canCancelStart;
+  $('cancelStartBtn').disabled = startActionInFlight;
+  $('startGateStatus').textContent = status.waitingStartGate
+    ? 'Ожидание стартовых ворот'
+    : status.countdownActive ? `Отсчёт: ${status.countdownText || ''}` : '';
+}
+
+async function startAction(cancel = false) {
+  if (startActionInFlight || writeInFlight) return;
+  startActionInFlight = true;
+  writeInFlight = true;
+  renderStartControls();
+  try {
+    const result = await api(cancel ? '/api/start/cancel' : '/api/start', { method: 'POST' });
+    latestStartStatus = { ...latestStartStatus, state: result.state,
+      waitingStartGate: false, countdownActive: result.state === 'Countdown',
+      countdownText: result.state === 'Countdown' ? '3' : '',
+      canCancelStart: result.state === 'Countdown', canStartCountdown: false };
+    showMessage(cancel ? 'Старт отменён.' : 'Отсчёт начат. Время заезда начнётся на стартовых воротах.');
+  } catch (error) {
+    showMessage(error.message, true);
+  } finally {
+    startActionInFlight = false;
+    writeInFlight = false;
+    renderStartControls();
+    await refreshStatus();
+  }
+}
+
 function bindUi() {
+  $('startBtn').addEventListener('click', () => startAction(false));
+  $('cancelStartBtn').addEventListener('click', () => startAction(true));
   $('resetBtn').addEventListener('click', async () => { try { await api('/api/system/reset', { method: 'POST' }); showMessage('Active run reset.'); refresh(); } catch (e) { showMessage(e.message, true); } });
   const addRiderButton = $('addRiderButton');
   if (!addRiderButton) console.error('addRiderButton not found');
